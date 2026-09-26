@@ -1945,6 +1945,26 @@ test('createNeedsReconcileUpdate: a row trashed before it had a remote id needs 
   assert.equal(needs, true);
 });
 
+test('createNeedsReconcileUpdate: matching collection_id needs no follow-up (STASH-6V)', () => {
+  const persisted = makeBookmark({
+    id: '00000000-0000-4000-8000-000000000001',
+    collection_id: 'col-1',
+    sync_status: 'synced',
+  });
+  const needs = createNeedsReconcileUpdate(persisted, { url: 'https://example.com/a', collection_id: 'col-1' });
+  assert.equal(needs, false);
+});
+
+test('createNeedsReconcileUpdate: diverged collection_id needs a follow-up', () => {
+  const persisted = makeBookmark({
+    id: '00000000-0000-4000-8000-000000000001',
+    collection_id: 'col-2',
+    sync_status: 'synced',
+  });
+  const needs = createNeedsReconcileUpdate(persisted, { url: 'https://example.com/a', collection_id: 'col-1' });
+  assert.equal(needs, true);
+});
+
 test('create→sync round-trip: a trashed-before-remote-id create lands deleted_at in the cloud', async () => {
   // End-to-end through BOTH sync passes the store performs, asserting the fake
   // cloud row ends trashed — not just that the reconcile predicate is true.

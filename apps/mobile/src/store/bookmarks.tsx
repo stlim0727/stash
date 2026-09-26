@@ -17,6 +17,7 @@ import { createSyncRecoveredEvent } from "@/analytics/events";
 import { resolveAliasedId } from "@/domain/bookmark-id-swap";
 import { mockUserId } from "@/domain/mock-data";
 import { canonicalizeUrl, isUrlTooLong, normalizeUrl } from "@/domain/urls";
+import { makeUuid } from "@/domain/uuid";
 import { createConcurrencyLimiter } from "@/domain/concurrency";
 import { enrichBookmark } from "@/domain/enrichment";
 import { isRepairableSourceTitle } from "@/domain/url-title";
@@ -739,25 +740,6 @@ function parseIdSet(raw: string | null): Set<string> {
 }
 
 const BookmarksContext = createContext<BookmarksContextValue | null>(null);
-
-/**
- * A UUID v4. Prefers the platform crypto when present (web, modern Hermes, the
- * Node test runner) and otherwise falls back to a Math.random-based v4 — these
- * are dedupe/identity keys, not secrets, so they only need to be unique, not
- * cryptographically strong.
- */
-function makeUuid(): string {
-  const cryptoObj = (globalThis as { crypto?: { randomUUID?: () => string } })
-    .crypto;
-  if (cryptoObj?.randomUUID) {
-    return cryptoObj.randomUUID();
-  }
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
-    const rand = (Math.random() * 16) | 0;
-    const value = char === "x" ? rand : (rand & 0x3) | 0x8;
-    return value.toString(16);
-  });
-}
 
 /**
  * A bookmark's permanent id, minted once at capture time. Sent to the server
@@ -6093,7 +6075,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   Boolean(result.originalLocalId) &&
                   result.originalLocalId !== merged.id;
                 if (
-                  isDuplicateSwap ||
                   createNeedsReconcileUpdate(merged, payload, {
                     titleChangedByUser: titleChangedDuringCreate,
                   })
@@ -6102,7 +6083,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   if (isDuplicateSwap) reasons.duplicate_swap = 1;
                   if (merged.deleted_at !== null) reasons.deleted_at = 1;
                   if (merged.is_archived) reasons.is_archived = 1;
-                  if (merged.collection_id !== null) reasons.collection_id = 1;
+                  if (
+                    (merged.collection_id ?? null) !==
+                    (payload?.collection_id ?? null)
+                  ) {
+                    reasons.collection_id = 1;
+                  }
                   if (
                     merged.title !== (payload?.title ?? null) &&
                     titleChangedDuringCreate
@@ -6432,7 +6418,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               const isDuplicateSwap =
                 Boolean(originalLocalId) && originalLocalId !== merged.id;
               if (
-                isDuplicateSwap ||
                 createNeedsReconcileUpdate(merged, uploadedPayload, {
                   titleChangedByUser: titleChangedDuringCreate,
                 })
@@ -6442,7 +6427,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 if (isDuplicateSwap) reasons.duplicate_swap = 1;
                 if (merged.deleted_at !== null) reasons.deleted_at = 1;
                 if (merged.is_archived) reasons.is_archived = 1;
-                if (merged.collection_id !== null) reasons.collection_id = 1;
+                if (
+                  (merged.collection_id ?? null) !==
+                  (uploadedPayload.collection_id ?? null)
+                ) {
+                  reasons.collection_id = 1;
+                }
                 if (
                   merged.title !== (uploadedPayload.title ?? null) &&
                   titleChangedDuringCreate

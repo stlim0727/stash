@@ -1109,7 +1109,7 @@ export function createNeedsReconcileUpdate(
   return (
     persisted.deleted_at !== null ||
     persisted.is_archived ||
-    persisted.collection_id !== null ||
+    (persisted.collection_id ?? null) !== (uploadedPayload?.collection_id ?? null) ||
     titleNeedsReconcile ||
     persisted.notes !== (uploadedPayload?.notes ?? null) ||
     persisted.description !== (uploadedPayload?.shared_text ?? null) ||
