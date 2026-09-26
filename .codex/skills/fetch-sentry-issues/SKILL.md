@@ -1,9 +1,12 @@
 ---
 name: fetch-sentry-issues
-description: Check Sentry configuration/tokens and fetch latest unresolved Sentry issues for Stash using the Sentry API or CLI helper scripts. Use when the user asks to inspect Sentry credentials, list open Sentry errors, check STASH-N issues, or verify Sentry integration.
+description: Fallback procedure to check Sentry configuration/tokens and fetch latest unresolved Sentry issues for Stash using the Sentry API or CLI helper scripts. NOTE: Always prioritize the Sentry MCP server over this skill when MCP is available.
 ---
 
 # Fetch Sentry Issues & Verification Skill
+
+> [!IMPORTANT]
+> **Tool Priority:** Always prioritize querying via the Sentry MCP server first. Use this skill and manual fetch scripts only as a fallback when the Sentry MCP server is unconfigured, unreachable, or failing.
 
 Use this procedure to check Sentry credentials and query unresolved issues/telemetry for the `stash` project (`self-463/stash`).
 

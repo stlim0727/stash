@@ -54,6 +54,13 @@ Transform tasks into verifiable goals:
 
 For multi-step tasks, state a brief plan with a verification check per step. Strong success criteria let you loop independently; weak criteria ("make it work") require constant clarification.
 
+### 5. Tool precedence: MCP over skills
+
+**Always prioritize MCP tools over skills or ad-hoc scripts.**
+
+- When performing a task (such as Sentry issue lookup, Supabase inspection, GitHub PR/issue operations, or browser automation), always check for and use configured MCP servers first (e.g. Sentry MCP instead of running the `fetch-sentry-issues` skill or custom curl scripts).
+- Skills, CLI commands, and manual scripts are strictly fallbacks when an MCP server is unconfigured, unreachable, or returns an error.
+
 ## What this is
 
 Stash is a mobile bookmark app (React Native + Expo, Supabase backend) inspired by Raindrop.io, with an inbox-first UI and a capture-from-any-app share flow. See `README.md` for product direction and `AGENTS.md` for the detailed, continuously-updated project state and per-milestone implementation notes — **read `AGENTS.md` first** when picking up work; it is the source of truth for what is done and why.
