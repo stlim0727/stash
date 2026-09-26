@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-09-23 (Worktree workflow; PR workflow 5-minute bot review wait rule; Supabase direct queries and client timeouts).
+Last updated: 2026-09-26 (MCP tool precedence over skills; worktree workflow; PR workflow 5-minute bot review wait rule; Supabase direct queries and client timeouts).
 
 ## Successor Agent Orientation
 
@@ -29,9 +29,17 @@ do. This file, `CLAUDE.md`, `docs/`, `.claude/skills` mirrored as
   failures, `review-pr`/`pr-ready-check` for PR gates, `update-agents-md`/`retro`
   to keep this memory fresh, `screenshot`/`ui-preview` for visuals,
   `user-bookmark-summary` for live DB status, and `fetch-sentry-issues` for
-  Sentry checks and issue listing. The release
+  Sentry checks and issue listing (fallback when Sentry MCP is unavailable). The release
   procedure itself lives in `docs/development/releasing.md`. Change both skill
   mirrors together or the toolbelts drift. Prefer these over ad-hoc steps.
+- **Tool precedence: MCP tools > Skills > scripts/CLI.** When doing any task,
+  always give higher priority to using configured MCP tools over skills or
+  ad-hoc scripts. For example, for Sentry lookups, always query the Sentry MCP
+  server first instead of invoking the `fetch-sentry-issues` skill or running manual
+  curl scripts. When invoking subagents, pass `enable_mcp_tools: true` whenever
+  MCP capabilities are needed. Skills, direct CLI scripts, or manual API fetches
+  are strictly fallbacks when an MCP server is unconfigured, unreachable, or
+  returns an error.
 - **What is verified vs assumed vs stale** (do not trust silence as proof):
   - Native SQLite + share-intent have **never been verified on a real device**;
     this is the highest-risk unknown. `rc-build` builds the APK and QA checklist,
@@ -50,7 +58,7 @@ do. This file, `CLAUDE.md`, `docs/`, `.claude/skills` mirrored as
   the `domain/header-collapse.ts` Known Traps entry) and a graph view
   pan/zoom timing fix (#561). Reconcile against the live open-PR list; some
   may have opened since.
-- **Sentry DB sync (2026-07-18):** Organization `self-463` and project `stash` confirmed. **RULE:** Sentry must always be considered available. If Sentry MCP tools are not configured or fail, you MUST proactively query the Sentry API directly using the `SENTRY_AUTH_TOKEN` from `.env.local` (either by writing a quick Node/curl script or using the local helper `pnpm sentry:issue <id>`). Never rely on local docs to look up active Sentry issues, and do not give up if MCP is down.
+- **Sentry DB sync (2026-07-18):** Organization `self-463` and project `stash` confirmed. **RULE:** Sentry must always be considered available. Always prioritize querying Sentry via the Sentry MCP server first. If Sentry MCP tools are not configured or fail, you MUST proactively query the Sentry API directly using the `SENTRY_AUTH_TOKEN` from `.env.local` (either by writing a quick Node/curl script, using the `fetch-sentry-issues` skill as fallback, or using the local helper `pnpm sentry:issue <id>`). Never rely on local docs to look up active Sentry issues, and do not give up if MCP is down.
 - **Sentry → GitHub issue sync (2026-07-28):** `.github/workflows/sentry-github-sync.yml` runs `scripts/sentry-to-github-issues.mjs` every 6h (and on manual dispatch) to mirror unresolved Sentry issues into GitHub issues titled `STASH-N: <title>`. It's idempotent — dedupes by searching GitHub for the shortId already in a title before creating, so no separate "last synced" state is kept; a run just files whatever doesn't have an issue yet. Needs repo secret `SENTRY_AUTH_TOKEN` (optional `SENTRY_ORG`/`SENTRY_PROJECT`, default `self-463`/`stash`); `GITHUB_TOKEN` is the Actions-provided token. Runs on GitHub Actions only (not ported to CircleCI) — CircleCI has no working scheduler on this project's plan, and the job needs `GITHUB_TOKEN` to create issues, which only Actions provides. Manual one-off run: `pnpm sentry:sync-github-issues [--dry-run] [--limit N]`.
 - **The invariants below are load-bearing, not FYI.** "Capture is sacred,"
   user-authored vs generated fields, and "a local cosmetic repair must never bump
