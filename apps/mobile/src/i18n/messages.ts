@@ -189,8 +189,6 @@ export const en = {
     'Your bookmarks are saved on this device. Sign in to back them up and access them elsewhere.',
   'inbox.anonymousNudgeDismissA11y': 'Dismiss',
   'inbox.moreActions': 'More actions',
-  'inbox.select': 'Select',
-  'inbox.selectA11y': 'Select bookmarks',
   'inbox.selectAction': 'Select items…',
   'inbox.selectedCount': {
     one: '{count} selected',

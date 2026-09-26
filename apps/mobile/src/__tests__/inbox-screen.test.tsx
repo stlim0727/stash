@@ -1831,7 +1831,7 @@ test('blank-named tags and collections do not produce empty filter chips', async
   expect(screen.queryByRole('button', { name: '#   ' })).toBeNull();
 });
 
-test('long-pressing an inbox card opens the action menu and Move to Trash removes the item', async () => {
+test('the card More actions menu allows Move to Trash with undo', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({
       id: '7e64cf1e-0000-4000-8000-000000000061',
