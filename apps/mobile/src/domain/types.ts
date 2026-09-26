@@ -265,6 +265,7 @@ export interface CreateBookmarkInput {
   notes_format?: TextFormat | null;
   source_app?: string;
   shared_text?: string;
+  collection_id?: string | null;
   /**
    * Explicit content-type override for a create that carries neither `url`
    * nor `shared_text`. `'image'` supports an image-only capture and requires

@@ -907,3 +907,111 @@ for (const bulk of [false, true]) {
     assert.equal(patches[0].notes_format, 'markdown');
   });
 }
+
+test('createBookmark retries with a fresh id when bookmarks_pkey conflicts with an unowned row (STASH-6T)', async () => {
+  const posts: Array<Record<string, unknown>> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.includes('url_hash=') || path.includes('client_id=')) return [];
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&id=')) {
+        // Unowned ID: current user does not own any row with this ID
+        return [];
+      }
+      if (path === '/rest/v1/bookmarks' && options.method === 'POST') {
+        const body = options.body as Record<string, unknown>;
+        posts.push(body);
+        if (body.id === 'unowned-pkey') {
+          throw new SupabaseRequestError(
+            'duplicate key value violates unique constraint "bookmarks_pkey"',
+            409,
+          );
+        }
+        return [remoteBookmark({ id: String(body.id), url: String(body.url) })];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const result = await api.createBookmark({
+    id: 'unowned-pkey',
+    url: 'https://example.com/fresh',
+    client_id: 'cid-1',
+  });
+
+  assert.equal(result.status, 'duplicate');
+  assert.notEqual(result.bookmark_id, 'unowned-pkey');
+  assert.equal(posts.length, 2);
+  assert.equal(posts[0].id, 'unowned-pkey');
+  assert.equal(posts[1].id, result.bookmark_id);
+});
+
+test('createBookmarks routes plain duplicates without description/notes to batched updateLastSavedAt (STASH-6V)', async () => {
+  const existing1 = remoteBookmark({ id: 'dup-1', url_hash: 'https://example.com/1', client_id: 'cid-1' });
+  const existing2 = remoteBookmark({ id: 'dup-2', url_hash: 'https://example.com/2', client_id: 'cid-2' });
+  let patchCount = 0;
+  let batchedLastSavedAtCount = 0;
+
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.includes('url_hash=')) return [existing1, existing2];
+      if (path.includes('client_id=')) return [existing1, existing2];
+      if (options.method === 'PATCH') {
+        patchCount += 1;
+        if (path.includes('dup-1') && path.includes('dup-2')) {
+          batchedLastSavedAtCount += 1;
+        }
+        return [existing1, existing2];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const results = await api.createBookmarks([
+    { id: 'b1', url: 'https://example.com/1', client_id: 'cid-1', description_format: 'plain' },
+    { id: 'b2', url: 'https://example.com/2', client_id: 'cid-2', description_format: 'plain' },
+  ]);
+
+  assert.equal(results.length, 2);
+  assert.equal(results[0].status, 'duplicate');
+  assert.equal(results[1].status, 'duplicate');
+  // Both duplicates should be updated in a single batched PATCH to updateLastSavedAt, NOT 2 individual PATCHes
+  assert.equal(patchCount, 1);
+  assert.equal(batchedLastSavedAtCount, 1);
+});
+
+test('createBookmark and createBookmarks pass collection_id in request body', async () => {
+  const singlePosts: Array<Record<string, unknown>> = [];
+  const bulkPosts: Array<Record<string, unknown>> = [];
+
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.includes('url_hash=') || path.includes('client_id=')) return [];
+      if (path === '/rest/v1/bookmarks' && options.method === 'POST') {
+        if (Array.isArray(options.body)) {
+          bulkPosts.push(...options.body);
+          return options.body.map((item: Record<string, unknown>) => remoteBookmark(item));
+        }
+        singlePosts.push(options.body as Record<string, unknown>);
+        return [remoteBookmark(options.body as Record<string, unknown>)];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  await api.createBookmark({
+    id: 'b1',
+    url: 'https://example.com/single',
+    collection_id: 'col-1',
+  });
+  assert.equal(singlePosts.length, 1);
+  assert.equal(singlePosts[0].collection_id, 'col-1');
+
+  await api.createBookmarks([
+    { id: 'b2', url: 'https://example.com/bulk', collection_id: 'col-2' },
+  ]);
+  assert.equal(bulkPosts.length, 1);
+  assert.equal(bulkPosts[0].collection_id, 'col-2');
+});

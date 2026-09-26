@@ -1,5 +1,6 @@
 import { normalizeText, slugify } from '@/domain/tag-normalize';
 import { canonicalizeUrl, normalizeUrl } from '@/domain/urls';
+import { makeUuid } from '@/domain/uuid';
 import type {
   AIEnrichment,
   Bookmark,
@@ -475,7 +476,7 @@ export class BookmarkApi {
       preview_image_url: previewImageUrl,
       favicon_url: faviconUrl,
       site_name: siteName,
-      collection_id: null,
+      collection_id: input.collection_id ?? null,
       is_archived: false,
       created_at: input.created_at || timestamp,
       updated_at: timestamp,
@@ -530,6 +531,37 @@ export class BookmarkApi {
             bookmark_id: duplicate.id,
             status: 'duplicate',
             metadata_status: duplicate.metadata_status,
+          };
+        }
+
+        // When input.id collided with bookmarks_pkey belonging to another user
+        // (e.g. after logout or account transition), RLS prevents findBookmarkById
+        // from seeing the row. Because bookmarks_pkey is a global constraint across
+        // all users in public.bookmarks, this user cannot insert with input.id.
+        // Mint a fresh UUID and retry the insert so the bookmark can be saved (STASH-6T).
+        const isPkeyConflict =
+          error.message.includes('bookmarks_pkey') ||
+          error.message.includes('unique constraint');
+        if (isPkeyConflict && input.id) {
+          const freshId = makeUuid();
+          const retryBody = {
+            ...createBody,
+            id: freshId,
+          };
+          const retryRows = await this.requestArray<RemoteBookmark>('/rest/v1/bookmarks', {
+            method: 'POST',
+            accessToken: this.session.access_token,
+            headers: { Prefer: 'return=representation' },
+            body: retryBody,
+          });
+          const retryCreated = retryRows[0];
+          if (!retryCreated) {
+            throw new Error('Supabase did not return the created bookmark after pkey retry.');
+          }
+          return {
+            bookmark_id: retryCreated.id,
+            status: 'duplicate',
+            metadata_status: retryCreated.metadata_status,
           };
         }
       }
@@ -589,7 +621,7 @@ export class BookmarkApi {
           preview_image_url: previewImageUrl,
           favicon_url: faviconUrl,
           site_name: siteName,
-          collection_id: null,
+          collection_id: input.collection_id ?? null,
           is_archived: false,
           deleted_at: null,
           created_at: input.created_at || timestamp,
@@ -633,13 +665,13 @@ export class BookmarkApi {
         // patching its description with this request's payload would
         // corrupt an unrelated row.
         const isOwnRetry = item.clientId !== null && existing.client_id === item.clientId;
-        if (isOwnRetry && (item.body.description !== null || inputs[index].notes !== undefined ||
-          item.body.description_format !== undefined || item.body.notes_format !== undefined)) {
+        const hasContent = item.body.description !== null || inputs[index].notes !== undefined;
+        if (isOwnRetry && hasContent) {
           duplicateContentUpdates.set(existing.id, {
             description: item.body.description ?? undefined,
             notes: inputs[index].notes === undefined ? undefined : item.body.notes,
-            description_format: item.body.description_format,
-            notes_format: item.body.notes_format,
+            description_format: item.body.description !== null ? item.body.description_format : undefined,
+            notes_format: inputs[index].notes !== undefined ? item.body.notes_format : undefined,
           });
         }
         outputs[index] = {

@@ -127,3 +127,20 @@ test('isUploadableCreate rejects a payload with neither url, a non-empty body, n
   assert.equal(isUploadableCreate({ title: 'x' }), false);
   assert.equal(isUploadableCreate({ shared_text: '   ' }), false);
 });
+
+test('carries collection_id through rebuilt create payloads when present', () => {
+  const urlPayload = createPayloadFromBookmark(
+    bookmark({ id: 'b1', url: 'https://example.com/x', collection_id: 'col-1' }),
+  );
+  assert.equal(urlPayload.collection_id, 'col-1');
+
+  const textPayload = createPayloadFromBookmark(
+    bookmark({ id: 'b2', url: null, content_type: 'text', description: 'notes', collection_id: 'col-2' }),
+  );
+  assert.equal(textPayload.collection_id, 'col-2');
+
+  const imgPayload = createPayloadFromBookmark(
+    bookmark({ id: 'b3', url: null, content_type: 'image', collection_id: 'col-3' }),
+  );
+  assert.equal(imgPayload.collection_id, 'col-3');
+});

@@ -35,6 +35,7 @@ export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInp
       title: bookmark.title ?? undefined,
       notes: bookmark.notes ?? undefined,
       ...textFormats,
+      ...(bookmark.collection_id ? { collection_id: bookmark.collection_id } : {}),
       ...(bookmark.deleted_at ? { deleted_at: bookmark.deleted_at } : {}),
       client_id: clientId,
     };
@@ -54,6 +55,7 @@ export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInp
       title: bookmark.title ?? undefined,
       notes: bookmark.notes ?? undefined,
       ...textFormats,
+      ...(bookmark.collection_id ? { collection_id: bookmark.collection_id } : {}),
       preview_image_url: bookmark.preview_image_url ?? undefined,
       ...(bookmark.deleted_at ? { deleted_at: bookmark.deleted_at } : {}),
       client_id: clientId,
@@ -66,6 +68,7 @@ export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInp
     title: bookmark.title ?? undefined,
     notes: bookmark.notes ?? undefined,
     ...textFormats,
+    ...(bookmark.collection_id ? { collection_id: bookmark.collection_id } : {}),
     shared_text: bookmark.description ?? undefined,
     ...(bookmark.deleted_at ? { deleted_at: bookmark.deleted_at } : {}),
     client_id: clientId,
