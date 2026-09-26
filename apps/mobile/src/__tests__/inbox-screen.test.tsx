@@ -1844,8 +1844,8 @@ test('long-pressing an inbox card opens the action menu and Move to Trash remove
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
 
-  // Long-press surfaces the contextual actions without leaving the Inbox.
-  await fireEvent(screen.getByTestId('inbox-card-title'), 'longPress');
+  // Contextual actions are surfaced via the More actions button without leaving the Inbox.
+  await fireEvent.press(screen.getByLabelText('More actions'));
   expect(screen.getByText('Open link')).toBeTruthy();
   expect(screen.getByText('Move to collection…')).toBeTruthy();
   expect(screen.getByText('Move to Trash')).toBeTruthy();
@@ -1907,7 +1907,7 @@ test('a memo action menu shares its raw Markdown body', async () => {
   share.mockRestore();
 });
 
-test('long-pressing the preview image (not just the title) opens the action menu', async () => {
+test('long-pressing a card enters selection mode and subsequent short press selects additional items', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({
       id: '7e64cf1e-0000-4000-8000-000000000063',
@@ -1916,14 +1916,27 @@ test('long-pressing the preview image (not just the title) opens the action menu
       url_hash: 'https://www.inkandswitch.com/local-first/',
       preview_image_url: 'https://example.com/preview.png',
     }),
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000064',
+      title: 'Second bookmark',
+      url: 'https://example.com/2',
+      url_hash: 'https://example.com/2',
+    }),
   ]);
 
   const screen = await renderInbox();
-  await waitFor(() => expect(screen.getByTestId('inbox-card-preview')).toBeTruthy());
+  await waitFor(() => expect(screen.getAllByTestId('inbox-card-preview')[0]).toBeTruthy());
 
-  // The whole card (image included) is the long-press target, not only the title.
-  await fireEvent(screen.getByTestId('inbox-card-preview'), 'longPress');
-  expect(screen.getByText('Move to Trash')).toBeTruthy();
+  // Long-pressing the preview image enters selection mode directly with 1 selected.
+  await fireEvent(screen.getAllByTestId('inbox-card-preview')[0], 'longPress');
+  await waitFor(() => {
+    expect(screen.getByText('1 selected')).toBeTruthy();
+    expect(screen.getByTestId('inbox-bulk-action-bar')).toBeTruthy();
+  });
+
+  // Subsequent short press on second bookmark card selects it as well (now 2 selected).
+  await fireEvent.press(screen.getByText('Second bookmark'));
+  expect(screen.getByText('2 selected')).toBeTruthy();
 });
 
 test('the action menu Open link opens the bookmark URL', async () => {
@@ -1940,7 +1953,7 @@ test('the action menu Open link opens the bookmark URL', async () => {
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
 
-  await fireEvent(screen.getByTestId('inbox-card-title'), 'longPress');
+  await fireEvent.press(screen.getByLabelText('More actions'));
   await fireEvent.press(screen.getByText('Open link'));
 
   expect(openURL).toHaveBeenCalledWith('https://www.inkandswitch.com/local-first/');

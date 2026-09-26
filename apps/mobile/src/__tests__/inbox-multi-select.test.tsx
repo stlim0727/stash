@@ -242,8 +242,8 @@ test('enters selection mode with pre-selected item from single bookmark menu', a
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('First bookmark')).toBeTruthy());
 
-  // Long-press first bookmark to open action menu
-  await fireEvent(screen.getByText('First bookmark'), 'longPress');
+  // Open More actions menu for first bookmark
+  await fireEvent.press(screen.getAllByLabelText('More actions')[0]);
   expect(screen.getByText('Select items…')).toBeTruthy();
 
   // Choose "Select items…"
@@ -254,6 +254,45 @@ test('enters selection mode with pre-selected item from single bookmark menu', a
     expect(screen.getByText('1 selected')).toBeTruthy();
     expect(screen.getByTestId('inbox-bulk-action-bar')).toBeTruthy();
   });
+});
+
+test('long-pressing a card enters selection mode, and subsequent short press selects additional items', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000001',
+      title: 'First bookmark',
+    }),
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000002',
+      title: 'Second bookmark',
+    }),
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000003',
+      title: 'Third bookmark',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('First bookmark')).toBeTruthy());
+
+  // Long-press first bookmark directly enters selection mode with 1 selected
+  await fireEvent(screen.getByText('First bookmark'), 'longPress');
+  await waitFor(() => {
+    expect(screen.getByText('1 selected')).toBeTruthy();
+    expect(screen.getByTestId('inbox-bulk-action-bar')).toBeTruthy();
+  });
+
+  // Subsequent short press on second bookmark selects it (2 selected)
+  await fireEvent.press(screen.getByText('Second bookmark'));
+  expect(screen.getByText('2 selected')).toBeTruthy();
+
+  // Subsequent short press on third bookmark selects it (3 selected)
+  await fireEvent.press(screen.getByText('Third bookmark'));
+  expect(screen.getByText('3 selected')).toBeTruthy();
+
+  // Subsequent short press on second bookmark deselects it (2 selected)
+  await fireEvent.press(screen.getByText('Second bookmark'));
+  expect(screen.getByText('2 selected')).toBeTruthy();
 });
 
 test('bulk delete prompts confirmation, moves selected items to trash, and provides undo', async () => {
@@ -605,8 +644,8 @@ test('entering selection mode from single bookmark menu during search preserves 
   await fireEvent(searchInput, 'blur');
   await waitFor(() => expect(screen.getByText('2 results')).toBeTruthy());
 
-  // Long-press first card to select it via menu
-  await fireEvent(screen.getByText('React Native in Action'), 'longPress');
+  // Open More actions menu for first card to select it via menu
+  await fireEvent.press(screen.getAllByLabelText('More actions')[0]);
   expect(screen.getByText('Select items…')).toBeTruthy();
   await fireEvent.press(screen.getByText('Select items…'));
 
@@ -622,4 +661,45 @@ test('entering selection mode from single bookmark menu during search preserves 
   // Select all selects the remaining matching result (total 2)
   await fireEvent.press(screen.getByTestId('inbox-selection-select-all'));
   expect(screen.getByText('2 selected')).toBeTruthy();
+});
+
+test('long-pressing a card during search directly enters selection mode and subsequent short press selects additional matches', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000001',
+      title: 'React Native in Action',
+    }),
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000002',
+      title: 'React Architecture Guide',
+    }),
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000003',
+      title: 'Vue Composition Guide',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('React Native in Action')).toBeTruthy());
+
+  // Search 'React'
+  await fireEvent.press(screen.getByTestId('inbox-search-open'));
+  const searchInput = screen.getByTestId('inbox-search-input');
+  await fireEvent.changeText(searchInput, 'React');
+  await fireEvent(searchInput, 'blur');
+  await waitFor(() => expect(screen.getByText('2 results')).toBeTruthy());
+
+  // Long-press first card directly enters selection mode with 1 selected
+  await fireEvent(screen.getByText('React Native in Action'), 'longPress');
+  await waitFor(() => {
+    expect(screen.getByText('1 selected')).toBeTruthy();
+    expect(screen.getByTestId('inbox-bulk-action-bar')).toBeTruthy();
+  });
+
+  // Subsequent short press on second card selects it (now 2 selected)
+  await fireEvent.press(screen.getByText('React Architecture Guide'));
+  expect(screen.getByText('2 selected')).toBeTruthy();
+
+  // Vue guide is still filtered out
+  expect(screen.queryByText('Vue Composition Guide')).toBeNull();
 });

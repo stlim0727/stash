@@ -3426,7 +3426,7 @@ export default function InboxScreen() {
 
           const isSelected = selectedIds.has(item.id);
           const handleItemPress = selectionMode ? () => toggleSelect(item.id) : openDetail;
-          const handleItemLongPress = selectionMode ? () => toggleSelect(item.id) : () => setMenuItem(item);
+          const handleItemLongPress = selectionMode ? () => toggleSelect(item.id) : () => enterSelectionMode(item.id);
           const handleLinkPress = selectionMode ? () => toggleSelect(item.id) : openLink;
 
           // List density view mode: compact row layout featuring thumbnail image
@@ -3617,9 +3617,11 @@ export default function InboxScreen() {
                   : null,
               ]}
             >
-              <View
+              <Pressable
                 // Container for card layout
                 accessible={false}
+                onPress={selectionMode ? () => toggleSelect(item.id) : undefined}
+                onLongPress={handleItemLongPress}
               >
                 <View style={styles.cardPreviewContainer}>
                   {selectionMode ? (
@@ -3830,7 +3832,7 @@ export default function InboxScreen() {
                     <Text style={[styles.cardStatus, { color: palette.accent }]}>{status}</Text>
                   ) : null}
                 </View>
-              </View>
+              </Pressable>
               {isOpening ? (
                 <View
                   testID="inbox-bookmark-opening"
