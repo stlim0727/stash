@@ -703,3 +703,31 @@ test('long-pressing a card during search directly enters selection mode and subs
   // Vue guide is still filtered out
   expect(screen.queryByText('Vue Composition Guide')).toBeNull();
 });
+
+test('places selection mark at top-left of bookmark in card view', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000001',
+      title: 'Top Left Selection Card',
+      url: 'https://example.com/card',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Top Left Selection Card')).toBeTruthy());
+
+  // Enter selection mode via select pill
+  await fireEvent.press(screen.getByTestId('inbox-select-toggle'));
+
+  const checkbox = screen.getByTestId('inbox-select-checkbox-7e64cf1e-0000-4000-8000-000000000001');
+  expect(checkbox).toBeTruthy();
+  expect(checkbox.props.style).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        position: 'absolute',
+        top: 10,
+        left: 10,
+      }),
+    ]),
+  );
+});
