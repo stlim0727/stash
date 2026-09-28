@@ -1619,6 +1619,8 @@ export default function InboxScreen() {
   const exitSelectionMode = useCallback(() => {
     setSelectionMode(false);
     setSelectedIds(new Set());
+    setBulkMoveSheetOpen(false);
+    setNewFolderDialogOpen(false);
     setBulkMoveFolderCreateTarget(null);
   }, []);
 
@@ -1724,7 +1726,7 @@ export default function InboxScreen() {
       }
       showToast(
         t('toast.previewRefreshedCount', {
-          count: refreshedCount > 0 ? refreshedCount : urlItems.length,
+          count: refreshedCount,
         }),
       );
     } finally {
@@ -3894,6 +3896,7 @@ export default function InboxScreen() {
       <ActionSheet
         visible={bulkMoveSheetOpen}
         title={t('inbox.bulkMoveTitle', { count: selectedIds.size })}
+        actionsMask
         actions={[
           {
             key: 'inbox',

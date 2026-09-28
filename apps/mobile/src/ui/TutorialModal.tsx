@@ -4,6 +4,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -199,7 +200,12 @@ export function TutorialModal({ visible, onClose }: TutorialModalProps) {
           </View>
 
           {/* Slide Content */}
-          <View style={styles.slideBody} testID={`tutorial-slide-${step}`}>
+          <ScrollView
+            key={step}
+            style={styles.slideScroll}
+            contentContainerStyle={styles.slideBody}
+            testID={`tutorial-slide-${step}`}
+          >
             <View
               style={[
                 styles.heroIconCircle,
@@ -235,16 +241,13 @@ export function TutorialModal({ visible, onClose }: TutorialModalProps) {
                     color={palette.accent}
                     style={styles.pointIcon}
                   />
-                  <Text
-                    style={[styles.pointText, { color: palette.text }]}
-                    numberOfLines={2}
-                  >
+                  <Text style={[styles.pointText, { color: palette.text }]}>
                     {t(pt.textKey)}
                   </Text>
                 </View>
               ))}
             </View>
-          </View>
+          </ScrollView>
 
           {/* Footer: Progress Dots + Actions */}
           <View style={styles.footer}>
@@ -330,6 +333,7 @@ const styles = StyleSheet.create({
   card: {
     width: '100%',
     maxWidth: 440,
+    maxHeight: '100%',
     borderRadius: 22,
     borderWidth: StyleSheet.hairlineWidth,
     padding: 20,
@@ -348,6 +352,7 @@ const styles = StyleSheet.create({
     }),
   },
   headerRow: {
+    flexShrink: 0,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -366,6 +371,11 @@ const styles = StyleSheet.create({
   closeButton: {
     padding: 4,
     borderRadius: 12,
+  },
+  slideScroll: {
+    flexShrink: 1,
+    flexGrow: 0,
+    minHeight: 0,
   },
   slideBody: {
     alignItems: 'center',
@@ -412,6 +422,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   footer: {
+    flexShrink: 0,
     marginTop: 6,
     gap: 14,
   },

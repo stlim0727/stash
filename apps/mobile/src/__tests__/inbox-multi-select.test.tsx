@@ -35,9 +35,11 @@ jest.mock('@/supabase/auth-provider', () => ({
 }));
 
 let mockEnrichmentCalls: string[] = [];
+let mockEnrichmentFails = false;
 jest.mock('@/domain/enrichment', () => ({
   enrichBookmark: async (bm: { id: string }) => {
     mockEnrichmentCalls.push(bm.id);
+    if (mockEnrichmentFails) throw new Error('offline');
     return { patch: {}, metadata_status: 'complete' };
   },
 }));
@@ -136,6 +138,7 @@ beforeEach(() => {
   mockPush.mockReset();
   mockSetParams.mockReset();
   mockEnrichmentCalls = [];
+  mockEnrichmentFails = false;
 });
 
 test('enters selection mode via long-press on a bookmark and shows BulkActionBar', async () => {
@@ -731,4 +734,69 @@ test('places selection mark at top-left of bookmark in card view', async () => {
       }),
     ]),
   );
+});
+
+test('bulk refresh does not report failed previews as refreshed', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000001',
+      title: 'Offline bookmark',
+      url: 'https://example.com/offline',
+    }),
+  ]);
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Offline bookmark')).toBeTruthy());
+  mockEnrichmentFails = true;
+  await fireEvent(screen.getByText('Offline bookmark'), 'longPress');
+  await fireEvent.press(screen.getByTestId('inbox-bulk-refresh'));
+  await waitFor(() => expect(screen.getByText('Refreshed 0 previews')).toBeTruthy());
+  expect(screen.queryByText('Refreshed 1 preview')).toBeNull();
+});
+
+test('exiting selection closes the bulk move sheet', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000001',
+      title: 'First bookmark',
+    }),
+  ]);
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('First bookmark')).toBeTruthy());
+  await fireEvent(screen.getByText('First bookmark'), 'longPress');
+  await fireEvent.press(screen.getByTestId('inbox-bulk-move'));
+  expect(screen.getByText('Move 1 bookmark to')).toBeTruthy();
+  // Escape and a library reset use this same exit handler while a sheet is open.
+  await fireEvent.press(screen.getByTestId('inbox-selection-close'));
+  expect(screen.queryByText('Move 0 bookmarks to')).toBeNull();
+});
+
+test('bulk move masks collection names from session replay', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-000000000001', title: 'First bookmark' }),
+  ], { tags: [], bookmarkTags: [], collections: [makeCollection('private-col', 'Private collection')] });
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('First bookmark')).toBeTruthy());
+  await fireEvent(screen.getByText('First bookmark'), 'longPress');
+  await fireEvent.press(screen.getByTestId('inbox-bulk-move'));
+  const label = screen.getByText('Private collection');
+  let ancestor = label.parent;
+  while (ancestor && ancestor.props.accessibilityLabel !== 'ph-no-capture') {
+    ancestor = ancestor.parent;
+  }
+  expect(ancestor).not.toBeNull();
+});
+
+
+test('exiting selection dismisses a pending new collection dialog', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-000000000001', title: 'First bookmark' }),
+  ]);
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('First bookmark')).toBeTruthy());
+  await fireEvent(screen.getByText('First bookmark'), 'longPress');
+  await fireEvent.press(screen.getByTestId('inbox-bulk-move'));
+  await fireEvent.press(screen.getByText('New collection'));
+  expect(screen.getByTestId('create-collection-input')).toBeTruthy();
+  await fireEvent.press(screen.getByTestId('inbox-selection-close'));
+  expect(screen.queryByTestId('create-collection-input')).toBeNull();
 });
