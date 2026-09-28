@@ -127,4 +127,35 @@ test('isRepairableSourceTitle recognizes legacy Reddit and GeekNews Topic placeh
     isRepairableSourceTitle({ url: 'https://example.com/topic', title: 'Topic' }),
     false,
   );
+  assert.equal(
+    isRepairableSourceTitle({ url: 'https://naver.me/5yhegKdn', title: 'naver.me' }),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle({ url: 'https://map.naver.com/p/favorite/myPlace/folder/f65cd3df', title: 'map.naver.com' }),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle({ url: 'https://map.naver.com/p/favorite/myPlace/folder/f65cd3df', title: '네이버지도 저장' }),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle({ url: 'https://map.naver.com/p/favorite/myPlace/folder/f65cd3df', title: '바다 (AW앤웍) : 네이버 지도' }),
+    false,
+  );
+});
+
+test('describeKnownUrl identifies Naver Map URLs', () => {
+  assert.equal(
+    describeKnownUrl('https://map.naver.com/p/favorite/myPlace/folder/f65cd3df')?.title,
+    'Naver Map list',
+  );
+  assert.equal(
+    describeKnownUrl('https://map.naver.com/p/entry/place/1887843614')?.title,
+    'Naver Map place',
+  );
+  assert.equal(
+    describeKnownUrl('https://map.naver.com/')?.title,
+    'Naver Map',
+  );
 });

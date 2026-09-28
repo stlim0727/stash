@@ -2,12 +2,16 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  buildNaverMapFolderStaticMapUrl,
   checkYoutubeAvailability,
   detectCharset,
   discoverOembedEndpoint,
+  fetchNaverMapFolderMetadata,
   fetchPageMetadata,
   htmlHeadSummary,
+  isGenericNaverMapTitle,
   isYoutubeAvailabilityCandidate,
+  naverMapFolderShareId,
   normalizeCharsetLabel,
   oembedEndpoint,
   parseOembed,
@@ -766,6 +770,147 @@ test('fetchPageMetadata recovers a Naver Map place via the server-rendered sibli
     assert.ok(
       requested.some((u) => u === 'https://m.place.naver.com/place/1887843614/home'),
       'expected a fetch to the server-rendered place page',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('naverMapFolderShareId extracts share id from various Naver Map folder URLs', () => {
+  assert.equal(
+    naverMapFolderShareId('https://map.naver.com/p/favorite/myPlace/folder/f65cd3df0860436582a34e32555212c9'),
+    'f65cd3df0860436582a34e32555212c9',
+  );
+  assert.equal(
+    naverMapFolderShareId('https://map.naver.com/v5/favorite/myPlace/folder/f65cd3df0860436582a34e32555212c9'),
+    'f65cd3df0860436582a34e32555212c9',
+  );
+  assert.equal(
+    naverMapFolderShareId('https://map.naver.com/p/favorite/encUserId/folder/f65cd3df0860436582a34e32555212c9?at=123'),
+    'f65cd3df0860436582a34e32555212c9',
+  );
+  assert.equal(
+    naverMapFolderShareId('https://pages.map.naver.com/save-pages/pc/detail-list/f65cd3df0860436582a34e32555212c9'),
+    'f65cd3df0860436582a34e32555212c9',
+  );
+  assert.equal(
+    naverMapFolderShareId('https://pages.map.naver.com/save-pages/api/maps-bookmark/v3/shares/f65cd3df0860436582a34e32555212c9/bookmarks'),
+    'f65cd3df0860436582a34e32555212c9',
+  );
+  // Non-folder or place URLs return null
+  assert.equal(naverMapFolderShareId('https://map.naver.com/p/entry/place/1887843614'), null);
+  assert.equal(naverMapFolderShareId('https://blog.naver.com/someblog/12345'), null);
+  assert.equal(naverMapFolderShareId('https://example.com/folder/12345'), null);
+  assert.equal(naverMapFolderShareId('not a url'), null);
+});
+
+test('buildNaverMapFolderStaticMapUrl creates a static map URL with markers', () => {
+  const url = buildNaverMapFolderStaticMapUrl('3', [
+    { px: 126.86644, py: 33.5288 },
+    { px: 129.25129, py: 37.36204 },
+  ]);
+  assert.ok(url?.startsWith('https://simg.pstatic.net/static.map/v2/map/staticmap.bin?caller=og_map'));
+  assert.ok(url?.includes('m_my_folder3@2x.png'));
+  assert.ok(url?.includes('pos:126.86644 33.5288'));
+  assert.ok(url?.includes('pos:129.25129 37.36204'));
+
+  // Empty or invalid coordinates return null
+  assert.equal(buildNaverMapFolderStaticMapUrl('1', []), null);
+  assert.equal(buildNaverMapFolderStaticMapUrl('1', [{ px: undefined, py: undefined }]), null);
+});
+
+test('isGenericNaverMapTitle recognizes generic fallback titles', () => {
+  assert.equal(isGenericNaverMapTitle(undefined), true);
+  assert.equal(isGenericNaverMapTitle(''), true);
+  assert.equal(isGenericNaverMapTitle('네이버지도 저장'), true);
+  assert.equal(isGenericNaverMapTitle('네이버지도'), true);
+  assert.equal(isGenericNaverMapTitle('네이버 지도'), true);
+  assert.equal(isGenericNaverMapTitle('바다 (AW앤웍) : 네이버 지도'), false);
+  assert.equal(isGenericNaverMapTitle('스타벅스'), false);
+});
+
+test('fetchNaverMapFolderMetadata fetches folder details and builds preview metadata', async () => {
+  const originalFetch = globalThis.fetch;
+  const mockApiData = {
+    folder: {
+      folderId: 89136234,
+      name: '바다',
+      memo: '스노쿨링',
+      markerColor: '3',
+      placeUserProfile: {
+        nick: 'AW앤웍',
+        imageUrl: 'https://example.com/profile.jpg',
+      },
+    },
+    bookmarkList: [
+      { px: 126.86644, py: 33.5288 },
+    ],
+  };
+
+  globalThis.fetch = (async (input: string) => {
+    if (input.includes('/shares/f65cd3df/bookmarks')) {
+      return new Response(JSON.stringify(mockApiData), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response(null, { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const meta = await fetchNaverMapFolderMetadata('f65cd3df');
+    assert.equal(meta?.title, '바다 (AW앤웍) : 네이버 지도');
+    assert.equal(meta?.site_name, '네이버 지도');
+    assert.equal(meta?.favicon_url, 'https://ssl.pstatic.net/static/maps/assets/icons/favicon.ico');
+    assert.ok(meta?.preview_image_url?.includes('staticmap.bin'));
+    assert.ok(meta?.preview_image_url?.includes('m_my_folder3@2x.png'));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchPageMetadata recovers a Naver Map folder via the bookmark API (STASH-72)', async () => {
+  const originalFetch = globalThis.fetch;
+  const requested: string[] = [];
+  const mockFolderJson = {
+    folder: {
+      name: '바다',
+      markerColor: '3',
+      placeUserProfile: {
+        nick: 'AW앤웍',
+      },
+    },
+    bookmarkList: [
+      { px: 126.86644, py: 33.5288 },
+    ],
+  };
+
+  globalThis.fetch = (async (target: string) => {
+    requested.push(target);
+    // Short link naver.me resolves to map.naver.com SPA shell
+    if (target.includes('naver.me') || target.includes('map.naver.com/p/favorite/myPlace/folder/f65cd3df')) {
+      return htmlResponse('<head><meta charset="utf-8"></head>', {
+        url: 'https://map.naver.com/p/favorite/myPlace/folder/f65cd3df',
+      });
+    }
+    // Bookmark API returns the folder data
+    if (target.includes('/shares/f65cd3df/bookmarks')) {
+      return new Response(JSON.stringify(mockFolderJson), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response('Not found', { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const meta = await fetchPageMetadata('https://naver.me/5yhegKdn');
+    assert.equal(meta?.title, '바다 (AW앤웍) : 네이버 지도');
+    assert.equal(meta?.site_name, '네이버 지도');
+    assert.ok(meta?.preview_image_url?.includes('staticmap.bin'));
+    assert.ok(
+      requested.some((u) => u.includes('/shares/f65cd3df/bookmarks')),
+      'expected a fetch to the bookmark folder API',
     );
   } finally {
     globalThis.fetch = originalFetch;

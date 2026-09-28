@@ -360,6 +360,137 @@ export function previewSourceUrl(rawUrl: string): string | null {
 }
 
 /**
+ * Detects a Naver Map favorite/bookmark folder (MyPlace list) and returns its
+ * share id, or null if the URL is not a Naver Map folder.
+ * Matches:
+ *  - map.naver.com/p/favorite/myPlace/folder/{shareId}
+ *  - map.naver.com/v5/favorite/myPlace/folder/{shareId}
+ *  - map.naver.com/p/favorite/{userEncryptId}/folder/{shareId}
+ *  - pages.map.naver.com/save-pages/pc/detail-list/{shareId}
+ *  - pages.map.naver.com/save-pages/api/maps-bookmark/v3/shares/{shareId}/...
+ */
+export function naverMapFolderShareId(rawUrl: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  const host = parsed.hostname.replace(/^www\./, '');
+  const isNaver = host === 'naver.com' || host.endsWith('.naver.com');
+  if (!isNaver) {
+    return null;
+  }
+  const match = parsed.pathname.match(/\/(?:folder|detail-list|shares)\/([a-zA-Z0-9]+)(?:\/|$)/);
+  return match?.[1] ?? null;
+}
+
+/**
+ * Builds a Naver Map static map thumbnail URL displaying pins for places in the
+ * folder, matching the official Naver Map web client's implementation.
+ */
+export function buildNaverMapFolderStaticMapUrl(
+  markerColor: string | number | undefined,
+  bookmarks: Array<{ px?: number; py?: number }>,
+): string | null {
+  const valid = bookmarks.filter(
+    (b) =>
+      typeof b.px === 'number' &&
+      typeof b.py === 'number' &&
+      !Number.isNaN(b.px) &&
+      !Number.isNaN(b.py),
+  );
+  if (valid.length === 0) {
+    return null;
+  }
+  const color = markerColor ? String(markerColor) : '1';
+  const icon = `https://map.pstatic.net/resource/api/v2/image/maps/bookmark/m_my_folder${color}@2x.png`;
+  // Limit to at most 15 markers to stay well within URL size limits
+  const markers = valid
+    .slice(0, 15)
+    .map((b) => `markers=type:e|icon:${icon}|anchor:center|pos:${b.px} ${b.py}`);
+  return `https://simg.pstatic.net/static.map/v2/map/staticmap.bin?caller=og_map&scale=2&w=500&h=300&${markers.join('&')}`;
+}
+
+export function isGenericNaverMapTitle(title: string | undefined): boolean {
+  if (!title) return true;
+  const t = title.trim();
+  return (
+    t === '네이버지도 저장' ||
+    t === '네이버지도' ||
+    t === '네이버 지도' ||
+    t === 'NAVER Map' ||
+    t === 'Naver Map'
+  );
+}
+
+/**
+ * Fetches structured metadata for a Naver Map folder (MyPlace list) from Naver's
+ * save-pages bookmark API. Returns folder title, site name, author attribution,
+ * and a static map preview image.
+ */
+export async function fetchNaverMapFolderMetadata(
+  shareId: string,
+  fetcher: typeof fetch = globalThis.fetch,
+): Promise<FetchedMetadata | null> {
+  const apiUrl = `https://pages.map.naver.com/save-pages/api/maps-bookmark/v3/shares/${encodeURIComponent(shareId)}/bookmarks`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetcher(apiUrl, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': BROWSER_USER_AGENT,
+        Accept: 'application/json',
+      },
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const data = (await response.json()) as {
+      folder?: {
+        name?: string;
+        memo?: string;
+        markerColor?: string | number;
+        bookmarkCount?: number;
+        placeUserProfile?: {
+          nick?: string;
+          imageUrl?: string;
+        };
+      };
+      bookmarkList?: Array<{ px?: number; py?: number }>;
+    };
+
+    const folder = data.folder;
+    if (!folder?.name?.trim()) {
+      return null;
+    }
+    const baseName = folder.name.trim();
+
+    const nick = folder.placeUserProfile?.nick?.trim();
+    const titleSuffix = baseName.includes('네이버 지도') ? '' : ' : 네이버 지도';
+    const title = nick ? `${baseName} (${nick})${titleSuffix}` : `${baseName}${titleSuffix}`;
+
+    const staticMap = buildNaverMapFolderStaticMapUrl(folder.markerColor, data.bookmarkList ?? []);
+    const previewImage =
+      staticMap ||
+      folder.placeUserProfile?.imageUrl ||
+      'https://ssl.pstatic.net/static/maps/assets/images/og-map-400x200.png';
+
+    return {
+      title,
+      site_name: '네이버 지도',
+      favicon_url: 'https://ssl.pstatic.net/static/maps/assets/icons/favicon.ico',
+      preview_image_url: previewImage,
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Fetches a page and extracts its metadata. Resolves to null on timeout,
  * non-OK responses, non-HTML content, or any other failure — never throws.
  *
@@ -428,6 +559,15 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
   if (bot.metadata?.title) {
     return bot.metadata;
   }
+  const earlyFolderShareId =
+    (bot.finalUrl ? naverMapFolderShareId(bot.finalUrl) : null) || naverMapFolderShareId(target);
+  if (earlyFolderShareId) {
+    const folderMeta = await fetchNaverMapFolderMetadata(earlyFolderShareId);
+    if (folderMeta?.title) {
+      recordLog('info', `preview: recovered via naver map folder ${earlyFolderShareId} for ${url}`);
+      return folderMeta;
+    }
+  }
   // The honest request was refused or returned a title-less shell; try once as a
   // browser. Keep the bot result as a fallback so we never discard usable
   // partial metadata (e.g. a favicon) the browser retry can't improve on.
@@ -468,6 +608,21 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
         return spa.metadata;
       }
       result = result ?? spa.metadata;
+    }
+  }
+
+  // Naver Map bookmark folder / MyPlace list: client-side SPA whose folder details
+  // and static map are served from the save-pages bookmark API.
+  if (!result?.title || isGenericNaverMapTitle(result.title)) {
+    const folderShareId =
+      (landedOn ? naverMapFolderShareId(landedOn) : null) || naverMapFolderShareId(target);
+    if (folderShareId) {
+      const folderMeta = await fetchNaverMapFolderMetadata(folderShareId);
+      if (folderMeta?.title) {
+        recordLog('info', `preview: recovered via naver map folder ${folderShareId} for ${url}`);
+        return folderMeta;
+      }
+      result = result ?? folderMeta;
     }
   }
 
