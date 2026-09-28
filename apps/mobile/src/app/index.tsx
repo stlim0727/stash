@@ -1461,68 +1461,6 @@ export default function InboxScreen() {
     };
   }, [inbox, getTagsForBookmark, getCollection]);
 
-  // Folder View tiles. Deliberately NOT filtered down to `chips`' collection
-  // entries — those only include a collection that already holds an Inbox
-  // bookmark, so a just-created empty collection (see the "New folder" dialog
-  // below) would never appear as a tile. Folder View reads as a directory of
-  // every real Collection (à la Drive/Files, empty folders included), so it
-  // iterates the full `collections` list instead and looks up each one's count
-  // from the SAME per-collection tally the browse shelf computed (0 if absent)
-  // — the two views still never disagree on a count, they just differ on
-  // whether an empty collection gets a row at all.
-  // Order: the uncollected/"받은함" bucket first (tray icon, `mutedSurface`, not
-  // hash-colored), then real collections (alpha-sorted), then a trailing
-  // "New folder" tile.
-  const folderTiles = useMemo<FolderTileItem[]>(() => {
-    const tiles: FolderTileItem[] = [];
-    if (hasUncollected) {
-      tiles.push({
-        id: '__folder-uncollected',
-        __folderTile: true,
-        kind: 'uncollected',
-        label: t('inbox.filterNoCollection'),
-        count: uncollectedCount,
-        filter: UNCOLLECTED_FILTER,
-      });
-    }
-    // Mirrors the browse shelf's own guard: a collection with an empty/
-    // whitespace name (a partial sync, an edge case elsewhere) must not
-    // render as a blank tile. Only this middle, real-collection segment is
-    // reordered by `folderSort` — the uncollected tile above stays pinned
-    // first and "New folder" below stays pinned last regardless of order.
-    const sortableCollections = collections
-      .filter((collection) => collection.name?.trim())
-      .map((collection) => ({
-        id: collection.id,
-        name: collection.name,
-        count: collectionCounts.get(collection.id) ?? 0,
-        collection,
-      }));
-    const sortedCollections = sortFolderTiles(sortableCollections, folderSort);
-    for (const { collection, count } of sortedCollections) {
-      tiles.push({
-        id: `__folder-c:${collection.id}`,
-        __folderTile: true,
-        kind: 'collection',
-        label: collection.name,
-        count,
-        filter: { kind: 'collection', id: collection.id },
-        colorKey: collectionColorKey(collection.id),
-      });
-    }
-    tiles.push({ id: '__folder-new', __folderTile: true, kind: 'new' });
-    return tiles;
-  }, [collections, collectionCounts, folderSort, hasUncollected, uncollectedCount, t]);
-
-  // Pad to an even number of tiles so the trailing row keeps its column width
-  // (mirrors the placeholder padding the card grid already does below).
-  const folderGridData = useMemo<(FolderTileItem | GridPlaceholder)[]>(() => {
-    if (folderTiles.length % 2 === 0) {
-      return folderTiles;
-    }
-    return [...folderTiles, { id: '__folder-ph', __placeholder: true }];
-  }, [folderTiles]);
-
   const facetFiltered = useMemo(
     () => filterByFacet(inbox, filter, tagIdsFor),
     [inbox, filter, tagIdsFor],
@@ -1568,6 +1506,102 @@ export default function InboxScreen() {
     [facetFiltered, debouncedQuery, getTagsForBookmark, getCollection],
   );
   const visible = useMemo(() => sortBookmarks(filtered, sort), [filtered, sort]);
+
+  // When search is active, Folder View tiles display the count of matching
+  // items in each folder (matching the "Matches (N)" total). When not searching,
+  // they reflect the full Inbox library.
+  const { folderCollectionCounts, folderUncollectedCount } = useMemo(() => {
+    if (!searching) {
+      return {
+        folderCollectionCounts: collectionCounts,
+        folderUncollectedCount: uncollectedCount,
+      };
+    }
+    const counts = new Map<string, number>();
+    let uncollected = 0;
+    for (const bookmark of filtered) {
+      if (bookmark.collection_id === null) {
+        uncollected += 1;
+      } else {
+        counts.set(
+          bookmark.collection_id,
+          (counts.get(bookmark.collection_id) ?? 0) + 1,
+        );
+      }
+    }
+    return {
+      folderCollectionCounts: counts,
+      folderUncollectedCount: uncollected,
+    };
+  }, [searching, collectionCounts, uncollectedCount, filtered]);
+
+  // Folder View tiles. Deliberately NOT filtered down to `chips`' collection
+  // entries — those only include a collection that already holds an Inbox
+  // bookmark, so a just-created empty collection (see the "New folder" dialog
+  // below) would never appear as a tile. Folder View reads as a directory of
+  // every real Collection (à la Drive/Files, empty folders included), so it
+  // iterates the full `collections` list instead and looks up each one's count
+  // from the per-collection tally (0 if absent) — when search is active, counts
+  // reflect the search matches rather than the whole library.
+  // Order: the uncollected/"받은함" bucket first (tray icon, `mutedSurface`, not
+  // hash-colored), then real collections (alpha-sorted), then a trailing
+  // "New folder" tile.
+  const folderTiles = useMemo<FolderTileItem[]>(() => {
+    const tiles: FolderTileItem[] = [];
+    if (hasUncollected) {
+      tiles.push({
+        id: '__folder-uncollected',
+        __folderTile: true,
+        kind: 'uncollected',
+        label: t('inbox.filterNoCollection'),
+        count: folderUncollectedCount,
+        filter: UNCOLLECTED_FILTER,
+      });
+    }
+    // Mirrors the browse shelf's own guard: a collection with an empty/
+    // whitespace name (a partial sync, an edge case elsewhere) must not
+    // render as a blank tile. Only this middle, real-collection segment is
+    // reordered by `folderSort` — the uncollected tile above stays pinned
+    // first and "New folder" below stays pinned last regardless of order.
+    const sortableCollections = collections
+      .filter((collection) => collection.name?.trim())
+      .map((collection) => ({
+        id: collection.id,
+        name: collection.name,
+        count: folderCollectionCounts.get(collection.id) ?? 0,
+        collection,
+      }));
+    const sortedCollections = sortFolderTiles(sortableCollections, folderSort);
+    for (const { collection, count } of sortedCollections) {
+      tiles.push({
+        id: `__folder-c:${collection.id}`,
+        __folderTile: true,
+        kind: 'collection',
+        label: collection.name,
+        count,
+        filter: { kind: 'collection', id: collection.id },
+        colorKey: collectionColorKey(collection.id),
+      });
+    }
+    tiles.push({ id: '__folder-new', __folderTile: true, kind: 'new' });
+    return tiles;
+  }, [
+    collections,
+    folderCollectionCounts,
+    folderSort,
+    hasUncollected,
+    folderUncollectedCount,
+    t,
+  ]);
+
+  // Pad to an even number of tiles so the trailing row keeps its column width
+  // (mirrors the placeholder padding the card grid already does below).
+  const folderGridData = useMemo<(FolderTileItem | GridPlaceholder)[]>(() => {
+    if (folderTiles.length % 2 === 0) {
+      return folderTiles;
+    }
+    return [...folderTiles, { id: '__folder-ph', __placeholder: true }];
+  }, [folderTiles]);
   useEffect(() => {
     if (!inlineDetailId) {
       return;
