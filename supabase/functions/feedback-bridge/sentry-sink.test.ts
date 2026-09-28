@@ -99,6 +99,26 @@ test('buildEvent tags bookmark_id and bookmark_host when reported from detail (S
   assert.equal(tags.bookmark_host, 'm.ppomppu.co.kr');
 });
 
+test('buildEvent tags bookmark_id with live ID and tags bookmark_aliased_from when aliased', () => {
+  const event = makeSink(fakeTransport().transport).buildEvent(
+    report({
+      context: {
+        route: '/bookmark/detail',
+        bookmarkId: 'old-aliased-id',
+        bookmark: {
+          id: 'live-uuid-id',
+          aliasedFrom: 'old-aliased-id',
+          urlHost: 'm.ppomppu.co.kr',
+        },
+      },
+    }),
+  );
+  const tags = event.tags as Record<string, string>;
+  assert.equal(tags.bookmark_id, 'live-uuid-id');
+  assert.equal(tags.bookmark_aliased_from, 'old-aliased-id');
+  assert.equal(tags.bookmark_host, 'm.ppomppu.co.kr');
+});
+
 test('deliver posts a Sentry envelope and reports the event id (no real network)', async () => {
   const { transport, calls } = fakeTransport();
   const result = await makeSink(transport).deliver(report());

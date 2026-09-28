@@ -277,3 +277,25 @@ test('buildDiagnosticsContext captures bookmarkId and bookmark summary when repo
   assert.match(report, /"bookmarkId": "f07705ad-1f22-4cd6-8d0b-8814b627f2f5"/);
   assert.match(report, /"urlHost": "m.ppomppu.co.kr"/);
 });
+
+test('buildDiagnosticsContext prefers live bookmark id and includes aliasedFrom when re-keyed', () => {
+  const context = buildDiagnosticsContext({
+    bookmarkId: 'local-legacy-id',
+    bookmark: {
+      id: 'f07705ad-1f22-4cd6-8d0b-8814b627f2f5',
+      aliasedFrom: 'local-legacy-id',
+      hasUrl: true,
+      hasTitle: true,
+      hasDescription: false,
+      hasNotes: false,
+      hasPreviewImage: false,
+    },
+  });
+
+  assert.equal(context.bookmarkId, 'f07705ad-1f22-4cd6-8d0b-8814b627f2f5');
+  assert.equal(context.bookmark?.id, 'f07705ad-1f22-4cd6-8d0b-8814b627f2f5');
+  assert.equal(context.bookmark?.aliasedFrom, 'local-legacy-id');
+
+  const report = formatDiagnosticsReport(context);
+  assert.match(report, /"aliasedFrom": "local-legacy-id"/);
+});

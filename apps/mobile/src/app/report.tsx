@@ -151,8 +151,11 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         urlHost = new URL(reportedBookmark.url).hostname;
       } catch {}
     }
+    const hasAlias =
+      Boolean(sourceContext?.bookmarkId) && sourceContext!.bookmarkId !== reportedBookmark.id;
     return {
       id: reportedBookmark.id,
+      ...(hasAlias ? { aliasedFrom: sourceContext!.bookmarkId! } : {}),
       hasUrl: Boolean(reportedBookmark.url),
       urlHost,
       syncStatus: reportedBookmark.sync_status,
@@ -165,7 +168,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       createdAt: reportedBookmark.created_at,
       updatedAt: reportedBookmark.updated_at,
     };
-  }, [reportedBookmark]);
+  }, [reportedBookmark, sourceContext?.bookmarkId]);
 
   useEffect(
     () => () => {
@@ -265,7 +268,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
               resetAt: new Date(aiQuotaExceeded.retryAt).toISOString(),
             }
           : null,
-        bookmarkId: sourceContext?.bookmarkId ?? reportedBookmark?.id,
+        bookmarkId: reportedBookmark?.id ?? sourceContext?.bookmarkId,
         bookmark: bookmarkDiagnostics,
       }),
     [

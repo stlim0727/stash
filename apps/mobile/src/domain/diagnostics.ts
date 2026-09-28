@@ -112,6 +112,7 @@ export interface DiagnosticsInput {
 
 export interface DiagnosticsBookmark {
   id: string;
+  aliasedFrom?: string;
   hasUrl: boolean;
   urlHost?: string;
   syncStatus?: string;
@@ -344,6 +345,7 @@ export function buildDiagnosticsContext(input: DiagnosticsInput = {}): Diagnosti
     if (bId) {
       context.bookmark = {
         id: bId,
+        ...(cleanString(input.bookmark.aliasedFrom) ? { aliasedFrom: cleanString(input.bookmark.aliasedFrom) } : {}),
         hasUrl: Boolean(input.bookmark.hasUrl),
         ...(cleanString(input.bookmark.urlHost) ? { urlHost: cleanString(input.bookmark.urlHost) } : {}),
         ...(cleanString(input.bookmark.syncStatus) ? { syncStatus: cleanString(input.bookmark.syncStatus) } : {}),
@@ -360,9 +362,8 @@ export function buildDiagnosticsContext(input: DiagnosticsInput = {}): Diagnosti
         ...(cleanString(input.bookmark.createdAt) ? { createdAt: cleanString(input.bookmark.createdAt) } : {}),
         ...(cleanString(input.bookmark.updatedAt) ? { updatedAt: cleanString(input.bookmark.updatedAt) } : {}),
       };
-      if (!context.bookmarkId) {
-        context.bookmarkId = bId;
-      }
+      // Always prefer the live bookmark's ID for context.bookmarkId when lookup succeeded
+      context.bookmarkId = bId;
     }
   }
 

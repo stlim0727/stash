@@ -1,5 +1,5 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
-import type { ReactNode } from 'react';
+import { type ReactNode, useEffect } from 'react';
 
 jest.mock('@/storage/repository', () =>
   require('./helpers/fake-repository').createFakeRepositoryModule(),
@@ -80,7 +80,7 @@ import {
 } from '@/feedback/screenshot-session';
 import { feedbackSourceFromPath } from '@/feedback/FloatingReportButton';
 import { getLogEntries } from '@/observability/log-buffer';
-import { BookmarksProvider } from '@/store/bookmarks';
+import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
 import { type FakeRepositoryModule, makeStoredBookmark } from './helpers/fake-repository';
 
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
@@ -405,6 +405,69 @@ test('attaches bookmarkId and operational bookmark diagnostics when reporting fr
   });
   expect(JSON.stringify(arg.context)).not.toContain('Private note that should not leak');
   expect(JSON.stringify(arg.context)).not.toContain('bbs_view.php');
+});
+
+test('attaches live bookmarkId and retains aliasedFrom when reporting from detail with an aliased ID (STASH-70)', async () => {
+  const liveId = '7e64cf1e-0000-4000-8000-0000000000f2';
+  const oldId = '7e64cf1e-0000-4000-8000-0000000000f1';
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: liveId,
+      url: 'https://m.ppomppu.co.kr/new/bbs_view.php?id=freeboard&no=123',
+      title: 'Original Title',
+      sync_status: 'synced',
+      metadata_status: 'complete',
+    }),
+  ]);
+  setPendingFeedbackSource({
+    route: '/bookmark/detail',
+    surface: 'bookmark_detail',
+    bookmarkId: oldId,
+  });
+
+  const submitReport = jest.fn(async (_input: unknown) => {});
+  const createApi = jest.fn(() => ({ submitReport }));
+
+  const storeModule = require('@/store/bookmarks');
+  const realUseBookmarks = storeModule.useBookmarks;
+  const spy = jest.spyOn(storeModule, 'useBookmarks').mockImplementation(() => {
+    const real = realUseBookmarks();
+    return {
+      ...real,
+      getBookmark: (id: string) => {
+        if (id === oldId) {
+          return makeStoredBookmark({
+            id: liveId,
+            url: 'https://m.ppomppu.co.kr/new/bbs_view.php?id=freeboard&no=123',
+            title: 'Original Title',
+            sync_status: 'synced',
+            metadata_status: 'complete',
+          });
+        }
+        return real.getBookmark(id);
+      },
+    };
+  });
+
+  const screen = await renderReport({ createApi: createApi as never });
+
+  await waitFor(() => expect(screen.getByLabelText('Problem description')).toBeTruthy());
+  await fireEvent.changeText(screen.getByLabelText('Problem description'), 'Detail issue after sync rekey');
+
+  await act(async () => {
+    await fireEvent.press(screen.getByLabelText('Submit report'));
+  });
+
+  expect(submitReport).toHaveBeenCalledTimes(1);
+  const arg = submitReport.mock.calls[0]![0] as {
+    context: Record<string, unknown>;
+  };
+  expect(arg.context.bookmarkId).toBe(liveId);
+  expect(arg.context.bookmark).toMatchObject({
+    id: liveId,
+    aliasedFrom: oldId,
+  });
+  spy.mockRestore();
 });
 
 test('editing the message after a successful submit clears the thank-you and re-enables Submit', async () => {
