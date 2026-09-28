@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test, { beforeEach } from 'node:test';
 
 import {
+  PREVIEW_IMAGE_RETRY_MS,
+  selectPreviewImageUri,
   clearPreviewImageFailed,
   didPreviewImageLoad,
   getPreviewImageFailuresVersion,
@@ -70,4 +72,30 @@ test('didPreviewImageLoad validates native dimensions', () => {
   assert.equal(didPreviewImageLoad({ source: { width: 0, height: 0 } }), false);
   assert.equal(didPreviewImageLoad({}), false);
   assert.equal(didPreviewImageLoad(undefined), false);
+});
+
+test('failed local image falls through to its uploaded copy', () => {
+  const local = 'file:///missing.jpg';
+  const remote = 'https://example.com/upload.jpg';
+  assert.equal(selectPreviewImageUri(local, remote), local);
+  markPreviewImageFailed(local);
+  assert.equal(selectPreviewImageUri(local, remote), remote);
+  markPreviewImageFailed(remote);
+  assert.equal(selectPreviewImageUri(local, remote), null);
+  assert.equal(selectPreviewImageUri(null, null), null);
+});
+
+test('temporary failures expire and notify mounted previews to retry', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const uri = 'https://example.com/transient.jpg';
+  markPreviewImageFailed(uri);
+  let notified = 0;
+  const unsubscribe = subscribePreviewImageFailures(() => notified++);
+  t.mock.timers.tick(PREVIEW_IMAGE_RETRY_MS - 1);
+  assert.equal(isPreviewImageFailed(uri), true);
+  t.mock.timers.tick(1);
+  assert.equal(isPreviewImageFailed(uri), false);
+  assert.equal(selectPreviewImageUri(null, uri), uri);
+  assert.equal(notified, 1);
+  unsubscribe();
 });

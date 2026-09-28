@@ -63,7 +63,8 @@ import {
 import {
   didPreviewImageLoad,
   markPreviewImageFailed,
-  useIsPreviewImageFailed,
+  selectPreviewImageUri,
+  usePreviewImageFailuresVersion,
 } from '@/domain/preview-image-cache';
 import { isYoutubeAvailabilityCandidate } from '@/domain/page-metadata';
 import { hasRemoteIdentity, isLocalOnlyBookmark } from '@/sync/sync-bookmarks';
@@ -192,8 +193,8 @@ export default function BookmarkDetailScreen({
   const id = inlineId ?? routeId;
   const inline = inlineId !== undefined;
   const bookmark = id ? getBookmark(id) : undefined;
-  const rawPreviewUri = bookmark?.local_image_uri ?? bookmark?.preview_image_url ?? null;
-  const isPreviewFailedToLoad = useIsPreviewImageFailed(rawPreviewUri);
+  usePreviewImageFailuresVersion();
+  const rawPreviewUri = selectPreviewImageUri(bookmark?.local_image_uri, bookmark?.preview_image_url);
   // Retain drafts through blur/menu/preview events until the store confirms
   // the same source and format. A later external update can then show normally.
   useEffect(() => {
@@ -951,7 +952,7 @@ export default function BookmarkDetailScreen({
             </View>
           );
         }
-        if (hidePreviewHero || isPreviewFailedToLoad) {
+        if (hidePreviewHero) {
           return null;
         }
         const previewUri = rawPreviewUri;

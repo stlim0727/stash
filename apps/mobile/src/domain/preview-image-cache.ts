@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
-const failedImageUris = new Set<string>();
+export const PREVIEW_IMAGE_RETRY_MS = 60_000;
+const failedImageUris = new Map<string, ReturnType<typeof setTimeout>>();
 const listeners = new Set<() => void>();
 let failureVersion = 0;
 
@@ -19,7 +20,11 @@ export function markPreviewImageFailed(uri: string | null | undefined): void {
   if (!uri || failedImageUris.has(uri)) {
     return;
   }
-  failedImageUris.add(uri);
+  // A transport error is not permanent. Expiry notifies mounted screens too,
+  // allowing them to retry without navigation or a full app restart.
+  const timer = setTimeout(() => clearPreviewImageFailed(uri), PREVIEW_IMAGE_RETRY_MS);
+  (timer as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
+  failedImageUris.set(uri, timer);
   notify();
 }
 
@@ -40,8 +45,17 @@ export function clearPreviewImageFailed(uri: string | null | undefined): void {
   if (!uri || !failedImageUris.has(uri)) {
     return;
   }
+  clearTimeout(failedImageUris.get(uri));
   failedImageUris.delete(uri);
   notify();
+}
+
+/** Prefer the local copy, but retain a usable uploaded image after local failure. */
+export function selectPreviewImageUri(
+  localUri: string | null | undefined,
+  remoteUri: string | null | undefined,
+): string | null {
+  return [localUri, remoteUri].find((uri) => uri && !isPreviewImageFailed(uri)) ?? null;
 }
 
 type PreviewImageLoadEvent = {
@@ -93,6 +107,7 @@ export function usePreviewImageFailuresVersion(): number {
 }
 
 export function resetPreviewImageFailuresForTest(): void {
+  for (const timer of failedImageUris.values()) clearTimeout(timer);
   failedImageUris.clear();
   listeners.clear();
   failureVersion = 0;
