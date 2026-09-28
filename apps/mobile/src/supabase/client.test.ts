@@ -408,3 +408,34 @@ test('requestCount() aborts when timeoutMs expires or signal triggers', async ()
     globalThis.fetch = originalFetch;
   }
 });
+
+for (const trigger of ['timeout', 'caller'] as const) {
+  test(`request keeps ${trigger} cancellation active while reading the response body`, async () => {
+    const originalFetch = globalThis.fetch;
+    let bodyStarted!: () => void;
+    const readingBody = new Promise<void>((resolve) => { bodyStarted = resolve; });
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      text: () => {
+        bodyStarted();
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+        });
+      },
+    })) as typeof fetch;
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      const controller = new AbortController();
+      const client = new StashSupabaseClient({ url: 'https://proj.supabase.co', anonKey: 'anon-key' });
+      const request = client.request('/rest/v1/user_preferences', { timeoutMs: 20, signal: controller.signal });
+      await readingBody;
+      if (trigger === 'timeout') mock.timers.tick(25);
+      else controller.abort();
+      await assert.rejects(request, (err: Error) => err.name === 'AbortError');
+    } finally {
+      mock.timers.reset();
+      globalThis.fetch = originalFetch;
+    }
+  });
+}

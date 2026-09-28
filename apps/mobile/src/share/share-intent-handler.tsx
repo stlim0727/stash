@@ -32,6 +32,14 @@ function nextJsAttemptId(): string {
   return `js-${Date.now()}-${jsAttemptSequence}`;
 }
 
+function nativeCaptureClientId(attemptId: string): string | undefined {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    attemptId,
+  )
+    ? attemptId
+    : undefined;
+}
+
 /**
  * Bridges the OS share sheet to local-first capture. When the app is opened
  * with a shared URL we persist it through the existing store (which queues it
@@ -199,11 +207,16 @@ export function ShareIntentHandler() {
     // returns 'invalid' only when there is none of the three, which keeps the
     // "nothing to save" toast for a genuinely empty share.
     const saveStartedAt = Date.now();
+    const captureClientId = nativeCaptureClientId(share.attemptId);
     const result = share.url
       ? addBookmark({ url: share.url, title: share.title, title_is_derived: true })
       : share.image
-        ? addBookmark({ image: share.image, title: share.title })
-        : addBookmark({ shared_text: share.text, title: share.title });
+        ? addBookmark({ image: share.image, title: share.title, capture_client_id: captureClientId })
+        : addBookmark({
+            shared_text: share.text,
+            title: share.title,
+            capture_client_id: captureClientId,
+          });
     const saved = result.status !== 'invalid';
     // Only a genuinely new save is worth confirming on the next open; a
     // duplicate already lived in the library and a no-link share saved nothing.
@@ -235,7 +248,18 @@ export function ShareIntentHandler() {
     });
     if (saved) {
       message = result.status === 'duplicate' ? t('toast.duplicate') : t('toast.saved');
-      persisted = result.persisted;
+      persisted = result.persisted.then(async (durable) => {
+        if (durable && typeof ShareIntentModule?.acknowledgeShareIntent === 'function') {
+          try {
+            await ShareIntentModule.acknowledgeShareIntent(share.attemptId);
+          } catch {
+            // Keep the native attempt replayable if acknowledgement fails.
+            // URL captures dedupe by canonical URL; text and image captures
+            // reuse the attempt UUID as client_id so replay is idempotent too.
+          }
+        }
+        return durable;
+      });
     } else if (result.status === 'invalid' && result.reason === 'too_long') {
       // Distinguish from the generic "nothing to save" toast (Sentry
       // STASH-2J): there WAS a link, it was just too long to save.

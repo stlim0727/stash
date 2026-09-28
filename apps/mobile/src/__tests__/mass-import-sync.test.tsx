@@ -1752,3 +1752,19 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     );
   });
 });
+
+test("manual duplicate title edited during a create uploads a follow-up update", async () => {
+  const { result } = await renderReadyStore();
+  const gate = deferred();
+  const originalCreate = apiMock.__createBookmarkMock.getMockImplementation()!;
+  apiMock.__createBookmarkMock.mockImplementationOnce(async (...args: unknown[]) => {
+    await gate.promise;
+    return originalCreate(...args);
+  });
+  await act(async () => { result.current.addBookmark({ url: "https://example.com/inflight-title", title: "Old title" }); });
+  await waitFor(() => expect(apiMock.__createBookmarkMock).toHaveBeenCalledTimes(1));
+  await act(async () => { result.current.addBookmark({ url: "https://example.com/inflight-title", title: "New title" }); });
+  await act(async () => { gate.resolve(); });
+  await waitFor(() => expect(apiMock.__updateBookmarkMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ title: "New title" })), { timeout: 5000 });
+  expect(result.current.inbox[0]?.title).toBe("New title");
+});

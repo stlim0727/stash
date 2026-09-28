@@ -1374,6 +1374,48 @@ test("text formats persist independently without changing authored whitespace", 
   expect(fakeRepo.__bookmarks()[0]?.description_format).toBe("plain");
 });
 
+test("native capture client ids make replayed text and image shares idempotent", async () => {
+  const textAttemptId = "0d971988-176f-4f82-bb31-6e7b23123c92";
+  const { result } = await renderStore();
+  let firstText!: ReturnType<typeof result.current.addBookmark>;
+  await act(async () => {
+    firstText = result.current.addBookmark({
+      shared_text: "Keep this thought",
+      capture_client_id: textAttemptId,
+    });
+    if (firstText.status === "created") await firstText.persisted;
+  });
+  const replayedText = result.current.addBookmark({
+    shared_text: "Keep this thought",
+    capture_client_id: textAttemptId,
+  });
+  expect(replayedText.status).toBe("duplicate");
+  expect(fakeRepo.__bookmarks()).toHaveLength(1);
+  expect(fakeRepo.__queue()).toHaveLength(1);
+
+  const imageAttemptId = "8bc5967d-d2b6-46a9-8507-385798e98e4a";
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      url: null,
+      content_type: "image",
+      client_id: imageAttemptId,
+      local_image_uri: "file:///docs/stash-images/already-saved.png",
+    }),
+  ]);
+  const imageStore = await renderStore();
+  const replayedImage = imageStore.result.current.addBookmark({
+    image: {
+      uri: "file:///tmp/replay.png",
+      mimeType: "image/png",
+      fileName: "replay.png",
+    },
+    capture_client_id: imageAttemptId,
+  });
+  expect(replayedImage.status).toBe("duplicate");
+  expect(fakeRepo.__bookmarks()).toHaveLength(1);
+  expect(fakeRepo.__queue()).toHaveLength(0);
+});
+
 test("JSON restore keeps plain body and Markdown personal notes in both row and create queue", async () => {
   const { result } = await renderStore();
   await act(async () => {
@@ -1387,4 +1429,42 @@ test("JSON restore keeps plain body and Markdown personal notes in both row and 
     description: "# Literal\n", notes: "    code\n" });
   expect(fakeRepo.__queue()[0]?.payload).toMatchObject({ description_format: "plain", notes_format: "markdown",
     shared_text: "# Literal\n", notes: "    code\n" });
+});
+
+test("automatic duplicate capture preserves authored notes while manual submission replaces them", async () => {
+  const original = makeStoredBookmark({ id: SYNCED_ID, url: "https://example.com/duplicate", title: "Saved", notes: "Authored notes", notes_format: "markdown" });
+  fakeRepo.__reset([original]);
+  const { result } = await renderStore();
+  await act(async () => {
+    result.current.addBookmark({ url: original.url!, notes: "Shared quote", title_is_derived: true });
+  });
+  expect(result.current.inbox[0]).toMatchObject({ notes: "Authored notes", notes_format: "markdown", updated_at: original.updated_at });
+  expect(fakeRepo.__queue()).toHaveLength(0);
+  await act(async () => {
+    result.current.addBookmark({ url: original.url!, notes: "Manual replacement", replace_existing_notes: true });
+  });
+  expect(result.current.inbox[0]?.notes).toBe("Manual replacement");
+  await waitFor(() => expect(fakeRepo.__queue()[0]?.operation).toBe("update"));
+});
+
+test("duplicate notes format edits enqueue a sync even when text is unchanged", async () => {
+  const original = makeStoredBookmark({ id: SYNCED_ID, url: "https://example.com/format", title: "Saved", notes: "Same text", notes_format: "plain" });
+  fakeRepo.__reset([original]);
+  const { result } = await renderStore();
+  await act(async () => {
+    result.current.addBookmark({ url: original.url!, notes: "Same text", notes_format: "markdown", replace_existing_notes: true });
+  });
+  expect(result.current.inbox[0]).toMatchObject({ notes_format: "markdown", sync_status: "pending" });
+  expect(result.current.inbox[0]?.updated_at).not.toBe(original.updated_at);
+  await waitFor(() => expect(fakeRepo.__queue()[0]?.operation).toBe("update"));
+});
+
+test("duplicate manual content edits invalidate completed enrichment", async () => {
+  const { makeEnrichment } = require("./helpers/fake-repository");
+  const original = makeStoredBookmark({ id: SYNCED_ID, url: "https://example.com/stale", title: "Saved" });
+  fakeRepo.__reset([original], undefined, [makeEnrichment({ bookmark_id: SYNCED_ID, status: "complete" })]);
+  const { result } = await renderStore();
+  await act(async () => { result.current.addBookmark({ url: original.url!, title: "New title" }); });
+  expect(result.current.getEnrichment(SYNCED_ID)?.status).toBe("stale");
+  expect(await fakeRepo.repository.listEnrichments()).toEqual([expect.objectContaining({ status: "stale" })]);
 });

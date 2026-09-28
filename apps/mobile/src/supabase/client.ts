@@ -214,9 +214,8 @@ export class StashSupabaseClient {
       }
     }
 
-    let response: Response;
     try {
-      response = await fetch(`${this.config.url}${path}`, {
+      const response = await fetch(`${this.config.url}${path}`, {
         method: options.method ?? 'GET',
         headers: {
           apikey: this.config.anonKey,
@@ -227,6 +226,17 @@ export class StashSupabaseClient {
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
         signal: controller.signal,
       });
+      const payload = await parseResponse(response);
+      if (!response.ok) {
+        throw new SupabaseRequestError(
+          errorMessageFrom(payload, response.status),
+          response.status,
+          errorReasonFrom(payload),
+          retryAfterSecondsFrom(payload),
+        );
+      }
+
+      return payload as T;
     } finally {
       if (timeout) {
         clearTimeout(timeout);
@@ -235,18 +245,6 @@ export class StashSupabaseClient {
         options.signal.removeEventListener('abort', onAbort);
       }
     }
-
-    const payload = await parseResponse(response);
-    if (!response.ok) {
-      throw new SupabaseRequestError(
-        errorMessageFrom(payload, response.status),
-        response.status,
-        errorReasonFrom(payload),
-        retryAfterSecondsFrom(payload),
-      );
-    }
-
-    return payload as T;
   }
 
   /**

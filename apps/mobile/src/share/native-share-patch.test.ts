@@ -65,7 +65,7 @@ test('native attempt id survives the JavaScript parser', () => {
   assert.match(parser, /meta: shareIntent\?\.meta \?\? null/);
 });
 
-test('Android ACTION_VIEW is restricted to http/https and disarms intent', () => {
+test('Android ACTION_VIEW is restricted to http/https', () => {
   assert.match(
     nativeModule,
     /if \(intent\.action == Intent\.ACTION_VIEW && intent\.data != null\)/,
@@ -90,4 +90,21 @@ test('Android lifecycle listener preserves unhandled shares and suppresses handl
   );
   assert.match(lifecycleListener, /if \(!isStaleReplay && hasShareContent\)/);
   assert.match(lifecycleListener, /activity\?\.intent = Intent\(Intent\.ACTION_MAIN\)/);
+});
+
+
+test('Android acknowledgement is separate from delivery and only disarms the matching durable attempt', () => {
+  const delivery = nativeModule.slice(nativeModule.indexOf('fun handleShareIntent'), nativeModule.indexOf('override fun definition'));
+  assert.doesNotMatch(delivery, /markHandled|Intent\(Intent.ACTION_MAIN\)/);
+  const clear = nativeModule.slice(nativeModule.indexOf('Function("clearShareIntent")'), nativeModule.indexOf('AsyncFunction("acknowledgeShareIntent")'));
+  assert.doesNotMatch(clear, /markHandled|Intent\(Intent.ACTION_MAIN\)/);
+  assert.match(nativeModule, /AsyncFunction\("acknowledgeShareIntent"\)/);
+  assert.match(nativeModule, /getStringExtra\(ShareIntentDebugJournal.ATTEMPT_ID_EXTRA\) == attemptId/);
+  assert.match(debugJournal, /putString\(HANDLED_KEY, list.joinToString\(","\)\).commit\(\)/);
+  assert.match(lifecycleListener, /val isStaleReplay = isHandled\s/);
+});
+
+test('Android text shares accept styled CharSequence extras', () => {
+  assert.match(nativeModule, /getCharSequenceExtra\(Intent.EXTRA_TEXT\)\?\.toString\(\)/);
+  assert.doesNotMatch(nativeModule, /getStringExtra\(Intent.EXTRA_TEXT\)/);
 });
