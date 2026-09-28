@@ -123,6 +123,7 @@ import { overlayLayer } from '@/ui/layering';
 import { useCaptureToast } from '@/ui/capture-toast';
 import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
 import { hasRepeatedDnsFailures } from '@/domain/network-errors';
+import { isYoutubeAvailabilityCandidate } from '@/domain/page-metadata';
 import BookmarkDetailScreen from '@/app/bookmark/[id]';
 import {
   INITIAL_HEADER_COLLAPSE_STATE,
@@ -151,10 +152,11 @@ function statusLabel(
   if (bookmark.metadata_status === 'pending') {
     parts.push(metadataStatusLabel(t, 'pending'));
   }
-  // STASH-61: purely a read of the persisted flag — no network call from the
+  // STASH-61 / STASH-71: purely a read of the persisted flag — no network call from the
   // card. Detection only ever happens on-demand from the Detail screen; this
-  // just surfaces a result that's already been found.
-  if (bookmark.video_unavailable) {
+  // just surfaces a result that's already been found. Guarded by candidate check
+  // so playlists (STASH-71) never display "video unavailable".
+  if (bookmark.video_unavailable && isYoutubeAvailabilityCandidate(bookmark.url ?? '')) {
     parts.push(videoUnavailableLabel(t));
   }
   return parts.length > 0 ? parts.join(' · ') : null;

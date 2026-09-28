@@ -2261,13 +2261,32 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   logStorageError("clear legacy suggestion keys", e),
                 );
             }
+            // STASH-71: Clean up any erroneously set video_unavailable flags on
+            // non-candidate bookmarks (such as YouTube playlists or non-YouTube URLs)
+            // stored from earlier releases.
+            const sanitizedBookmarks = migratedBookmarks.map((bookmark) => {
+              if (
+                bookmark.video_unavailable &&
+                !isYoutubeAvailabilityCandidate(bookmark.url ?? "")
+              ) {
+                const cleaned: Bookmark = { ...bookmark, video_unavailable: false };
+                ensureRepositoryReady()
+                  .then(() => repository.updateBookmark(cleaned))
+                  .catch((e) =>
+                    logStorageError("clear invalid video_unavailable on load", e),
+                  );
+                return cleaned;
+              }
+              return bookmark;
+            });
+
             // Merge instead of replace: saves made while loading must survive.
             setBookmarks((current) =>
               current === null
-                ? migratedBookmarks
+                ? sanitizedBookmarks
                 : mergeById(
                     current,
-                    migratedBookmarks,
+                    sanitizedBookmarks,
                     (bookmark) => bookmark.id,
                   ),
             );
@@ -2280,7 +2299,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // pending" forever. Re-enqueue an upload so the background loop
             // finishes it. Idempotent on the server, so it's safe to repeat.
             const orphanEntries = reconcileOrphanedQueueEntries(
-              migratedBookmarks,
+              sanitizedBookmarks,
               storedQueue,
             );
             if (orphanEntries.length > 0) {
@@ -3573,6 +3592,25 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // never flip sync_status, enqueue a sync mutation, or bump updated_at.
   const checkVideoAvailability = useCallback((id: string, url: string | null | undefined) => {
     if (!url || !isYoutubeAvailabilityCandidate(url)) {
+      // If a non-candidate (such as a YouTube playlist or non-YouTube URL)
+      // previously had video_unavailable set, self-heal by clearing it (STASH-71).
+      const latest = bookmarksRef.current?.find((bookmark) => bookmark.id === id);
+      if (latest?.video_unavailable) {
+        const updated: Bookmark = { ...latest, video_unavailable: false };
+        setBookmarks((current) =>
+          current === null
+            ? current
+            : current.map((bookmark) => (bookmark.id === id ? updated : bookmark)),
+        );
+        bookmarksRef.current = bookmarksRef.current!.map((bookmark) =>
+          bookmark.id === id ? updated : bookmark,
+        );
+        ensureRepositoryReady()
+          .then(() => repository.updateBookmark(updated))
+          .catch((error) =>
+            logStorageError("clear invalid video_unavailable", error),
+          );
+      }
       return;
     }
     if (videoAvailabilityCheckingRef.current.has(id)) {

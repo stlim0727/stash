@@ -722,11 +722,16 @@ function isKnownYoutubeShortenerHost(rawUrl: string): boolean {
   }
 }
 
-/** Whether `checkYoutubeAvailability` can do anything useful with this URL. */
+/**
+ * Whether `checkYoutubeAvailability` can do anything useful with this URL.
+ * Only YouTube videos (and known shorteners) are candidates — playlists
+ * (STASH-71) and channels must never be checked as videos, since YouTube's
+ * oEmbed returns 404 for radio/mix playlists (e.g. RD...) and 400 for missing
+ * playlists, which would falsely label valid playlists as "video unavailable".
+ */
 export function isYoutubeAvailabilityCandidate(rawUrl: string): boolean {
   return (
     Boolean(youtubeVideoId(rawUrl)) ||
-    Boolean(youtubePlaylistId(rawUrl)) ||
     isKnownYoutubeShortenerHost(rawUrl)
   );
 }
@@ -788,23 +793,21 @@ async function resolveKnownYoutubeShortener(rawUrl: string): Promise<string | nu
 export async function checkYoutubeAvailability(
   rawUrl: string,
 ): Promise<'available' | 'unavailable' | 'unknown'> {
-  // oembedEndpoint also supports Reddit previews; availability is specifically
-  // a YouTube lifecycle check, so never query another provider here.
-  if (
-    !youtubeVideoId(rawUrl) &&
-    !youtubePlaylistId(rawUrl) &&
-    !isKnownYoutubeShortenerHost(rawUrl)
-  ) {
+  // oembedEndpoint also supports Reddit previews and YouTube playlists for metadata;
+  // availability is specifically a YouTube *video* lifecycle check, so never query
+  // playlists or other providers here (STASH-71).
+  if (!youtubeVideoId(rawUrl) && !isKnownYoutubeShortenerHost(rawUrl)) {
     return 'unknown';
   }
-  let endpoint = oembedEndpoint(rawUrl);
-  if (!endpoint) {
+  let videoId = youtubeVideoId(rawUrl);
+  if (!videoId) {
     const resolved = await resolveKnownYoutubeShortener(rawUrl);
-    endpoint = resolved ? oembedEndpoint(resolved) : null;
+    videoId = resolved ? youtubeVideoId(resolved) : null;
   }
-  if (!endpoint) {
+  if (!videoId) {
     return 'unknown';
   }
+  const endpoint = `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
