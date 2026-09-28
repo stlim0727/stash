@@ -3744,8 +3744,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           latest.title_is_derived === bookmark.title_is_derived;
         const nextPatch: Partial<Bookmark> = { metadata_status };
         if (titleStillRefreshable && patch.title !== undefined) {
-          nextPatch.title = patch.title;
-          nextPatch.title_is_derived = patch.title_is_derived;
+          // If the patch title was just a URL-derived fallback (no real title was fetched from the page)
+          // and the bookmark already had a title, do not degrade the existing title unless the existing
+          // title is a known repairable placeholder (e.g. 'Bbs View' or 'Reddit').
+          const wouldDegradeExistingTitle =
+            patch.title_is_derived === true &&
+            Boolean(bookmark.title?.trim()) &&
+            !isRepairableSourceTitle(bookmark);
+          if (!wouldDegradeExistingTitle) {
+            nextPatch.title = patch.title;
+            nextPatch.title_is_derived = patch.title_is_derived;
+          }
         }
         if (patch.site_name !== undefined) {
           nextPatch.site_name = patch.site_name;

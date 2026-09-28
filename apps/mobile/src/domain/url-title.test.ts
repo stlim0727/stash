@@ -112,6 +112,18 @@ test('isRepairableSourceTitle recognizes legacy Reddit and GeekNews Topic placeh
     false,
   );
   assert.equal(
+    isRepairableSourceTitle({ url: 'https://m.ppomppu.co.kr/new/bbs_view.php?id=humor&no=783364', title: 'Bbs View' }),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle({ url: 'https://m.ppomppu.co.kr/new/bbs_view.php?id=humor&no=783364', title: 'bbs_view' }),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle({ url: 'https://m.ppomppu.co.kr/new/bbs_view.php?id=humor&no=783364', title: '진실이 잔인해야 하는건 아니다' }),
+    false,
+  );
+  assert.equal(
     isRepairableSourceTitle({ url: 'https://example.com/topic', title: 'Topic' }),
     false,
   );

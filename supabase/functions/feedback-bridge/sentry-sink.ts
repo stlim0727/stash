@@ -181,6 +181,19 @@ export class SentrySink implements ReportSink {
     if (report.app_version) {
       tags.app_version = report.app_version;
     }
+    const context = (report.context ?? {}) as Record<string, unknown>;
+    const bookmarkObj = context.bookmark as Record<string, unknown> | undefined;
+    if (typeof bookmarkObj?.id === 'string' && bookmarkObj.id) {
+      tags.bookmark_id = bookmarkObj.id;
+    } else if (typeof context.bookmarkId === 'string' && context.bookmarkId) {
+      tags.bookmark_id = context.bookmarkId;
+    }
+    if (typeof bookmarkObj?.urlHost === 'string' && bookmarkObj.urlHost) {
+      tags.bookmark_host = bookmarkObj.urlHost;
+    }
+    if (typeof bookmarkObj?.aliasedFrom === 'string' && bookmarkObj.aliasedFrom) {
+      tags.bookmark_aliased_from = bookmarkObj.aliasedFrom;
+    }
     return {
       event_id: eventId,
       timestamp: report.created_at,

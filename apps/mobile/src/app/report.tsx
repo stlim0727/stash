@@ -23,7 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createFeedbackApi } from '@/api/feedback';
 import type { FeedbackApi, FeedbackCategory } from '@/api/feedback';
 import { buildDiagnosticsContext, formatDiagnosticsReport } from '@/domain/diagnostics';
-import type { DiagnosticsContext } from '@/domain/diagnostics';
+import type { DiagnosticsBookmark, DiagnosticsContext } from '@/domain/diagnostics';
 import { describeBuild, getBuildInfo } from '@/domain/build-info';
 import { getLogEntries } from '@/observability/log-buffer';
 import { describeRecentSegments } from '@/observability/slow-segment-log';
@@ -128,7 +128,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   const asSheet = width >= 760;
   const auth = useSupabaseAuth();
   const pathname = usePathname();
-  const { queue, isSyncing, lastPulledAt, aiQuotaExceeded } = useBookmarks();
+  const { queue, isSyncing, lastPulledAt, aiQuotaExceeded, getBookmark } = useBookmarks();
 
   const [category, setCategory] = useState<FeedbackCategory>('bug');
   const [message, setMessage] = useState('');
@@ -137,6 +137,38 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   const [sourceContext] = useState(getPendingFeedbackSource);
   const [includeScreenshot, setIncludeScreenshot] = useState(false);
   const [showContextPreview, setShowContextPreview] = useState(false);
+
+  const reportedBookmark = useMemo(() => {
+    if (!sourceContext?.bookmarkId) return null;
+    return getBookmark(sourceContext.bookmarkId);
+  }, [getBookmark, sourceContext?.bookmarkId]);
+
+  const bookmarkDiagnostics = useMemo((): DiagnosticsBookmark | null => {
+    if (!reportedBookmark) return null;
+    let urlHost: string | undefined;
+    if (reportedBookmark.url) {
+      try {
+        urlHost = new URL(reportedBookmark.url).hostname;
+      } catch {}
+    }
+    const hasAlias =
+      Boolean(sourceContext?.bookmarkId) && sourceContext!.bookmarkId !== reportedBookmark.id;
+    return {
+      id: reportedBookmark.id,
+      ...(hasAlias ? { aliasedFrom: sourceContext!.bookmarkId! } : {}),
+      hasUrl: Boolean(reportedBookmark.url),
+      urlHost,
+      syncStatus: reportedBookmark.sync_status,
+      metadataStatus: reportedBookmark.metadata_status,
+      titleIsDerived: reportedBookmark.title_is_derived,
+      hasTitle: Boolean(reportedBookmark.title?.trim()),
+      hasDescription: Boolean(reportedBookmark.description?.trim()),
+      hasNotes: Boolean(reportedBookmark.notes?.trim()),
+      hasPreviewImage: Boolean(reportedBookmark.preview_image_url),
+      createdAt: reportedBookmark.created_at,
+      updatedAt: reportedBookmark.updated_at,
+    };
+  }, [reportedBookmark, sourceContext?.bookmarkId]);
 
   useEffect(
     () => () => {
@@ -236,12 +268,16 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
               resetAt: new Date(aiQuotaExceeded.retryAt).toISOString(),
             }
           : null,
+        bookmarkId: reportedBookmark?.id ?? sourceContext?.bookmarkId,
+        bookmark: bookmarkDiagnostics,
       }),
     [
       appVersion,
       platform,
       pathname,
       sourceContext,
+      reportedBookmark,
+      bookmarkDiagnostics,
       auth.status,
       queue,
       queueDepth,

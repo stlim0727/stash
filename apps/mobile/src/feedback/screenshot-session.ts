@@ -6,6 +6,7 @@ let pendingSource: FeedbackSourceContext | null = null;
 export interface FeedbackSourceContext {
   route: string;
   surface: string;
+  bookmarkId?: string | null;
 }
 
 export function setPendingFeedbackScreenshot(screenshot: FeedbackScreenshot | null): void {

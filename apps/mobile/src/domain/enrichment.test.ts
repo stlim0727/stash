@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { deriveMetadata, enrichBookmark, isRepairableSourceTitle } from './enrichment.ts';
+import { deriveMetadata, enrichBookmark, isGenericScriptSlug, isRepairableSourceTitle } from './enrichment.ts';
 import type { Bookmark } from './types.ts';
 
 function makeBookmark(overrides: Partial<Bookmark> = {}): Bookmark {
@@ -168,4 +168,40 @@ test('enrichBookmark skips text-only bookmarks', async () => {
   const result = await enrichBookmark(makeBookmark({ url: null }), offline);
   assert.equal(result.metadata_status, 'skipped');
   assert.deepEqual(result.patch, {});
+});
+
+test('isGenericScriptSlug identifies server script endpoints and ignores content slugs', () => {
+  assert.equal(isGenericScriptSlug('bbs_view.php'), true);
+  assert.equal(isGenericScriptSlug('view.php'), true);
+  assert.equal(isGenericScriptSlug('index.html'), true);
+  assert.equal(isGenericScriptSlug('article.asp'), true);
+  assert.equal(isGenericScriptSlug('default.aspx'), true);
+  assert.equal(isGenericScriptSlug('how_to_make_pancakes'), false);
+  assert.equal(isGenericScriptSlug('introduction'), false);
+});
+
+test('deriveMetadata falls back to host rather than generic script filename (STASH-70)', () => {
+  const meta = deriveMetadata('https://m.ppomppu.co.kr/new/bbs_view.php?id=humor&no=783364');
+  assert.equal(meta.title, 'm.ppomppu.co.kr');
+});
+
+test('isRepairableSourceTitle recognizes degraded Bbs View on ppomppu (STASH-70)', () => {
+  assert.equal(
+    isRepairableSourceTitle(
+      makeBookmark({ url: 'https://m.ppomppu.co.kr/new/bbs_view.php?id=humor&no=783364', title: 'Bbs View' }),
+    ),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle(
+      makeBookmark({ url: 'https://m.ppomppu.co.kr/new/bbs_view.php?id=humor&no=783364', title: 'bbs_view' }),
+    ),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle(
+      makeBookmark({ url: 'https://other.com/bbs_view', title: 'Bbs View' }),
+    ),
+    false,
+  );
 });

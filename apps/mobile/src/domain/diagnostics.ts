@@ -104,6 +104,26 @@ export interface DiagnosticsInput {
    *  is currently exceeded (STASH-4P follow-up — "which limit, when does it
    *  free up" visibility). `null`/absent when no quota cooldown is active. */
   aiQuota?: DiagnosticsAiQuota | null;
+  /** Unique identifier of the bookmark being viewed when report was opened, if any. */
+  bookmarkId?: string | null;
+  /** High-level operational summary of the bookmark being viewed, if any. */
+  bookmark?: DiagnosticsBookmark | null;
+}
+
+export interface DiagnosticsBookmark {
+  id: string;
+  aliasedFrom?: string;
+  hasUrl: boolean;
+  urlHost?: string;
+  syncStatus?: string;
+  metadataStatus?: string;
+  titleIsDerived?: boolean;
+  hasTitle: boolean;
+  hasDescription: boolean;
+  hasNotes: boolean;
+  hasPreviewImage: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface DiagnosticsAiQuota {
@@ -180,6 +200,10 @@ export interface DiagnosticsContext {
   screenshot?: DiagnosticsScreenshot;
   /** Present only when an AI-enrichment quota cooldown is currently active. */
   aiQuota?: DiagnosticsAiQuota;
+  /** Unique identifier of the bookmark being viewed when report was opened, if any. */
+  bookmarkId?: string;
+  /** High-level operational summary of the bookmark being viewed, if any. */
+  bookmark?: DiagnosticsBookmark;
   capturedAt: string;
 }
 
@@ -309,6 +333,38 @@ export function buildDiagnosticsContext(input: DiagnosticsInput = {}): Diagnosti
       platform: input.screenshot.platform,
       surface: input.screenshot.surface,
     };
+  }
+
+  const bookmarkId = cleanString(input.bookmarkId);
+  if (bookmarkId) {
+    context.bookmarkId = bookmarkId;
+  }
+
+  if (input.bookmark && typeof input.bookmark === 'object') {
+    const bId = cleanString(input.bookmark.id);
+    if (bId) {
+      context.bookmark = {
+        id: bId,
+        ...(cleanString(input.bookmark.aliasedFrom) ? { aliasedFrom: cleanString(input.bookmark.aliasedFrom) } : {}),
+        hasUrl: Boolean(input.bookmark.hasUrl),
+        ...(cleanString(input.bookmark.urlHost) ? { urlHost: cleanString(input.bookmark.urlHost) } : {}),
+        ...(cleanString(input.bookmark.syncStatus) ? { syncStatus: cleanString(input.bookmark.syncStatus) } : {}),
+        ...(cleanString(input.bookmark.metadataStatus)
+          ? { metadataStatus: cleanString(input.bookmark.metadataStatus) }
+          : {}),
+        ...(typeof input.bookmark.titleIsDerived === 'boolean'
+          ? { titleIsDerived: input.bookmark.titleIsDerived }
+          : {}),
+        hasTitle: Boolean(input.bookmark.hasTitle),
+        hasDescription: Boolean(input.bookmark.hasDescription),
+        hasNotes: Boolean(input.bookmark.hasNotes),
+        hasPreviewImage: Boolean(input.bookmark.hasPreviewImage),
+        ...(cleanString(input.bookmark.createdAt) ? { createdAt: cleanString(input.bookmark.createdAt) } : {}),
+        ...(cleanString(input.bookmark.updatedAt) ? { updatedAt: cleanString(input.bookmark.updatedAt) } : {}),
+      };
+      // Always prefer the live bookmark's ID for context.bookmarkId when lookup succeeded
+      context.bookmarkId = bId;
+    }
   }
 
   return context;

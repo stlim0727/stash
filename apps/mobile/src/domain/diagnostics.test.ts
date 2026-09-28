@@ -237,3 +237,65 @@ test('buildDiagnosticsContext normalizes invalid queue depth and truncates long 
   const truncated = buildDiagnosticsContext({ lastError: longError });
   assert.equal(truncated.lastError?.length, 300);
 });
+
+test('buildDiagnosticsContext captures bookmarkId and bookmark summary when reported from detail (STASH-70)', () => {
+  const context = buildDiagnosticsContext({
+    bookmarkId: 'f07705ad-1f22-4cd6-8d0b-8814b627f2f5',
+    bookmark: {
+      id: 'f07705ad-1f22-4cd6-8d0b-8814b627f2f5',
+      hasUrl: true,
+      urlHost: 'm.ppomppu.co.kr',
+      syncStatus: 'synced',
+      metadataStatus: 'complete',
+      titleIsDerived: false,
+      hasTitle: true,
+      hasDescription: false,
+      hasNotes: false,
+      hasPreviewImage: true,
+      createdAt: '2026-09-26T07:08:17.670Z',
+      updatedAt: '2026-09-26T14:03:08.937Z',
+    },
+  });
+
+  assert.equal(context.bookmarkId, 'f07705ad-1f22-4cd6-8d0b-8814b627f2f5');
+  assert.deepEqual(context.bookmark, {
+    id: 'f07705ad-1f22-4cd6-8d0b-8814b627f2f5',
+    hasUrl: true,
+    urlHost: 'm.ppomppu.co.kr',
+    syncStatus: 'synced',
+    metadataStatus: 'complete',
+    titleIsDerived: false,
+    hasTitle: true,
+    hasDescription: false,
+    hasNotes: false,
+    hasPreviewImage: true,
+    createdAt: '2026-09-26T07:08:17.670Z',
+    updatedAt: '2026-09-26T14:03:08.937Z',
+  });
+
+  const report = formatDiagnosticsReport(context);
+  assert.match(report, /"bookmarkId": "f07705ad-1f22-4cd6-8d0b-8814b627f2f5"/);
+  assert.match(report, /"urlHost": "m.ppomppu.co.kr"/);
+});
+
+test('buildDiagnosticsContext prefers live bookmark id and includes aliasedFrom when re-keyed', () => {
+  const context = buildDiagnosticsContext({
+    bookmarkId: 'local-legacy-id',
+    bookmark: {
+      id: 'f07705ad-1f22-4cd6-8d0b-8814b627f2f5',
+      aliasedFrom: 'local-legacy-id',
+      hasUrl: true,
+      hasTitle: true,
+      hasDescription: false,
+      hasNotes: false,
+      hasPreviewImage: false,
+    },
+  });
+
+  assert.equal(context.bookmarkId, 'f07705ad-1f22-4cd6-8d0b-8814b627f2f5');
+  assert.equal(context.bookmark?.id, 'f07705ad-1f22-4cd6-8d0b-8814b627f2f5');
+  assert.equal(context.bookmark?.aliasedFrom, 'local-legacy-id');
+
+  const report = formatDiagnosticsReport(context);
+  assert.match(report, /"aliasedFrom": "local-legacy-id"/);
+});
