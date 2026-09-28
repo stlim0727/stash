@@ -18,6 +18,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 
 const DEFAULT_SUPABASE_URL = 'https://stzutoejnhzxzhjsjtsi.supabase.co';
 const DEFAULT_TIMEOUT_MS = 15000;
@@ -63,11 +65,17 @@ function loadConfig() {
   return { url: url.replace(/\/$/, ''), key };
 }
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
+export async function fetchJsonWithTimeout(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    if (!response.ok) {
+      // Body reads must remain within the same deadline as response headers.
+      await response.text();
+      throw new Error(`Request failed (${response.status})`);
+    }
+    return await response.json();
   } finally {
     clearTimeout(timer);
   }
@@ -77,19 +85,14 @@ async function fetchAuthUsers(url, key) {
   let allUsers = [];
   let page = 1;
   while (true) {
-    const res = await fetchWithTimeout(`${url}/auth/v1/admin/users?page=${page}&per_page=100`, {
+    const data = await fetchJsonWithTimeout(`${url}/auth/v1/admin/users?page=${page}&per_page=100`, {
       headers: {
         apikey: key,
         Authorization: `Bearer ${key}`,
       },
     });
-    if (!res.ok) {
-      throw new Error(`Failed to fetch auth users (${res.status}): ${await res.text()}`);
-    }
-    const data = await res.json();
     if (!data.users || data.users.length === 0) break;
     allUsers = allUsers.concat(data.users);
-    if (data.users.length < 100) break;
     page++;
   }
   return allUsers;
@@ -100,37 +103,32 @@ async function fetchAllRestPages(url, key, endpoint, pageSize = 1000) {
   let from = 0;
   const separator = endpoint.includes('?') ? '&' : '?';
   while (true) {
-    const to = from + pageSize - 1;
-    const res = await fetchWithTimeout(`${url}/rest/v1/${endpoint}${separator}limit=${pageSize}&offset=${from}`, {
+    const rows = await fetchJsonWithTimeout(`${url}/rest/v1/${endpoint}${separator}limit=${pageSize}&offset=${from}`, {
       headers: {
         apikey: key,
         Authorization: `Bearer ${key}`,
       },
     });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`GET /rest/v1/${endpoint} failed (${res.status}): ${text}`);
-    }
-    const rows = await res.json();
     if (!Array.isArray(rows) || rows.length === 0) break;
     allRows = allRows.concat(rows);
-    if (rows.length < pageSize) break;
-    from += pageSize;
+    from += rows.length;
   }
   return allRows;
 }
 
 function safeString(val) {
-  return typeof val === 'string' && val.trim().length > 0 ? val.trim() : null;
+  if (typeof val !== 'string') return null;
+  const clean = stripVTControlCharacters(val).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '').trim();
+  return clean || null;
 }
 
-function getLatestTimestamp(timestamps) {
+function getLatestTimestamp(timestamps, now = Date.now()) {
   let latest = null;
   let maxEpoch = -Infinity;
   for (const ts of timestamps) {
     if (typeof ts === 'string' && ts.trim().length > 0) {
       const epoch = new Date(ts).getTime();
-      if (!Number.isNaN(epoch) && epoch > maxEpoch) {
+      if (!Number.isNaN(epoch) && epoch <= now && epoch > maxEpoch) {
         maxEpoch = epoch;
         latest = ts;
       }
@@ -188,8 +186,7 @@ function detectBursts(users) {
   return burstIds;
 }
 
-async function main() {
-  const args = process.argv.slice(2);
+export async function main(args = process.argv.slice(2), config) {
   const jsonMode = args.includes('--json');
   const devicesOnly = args.includes('--devices');
 
@@ -205,10 +202,10 @@ Options:
   --json      Output aggregated raw JSON data
   --help, -h  Show this help message
 `);
-    process.exit(0);
+    return;
   }
 
-  const { url, key } = loadConfig();
+  const { url, key } = config ?? loadConfig();
   if (!key) {
     console.error(
       'Error: SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY is required.\nSet it in environment or .env / .env.local.',
@@ -260,7 +257,7 @@ Options:
       stat.active++;
       totalActiveBookmarks++;
     }
-    if (b.collection_id) {
+    if (!b.is_archived && b.collection_id) {
       stat.collections.add(b.collection_id);
     }
     if (b.metadata_status === 'pending') {
@@ -287,9 +284,10 @@ Options:
       lastSaved: null,
     };
     const meta = typeof u.user_metadata === 'object' && u.user_metadata !== null ? u.user_metadata : {};
-    const platform = safeString(meta.platform);
-    const appVersion = safeString(meta.app_version) || safeString(sync?.app_version);
-    const appVersionUpdatedAt = safeString(meta.app_version_updated_at);
+    const platform = ['android', 'ios', 'web'].includes(meta.platform) ? meta.platform : null;
+    const version = safeString(meta.app_version) || safeString(sync?.app_version);
+    const appVersion = version && /^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)*$/.test(version) ? version : null;
+    const appVersionUpdatedAt = getLatestTimestamp([meta.app_version_updated_at], now.getTime());
     const versionSeen = appVersionUpdatedAt ? appVersionUpdatedAt.slice(0, 10) : null;
 
     const effectiveLastActive = getLatestTimestamp([
@@ -322,6 +320,14 @@ Options:
 
   const burstIds = detectBursts(users);
   const burstCount = burstIds.size;
+  const versions = new Map();
+  for (const user of users) {
+    const key = JSON.stringify([user.app_version, user.platform]);
+    const row = versions.get(key) ?? { app_version: user.app_version, platform: user.platform, users: 0 };
+    row.users++;
+    versions.set(key, row);
+  }
+  const versionAdoption = [...versions.values()];
 
   if (jsonMode) {
     console.log(
@@ -330,11 +336,16 @@ Options:
           timestamp: now.toISOString(),
           total_users: users.length,
           total_reaped_anonymous: totalReaped,
-          cumulative_lifetime_sessions: users.length + totalReaped,
+          cumulative_unfiltered_accounts: users.length + totalReaped,
+          historical_automation_classification: 'unknown',
+          retained_nonburst_accounts: users.length - burstCount,
           total_active_bookmarks: totalActiveBookmarks,
           total_archived_bookmarks: totalArchivedBookmarks,
           burst_detected_count: burstCount,
-          users,
+          version_adoption: versionAdoption,
+          users: users.map((user) => user.is_anonymous
+            ? { ...user, id: user.id.slice(0, 8), email: null }
+            : user),
         },
         null,
         2,
@@ -357,12 +368,12 @@ Options:
   console.log(`• Active Bookmarks:             ${totalActiveBookmarks} (plus ${totalArchivedBookmarks} archived)`);
   console.log(`• Current Retained Accounts:    ${users.length} (${regUsers.length} registered, ${anonUsers.length} anonymous)`);
   console.log(`• Empty Anonymous Accounts (0): ${emptyAnon.length}`);
-  console.log(`• Version Stamp Coverage:       ${withVersion.length} / ${users.length} users (${Math.round((withVersion.length / users.length) * 100)}%)`);
+  console.log(`• Version Stamp Coverage:       ${withVersion.length} / ${users.length} users (${(users.length ? Math.round((withVersion.length / users.length) * 100) : 0)}%)`);
   console.log(`• Historically Reaped (Cron):   ${totalReaped} empty/idle anonymous accounts`);
-  console.log(`• Cumulative Lifetime Sessions: ${users.length + totalReaped} auth sessions ever created (retained + reaped)\n`);
+  console.log(`• Cumulative Unfiltered Accounts: ${users.length + totalReaped} retained + reaped accounts; includes automation (historical classification unavailable)\n`);
 
   // Platform & Version breakdown
-  const platforms = {};
+  const platforms = Object.create(null);
   for (const u of users) {
     const p = u.platform || '(unspecified)';
     platforms[p] = (platforms[p] || 0) + 1;
@@ -394,15 +405,9 @@ Options:
 
   console.log(`• Web Sessions:                 ${webUsers.length} (${webUsers.filter((u) => u.bookmarks > 0).length} with active bookmarks, ${webUsers.filter((u) => u.days_inactive <= 7).length} active in 7d)\n`);
 
-  const versions = {};
-  for (const u of users) {
-    const v = u.app_version || '(none yet)';
-    versions[v] = (versions[v] || 0) + 1;
-  }
-
-  console.log('--- APP VERSION ADOPTION ---');
-  for (const [v, count] of Object.entries(versions)) {
-    console.log(`• ${v.padEnd(15)}: ${String(count).padStart(3)} accounts`);
+  console.log('--- APP VERSION ADOPTION (VERSION / PLATFORM) ---');
+  for (const row of versionAdoption) {
+    console.log(`• ${(row.app_version || '(none yet)').padEnd(15)} / ${(row.platform || '(unspecified)').padEnd(13)}: ${String(row.users).padStart(3)} accounts`);
   }
   console.log();
 
@@ -434,7 +439,7 @@ Options:
     }
 
     // Render anonymous users with bookmarks
-    for (const a of anonWithBookmarks.slice(0, 20)) {
+    for (const a of anonWithBookmarks) {
       const shortId = `(anon) ${a.id.slice(0, 8)}`.padEnd(26);
       const type = 'anonymous '.padEnd(10);
       const active = String(a.bookmarks).padStart(6);
@@ -447,9 +452,6 @@ Options:
       console.log(`${shortId} | ${type} | ${active} | ${arch} | ${coll} | ${pend} | ${ver} | ${plat} | ${saved}`);
     }
 
-    if (anonWithBookmarks.length > 20) {
-      console.log(`... and ${anonWithBookmarks.length - 20} more anonymous accounts with bookmarks.`);
-    }
 
     if (regZeroBookmarks.length > 0) {
       console.log(`\n(Note: ${regZeroBookmarks.length} registered account(s) with 0 bookmarks omitted from detail table)`);
@@ -460,7 +462,9 @@ Options:
   console.log('========================================================================================\n');
 }
 
-main().catch((err) => {
-  console.error('Execution error:', err);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error('Execution error:', err);
+    process.exitCode = 1;
+  });
+}
