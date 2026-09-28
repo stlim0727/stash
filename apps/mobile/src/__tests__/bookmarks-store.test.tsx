@@ -240,6 +240,55 @@ test("checkVideoAvailability leaves the flag untouched on an indeterminate resul
   expect(fakeRepo.__queue()).toHaveLength(0);
 });
 
+test("checkVideoAvailability clears video_unavailable if called on a playlist bookmark (STASH-71 self-heal)", async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: "bm-playlist",
+      url: "https://youtube.com/playlist?list=RDVAerYplzZUE",
+      video_unavailable: true,
+    }),
+  ]);
+  const { result } = await renderStore();
+  await waitFor(() => expect(result.current.inbox).toHaveLength(1));
+
+  await act(async () => {
+    result.current.checkVideoAvailability(
+      "bm-playlist",
+      "https://youtube.com/playlist?list=RDVAerYplzZUE",
+    );
+    await Promise.resolve();
+  });
+
+  expect(mockCheckYoutubeAvailability).not.toHaveBeenCalled();
+  await waitFor(() =>
+    expect(result.current.inbox[0]?.video_unavailable).toBe(false),
+  );
+  const persisted = (await fakeRepo.repository.listBookmarks()).find(
+    (b) => b.id === "bm-playlist",
+  );
+  expect(persisted?.video_unavailable).toBe(false);
+  expect(fakeRepo.__queue()).toHaveLength(0);
+});
+
+test("store hydration cleans invalid video_unavailable flags on playlist bookmarks (STASH-71)", async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: "bm-playlist-hydration",
+      url: "https://www.youtube.com/playlist?list=PLrAXtmErZgOdP_8GztsuKi9nrraNbKKp4",
+      video_unavailable: true,
+    }),
+  ]);
+  const { result } = await renderStore();
+  await waitFor(() => expect(result.current.inbox).toHaveLength(1));
+  expect(result.current.inbox[0]?.video_unavailable).toBe(false);
+
+  const persisted = (await fakeRepo.repository.listBookmarks()).find(
+    (b) => b.id === "bm-playlist-hydration",
+  );
+  expect(persisted?.video_unavailable).toBe(false);
+  expect(fakeRepo.__queue()).toHaveLength(0);
+});
+
 test("saving the same URL twice reuses the existing bookmark", async () => {
   const { result } = await renderStore();
 

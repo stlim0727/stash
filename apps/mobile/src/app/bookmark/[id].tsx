@@ -65,6 +65,7 @@ import {
   markPreviewImageFailed,
   useIsPreviewImageFailed,
 } from '@/domain/preview-image-cache';
+import { isYoutubeAvailabilityCandidate } from '@/domain/page-metadata';
 import { hasRemoteIdentity, isLocalOnlyBookmark } from '@/sync/sync-bookmarks';
 
 // Lines of title shown before collapsing behind a "Show more" toggle.
@@ -569,7 +570,7 @@ export default function BookmarkDetailScreen({
   if (bookmark.metadata_status !== 'complete') {
     statusChips.push(metadataStatusLabel(t, bookmark.metadata_status));
   }
-  if (bookmark.video_unavailable) {
+  if (bookmark.video_unavailable && isYoutubeAvailabilityCandidate(bookmark.url ?? '')) {
     statusChips.push(videoUnavailableLabel(t));
   }
 
@@ -1142,7 +1143,7 @@ export default function BookmarkDetailScreen({
             onPress={handleOpenLink}
           />
         ) : null}
-        {bookmark.video_unavailable ? (
+        {bookmark.video_unavailable && isYoutubeAvailabilityCandidate(bookmark.url ?? '') ? (
           <ActionButton
             icon="search-outline"
             label={t('detail.searchYoutube')}

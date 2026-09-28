@@ -289,6 +289,26 @@ test('a non-YouTube bookmark never triggers the availability check or shows the 
   expect(screen.queryByLabelText('Search YouTube')).toBeNull();
 });
 
+test('STASH-71: a YouTube playlist bookmark never triggers availability check and hides video unavailable chip/action', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      title: 'Playlist',
+      url: 'https://youtube.com/playlist?list=RDVAerYplzZUE&playnext=1',
+      url_hash: 'https://youtube.com/playlist?list=RDVAerYplzZUE&playnext=1',
+      video_unavailable: true,
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('Playlist')).toBeTruthy());
+
+  expect(mockCheckYoutubeAvailability).not.toHaveBeenCalled();
+  expect(screen.queryByText(/video unavailable/)).toBeNull();
+  expect(screen.queryByLabelText('Search YouTube')).toBeNull();
+});
+
 test('copy link action copies the bookmark URL and confirms with a toast', async () => {
   mockRouteId = SYNCED_ID;
   mockSetStringAsync.mockReset();

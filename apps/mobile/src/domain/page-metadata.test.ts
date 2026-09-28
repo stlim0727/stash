@@ -340,19 +340,37 @@ test('checkYoutubeAvailability reports available when oEmbed answers with a titl
   }
 });
 
-test('isYoutubeAvailabilityCandidate accepts direct YouTube URLs, playlists, and the share.google shortener, rejects everything else', () => {
+test('isYoutubeAvailabilityCandidate accepts direct YouTube video URLs and the share.google shortener, rejects playlists and non-YouTube URLs (STASH-71)', () => {
   assert.equal(isYoutubeAvailabilityCandidate('https://youtu.be/dQw4w9WgXcQ'), true);
+  assert.equal(isYoutubeAvailabilityCandidate('https://www.youtube.com/watch?v=dQw4w9WgXcQ'), true);
+  assert.equal(isYoutubeAvailabilityCandidate('https://www.youtube.com/shorts/PG7OUsiB6Qg'), true);
+  assert.equal(isYoutubeAvailabilityCandidate('https://share.google/bb3vpuiCbbyVhrpTp'), true);
+  // Playlists (STASH-71) must be rejected because oEmbed cannot check playlist availability
   assert.equal(
     isYoutubeAvailabilityCandidate('https://www.youtube.com/playlist?list=PLrAXtmErZgOdP_8GztsuKi9nrraNbKKp4'),
-    true,
+    false,
   );
   assert.equal(
     isYoutubeAvailabilityCandidate('https://music.youtube.com/playlist?list=PLrAXtmErZgOdP_8GztsuKi9nrraNbKKp4'),
-    true,
+    false,
   );
-  assert.equal(isYoutubeAvailabilityCandidate('https://share.google/bb3vpuiCbbyVhrpTp'), true);
+  assert.equal(
+    isYoutubeAvailabilityCandidate('https://youtube.com/playlist?list=RDVAerYplzZUE&playnext=1'),
+    false,
+  );
   assert.equal(isYoutubeAvailabilityCandidate('https://example.com/article'), false);
   assert.equal(isYoutubeAvailabilityCandidate('not a url'), false);
+});
+
+test('checkYoutubeAvailability reports unknown on playlist URLs and shorteners resolving to playlists (STASH-71)', async () => {
+  assert.equal(
+    await checkYoutubeAvailability('https://youtube.com/playlist?list=RDVAerYplzZUE'),
+    'unknown',
+  );
+  assert.equal(
+    await checkYoutubeAvailability('https://www.youtube.com/playlist?list=PLrAXtmErZgOdP_8GztsuKi9nrraNbKKp4'),
+    'unknown',
+  );
 });
 
 test('checkYoutubeAvailability reports unknown on a non-YouTube URL, a 5xx, and a network error', async () => {
