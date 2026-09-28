@@ -63,8 +63,15 @@ export function feedbackSourceFromPath(pathname: string | null): FeedbackSourceC
     .replace(/\/+/g, '/')
     .split('/')
     .filter(Boolean);
+  let bookmarkId: string | undefined;
+  if (segments[0] === 'bookmark' && segments[1]) {
+    bookmarkId = segments[1];
+  }
   const sanitizedSegments = segments.map((segment, index) => {
     if (index > 0 && (/^\d+$/.test(segment) || /^[0-9a-f]{8,}(-[0-9a-f]{4,}){2,}$/i.test(segment))) {
+      if (!bookmarkId) {
+        bookmarkId = segment;
+      }
       return 'detail';
     }
     return segment.replace(/[^a-z0-9-]/gi, '-').toLowerCase();
@@ -73,6 +80,7 @@ export function feedbackSourceFromPath(pathname: string | null): FeedbackSourceC
   return {
     route,
     surface: sanitizedSegments.join('_') || 'unknown',
+    ...(bookmarkId ? { bookmarkId } : {}),
   };
 }
 

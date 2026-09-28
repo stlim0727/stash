@@ -81,6 +81,24 @@ test('ideas are informational, not errors', () => {
   assert.equal(event.level, 'info');
 });
 
+test('buildEvent tags bookmark_id and bookmark_host when reported from detail (STASH-70)', () => {
+  const event = makeSink(fakeTransport().transport).buildEvent(
+    report({
+      context: {
+        route: '/bookmark/detail',
+        bookmarkId: 'f07705ad-1f22-4cd6-8d0b-8814b627f2f5',
+        bookmark: {
+          id: 'f07705ad-1f22-4cd6-8d0b-8814b627f2f5',
+          urlHost: 'm.ppomppu.co.kr',
+        },
+      },
+    }),
+  );
+  const tags = event.tags as Record<string, string>;
+  assert.equal(tags.bookmark_id, 'f07705ad-1f22-4cd6-8d0b-8814b627f2f5');
+  assert.equal(tags.bookmark_host, 'm.ppomppu.co.kr');
+});
+
 test('deliver posts a Sentry envelope and reports the event id (no real network)', async () => {
   const { transport, calls } = fakeTransport();
   const result = await makeSink(transport).deliver(report());

@@ -46,8 +46,8 @@ const BOT_USER_AGENT =
 const BROWSER_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
-function htmlHeaders(userAgent: string): Record<string, string> {
-  return {
+function htmlHeaders(userAgent: string, targetUrl?: string): Record<string, string> {
+  const headers: Record<string, string> = {
     'User-Agent': userAgent,
     Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'en;q=0.9,*;q=0.5',
@@ -60,6 +60,12 @@ function htmlHeaders(userAgent: string): Record<string, string> {
     // rather than letting the whole body buffer.
     Range: `bytes=0-${MAX_HTML_BYTES - 1}`,
   };
+  if (targetUrl) {
+    try {
+      headers.Referer = `${new URL(targetUrl).origin}/`;
+    } catch {}
+  }
+  return headers;
 }
 
 const OEMBED_HEADERS: Record<string, string> = {
@@ -276,7 +282,7 @@ async function fetchHtmlMetadata(url: string, userAgent: string): Promise<HtmlFe
   try {
     const response = await fetch(url, {
       signal: controller.signal,
-      headers: htmlHeaders(userAgent),
+      headers: htmlHeaders(userAgent, url),
     });
     if (!response.ok) {
       return { metadata: null, outcome: `http_${response.status}` };

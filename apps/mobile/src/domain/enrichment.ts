@@ -32,6 +32,11 @@ function titleCaseFromSlug(slug: string): string | null {
     .join(' ');
 }
 
+export function isGenericScriptSlug(segment: string): boolean {
+  const clean = segment.replace(/\.[a-z0-9]+$/i, '').toLowerCase();
+  return /^(bbs_view|view|index|default|article|board|read|show|detail|post|item|list|main)$/.test(clean);
+}
+
 /**
  * Best-effort metadata derived purely from the URL — no network, so it is
  * deterministic and safe to run anywhere. A real implementation would fetch
@@ -57,7 +62,9 @@ export function deriveMetadata(rawUrl: string): DerivedMetadata {
     // host — never a random-looking id as the headline.
     const lastSegment = url.pathname.split('/').filter(Boolean).pop();
     title =
-      lastSegment && !looksOpaqueId(lastSegment) ? (titleCaseFromSlug(lastSegment) ?? host) : host;
+      lastSegment && !looksOpaqueId(lastSegment) && !isGenericScriptSlug(lastSegment)
+        ? (titleCaseFromSlug(lastSegment) ?? host)
+        : host;
   }
 
   return {

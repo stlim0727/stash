@@ -767,6 +767,42 @@ test("refreshBookmarkPreview preserves a title edited while the fetch is in flig
   });
 });
 
+test("refreshBookmarkPreview does NOT degrade an existing title when the fetch yields only a URL fallback (STASH-70)", async () => {
+  const id = SYNCED_ID;
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id,
+      url: "https://m.ppomppu.co.kr/new/bbs_view.php?id=humor&no=783364",
+      title: "Real shared post title",
+      title_is_derived: true,
+      site_name: "m.ppomppu.co.kr",
+    }),
+  ]);
+  mockEnrichBookmark.mockResolvedValueOnce({
+    patch: {
+      title: "m.ppomppu.co.kr",
+      title_is_derived: true,
+      site_name: "m.ppomppu.co.kr",
+      preview_image_url: "https://cdn4.ppomppu.co.kr/example.jpg",
+    },
+    metadata_status: "complete",
+  });
+  const { result } = await renderStore();
+
+  await act(async () => {
+    await result.current.refreshBookmarkPreview(id);
+  });
+
+  await waitFor(() =>
+    expect(result.current.getBookmark(id)).toMatchObject({
+      title: "Real shared post title",
+      title_is_derived: true,
+      site_name: "m.ppomppu.co.kr",
+      preview_image_url: "https://cdn4.ppomppu.co.kr/example.jpg",
+    }),
+  );
+});
+
 test("a no-op edit (no real text change) does not mark the enrichment stale", async () => {
   const {
     makeStoredBookmark,

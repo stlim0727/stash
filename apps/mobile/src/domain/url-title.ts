@@ -152,6 +152,12 @@ export function isRepairableSourceTitle(bookmark: { url: string | null; title: s
     ) {
       return true;
     }
+    if (
+      (trimmed === 'bbs view' || trimmed === 'bbs_view') &&
+      (host === 'ppomppu.co.kr' || host.endsWith('.ppomppu.co.kr'))
+    ) {
+      return true;
+    }
     return false;
   } catch {
     return false;
