@@ -1266,6 +1266,109 @@ test('folder view shows a tile per collection, the uncollected bucket, and a New
   expect(screen.getByTestId('folder-tile-new')).toBeTruthy();
 });
 
+test('when search is active, folder view shows matching item counts instead of total counts', async () => {
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-0000000000e1',
+        title: 'React Native guide',
+        collection_id: 'col-work',
+      }),
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-0000000000e2',
+        title: 'Budget spreadsheet',
+        collection_id: 'col-work',
+      }),
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-0000000000e3',
+        title: 'Pasta recipe',
+        collection_id: 'col-recipes',
+      }),
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-0000000000e4',
+        title: 'React tutorial',
+        collection_id: null,
+      }),
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-0000000000e5',
+        title: 'Random note',
+        collection_id: null,
+      }),
+    ],
+    {
+      tags: [],
+      bookmarkTags: [],
+      collections: [
+        makeCollection('col-work', 'Work'),
+        makeCollection('col-recipes', 'Recipes'),
+        makeCollection('col-empty', 'Empty'),
+      ],
+    },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('React Native guide')).toBeTruthy());
+
+  // Switch to folder view
+  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await waitFor(() => expect(screen.getByTestId('folder-tile-__folder-c:col-work')).toBeTruthy());
+
+  // Initial counts without search:
+  // Uncollected: 2 items
+  // Work: 2 items
+  // Recipes: 1 item
+  // Empty: 0 items
+  const uncollectedTile = screen.getByTestId('folder-tile-__folder-uncollected');
+  const workTile = screen.getByTestId('folder-tile-__folder-c:col-work');
+  const recipesTile = screen.getByTestId('folder-tile-__folder-c:col-recipes');
+  const emptyTile = screen.getByTestId('folder-tile-__folder-c:col-empty');
+
+  expect(within(uncollectedTile).getByText('2 items')).toBeTruthy();
+  expect(within(workTile).getByText('2 items')).toBeTruthy();
+  expect(within(recipesTile).getByText('1 item')).toBeTruthy();
+  expect(within(emptyTile).getByText('0 items')).toBeTruthy();
+
+  // Open search and search for "React":
+  // Work: 1 matching item ('React Native guide')
+  // Recipes: 0 matching items
+  // Empty: 0 matching items
+  // Uncollected: 1 matching item ('React tutorial')
+  await fireEvent.press(screen.getByTestId('inbox-search-open'));
+  const searchInput = screen.getByPlaceholderText('Search titles, tags, collections');
+  await fireEvent.changeText(searchInput, 'React');
+
+  await waitFor(() => {
+    expect(within(workTile).getByText('1 item')).toBeTruthy();
+    expect(within(uncollectedTile).getByText('1 item')).toBeTruthy();
+    expect(within(recipesTile).getByText('0 items')).toBeTruthy();
+    expect(within(emptyTile).getByText('0 items')).toBeTruthy();
+  });
+
+  // Switch search to "Pasta":
+  // Work: 0 matching items
+  // Recipes: 1 matching item ('Pasta recipe')
+  // Empty: 0 matching items
+  // Uncollected: 0 matching items
+  await fireEvent.changeText(searchInput, 'Pasta');
+
+  await waitFor(() => {
+    expect(within(workTile).getByText('0 items')).toBeTruthy();
+    expect(within(uncollectedTile).getByText('0 items')).toBeTruthy();
+    expect(within(recipesTile).getByText('1 item')).toBeTruthy();
+    expect(within(emptyTile).getByText('0 items')).toBeTruthy();
+  });
+
+  // Clear search: counts revert to all items
+  await fireEvent.changeText(searchInput, '');
+
+  await waitFor(() => {
+    expect(within(uncollectedTile).getByText('2 items')).toBeTruthy();
+    expect(within(workTile).getByText('2 items')).toBeTruthy();
+    expect(within(recipesTile).getByText('1 item')).toBeTruthy();
+    expect(within(emptyTile).getByText('0 items')).toBeTruthy();
+  });
+});
+
 test('the view-mode toggle stays reachable in Folder View even if the library empties out from under it (Sentry STASH-4T)', async () => {
   // Reported bug: resetting the library while sitting in Folder View left the
   // user stuck there with no way back to Card/List. Folder View never
