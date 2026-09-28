@@ -1,12 +1,12 @@
 ---
 name: fetch-sentry-issues
-description: Fallback procedure to check Sentry configuration/tokens and fetch latest unresolved Sentry issues for Stash using the Sentry API or CLI helper scripts. NOTE: Always prioritize the Sentry MCP server over this skill when MCP is available.
+description: EMERGENCY FALLBACK ONLY. Do NOT use if the Sentry MCP server is configured and reachable. Use ONLY when Sentry MCP encounters a fatal connection error or is unconfigured to check Sentry tokens or query issues via REST API/CLI.
 ---
 
 # Fetch Sentry Issues & Verification Skill
 
 > [!IMPORTANT]
-> **Tool Priority:** Always prioritize querying via the Sentry MCP server first. Use this skill and manual fetch scripts only as a fallback when the Sentry MCP server is unconfigured, unreachable, or failing.
+> **Tool Priority:** Always prioritize querying via the Sentry MCP server first (`call_mcp_tool` with `ServerName: "sentry"`). Do NOT inspect or use this skill unless the Sentry MCP server is unreachable, unconfigured, or returns a fatal connection error.
 
 Use this procedure to check Sentry credentials and query unresolved issues/telemetry for the `stash` project (`self-463/stash`).
 
