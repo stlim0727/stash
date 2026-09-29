@@ -128,6 +128,26 @@ function parseHtmlHead(html: string) {
   return { meta, links, title: clean(title), metaCount, keys, hasTitleTag };
 }
 
+/**
+ * Does a title look like an anti-bot challenge or verification interstitial rather
+ * than authentic page content?
+ */
+export function isChallengeOrBoilerplateTitle(title: string | undefined): boolean {
+  if (!title) {
+    return false;
+  }
+  const lower = title.trim().toLowerCase();
+  return (
+    lower === 'reddit - please wait for verification' ||
+    lower === 'please wait for verification' ||
+    lower === 'please wait for verification...' ||
+    lower === 'just a moment...' ||
+    lower.startsWith('attention required! | cloudflare') ||
+    lower === 'checking your browser...' ||
+    lower.startsWith('checking your browser before accessing')
+  );
+}
+
 export function parsePageMetadata(html: string, baseUrl: string): FetchedMetadata {
   const { meta, links, title } = parseHtmlHead(html);
 
@@ -147,9 +167,12 @@ export function parsePageMetadata(html: string, baseUrl: string): FetchedMetadat
   }
 
   const image = meta.get('og:image') ?? meta.get('og:image:url') ?? meta.get('twitter:image');
+  const candidateTitle = [meta.get('og:title'), meta.get('twitter:title'), title].find(
+    (t) => t && !isChallengeOrBoilerplateTitle(t),
+  );
 
   return {
-    title: meta.get('og:title') ?? meta.get('twitter:title') ?? title,
+    title: candidateTitle,
     site_name: meta.get('og:site_name'),
     favicon_url: favicon,
     preview_image_url: image ? resolveHref(image, baseUrl) : undefined,
@@ -625,7 +648,11 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
       return folderMeta;
     }
   }
-  if (bot.metadata?.title && !isGenericNaverMapTitle(bot.metadata.title, botTargetUrl)) {
+  if (
+    bot.metadata?.title &&
+    !isGenericNaverMapTitle(bot.metadata.title, botTargetUrl) &&
+    !isChallengeOrBoilerplateTitle(bot.metadata.title)
+  ) {
     return bot.metadata;
   }
   // The honest request was refused or returned a title-less shell; try once as a
@@ -660,7 +687,7 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
   // SPA shell with no title: if we landed on a page that has a server-rendered
   // sibling (e.g. a Naver Map place entry), fetch that for the real metadata.
   let spa: HtmlFetchResult | null = null;
-  if (!result?.title || isGenericNaverMapTitle(result.title, landedUrl)) {
+  if (!result?.title || isGenericNaverMapTitle(result.title, landedUrl) || isChallengeOrBoilerplateTitle(result.title)) {
     const altUrl = landedOn ? previewSourceUrl(landedOn) : null;
     if (altUrl) {
       spa = await fetchHtmlMetadata(altUrl, BROWSER_USER_AGENT);
@@ -891,8 +918,11 @@ interface OembedResponse {
 
 /** Map an oEmbed JSON payload to our metadata shape. */
 export function parseOembed(json: OembedResponse): FetchedMetadata {
-  const str = (v: unknown): string | undefined =>
-    typeof v === 'string' && v.trim() ? v.trim() : undefined;
+  const str = (v: unknown): string | undefined => {
+    if (typeof v !== 'string' || !v.trim()) return undefined;
+    const trimmed = v.trim();
+    return isChallengeOrBoilerplateTitle(trimmed) ? undefined : trimmed;
+  };
   return {
     title: str(json.title),
     site_name: str(json.provider_name),

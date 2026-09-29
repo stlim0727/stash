@@ -50,6 +50,20 @@ test('describeKnownUrl prefers a readable Reddit title slug over the subreddit l
     describeKnownUrl('https://www.reddit.com/r/cooking/comments/xyz')?.title,
     'Reddit post in r/cooking',
   );
+  // An app share link with an opaque token: labels with subreddit.
+  assert.equal(
+    describeKnownUrl('https://www.reddit.com/r/ClaudeCode/s/xtn2xWW6t2')?.title,
+    'Reddit post in r/ClaudeCode',
+  );
+  // Short domain or direct comments URL: labels as Reddit post.
+  assert.equal(
+    describeKnownUrl('https://redd.it/1qz8tyy')?.title,
+    'Reddit post',
+  );
+  assert.equal(
+    describeKnownUrl('https://www.reddit.com/comments/1qz8tyy')?.title,
+    'Reddit post',
+  );
 });
 
 test('describeKnownUrl returns null for unknown hosts and bare GitHub profiles', () => {
@@ -141,6 +155,48 @@ test('isRepairableSourceTitle recognizes legacy Reddit and GeekNews Topic placeh
   );
   assert.equal(
     isRepairableSourceTitle({ url: 'https://map.naver.com/p/favorite/myPlace/folder/f65cd3df', title: '바다 (AW앤웍) : 네이버 지도' }),
+    false,
+  );
+  assert.equal(
+    isRepairableSourceTitle({
+      url: 'https://www.reddit.com/r/ClaudeCode/s/xtn2xWW6t2',
+      title: 'Reddit - Please wait for verification',
+    }),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle({
+      url: 'https://www.reddit.com/r/ClaudeCode/s/xtn2xWW6t2',
+      title: 'Please wait for verification',
+    }),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle({
+      url: 'https://example.com/protected',
+      title: 'Just a moment...',
+    }),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle({
+      url: 'https://example.com/protected',
+      title: 'Attention Required! | Cloudflare',
+    }),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle({
+      url: 'https://www.reddit.com/r/ClaudeCode/s/xtn2xWW6t2',
+      title: 'How to Set Up Claude Code Agent Teams',
+    }),
+    false,
+  );
+  assert.equal(
+    isRepairableSourceTitle({
+      url: 'https://example.com/blog/debugging-browser-checks',
+      title: 'Debugging checking your browser requests',
+    }),
     false,
   );
 });
