@@ -4545,17 +4545,25 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         );
         // If the bookmark has unsynced work (e.g. an un-uploaded folder move),
         // flush sync so the cloud row reflects the user's latest organizational state.
+        const queuedEntry = queueRef.current.find(
+          (entry) => entry.local_id === bookmarkId,
+        );
         const hasUnsyncedWork =
-          queueRef.current.some((entry) => entry.local_id === bookmarkId) ||
-          (latest ? latest.sync_status !== "synced" : false);
-        if (hasUnsyncedWork) {
-          if (!syncPausedRef.current) {
-            try {
-              await syncNowRef.current?.();
-            } catch {
-              // Best effort: proceed to check if upload succeeded
-            }
+          Boolean(queuedEntry) || (latest ? latest.sync_status !== "synced" : false);
+        if (hasUnsyncedWork && !syncPausedRef.current) {
+          try {
+            await syncNowRef.current?.();
+          } catch {
+            // Best effort: proceed to check if upload succeeded
           }
+        }
+        // If a bookmark with an assigned collection still has unsynced work (e.g. sync paused
+        // or sync failure), defer enrichment until the mutation uploads so the server worker
+        // never reasons from a stale cloud row without the local collection hint (STASH-74).
+        const hasUnsyncedCollectionWork =
+          Boolean(latest?.collection_id || overrideMetadata?.collection_id) ||
+          queuedEntry?.payload?.collection_id !== undefined;
+        if (hasUnsyncedCollectionWork) {
           const stillUnsynced =
             queueRef.current.some((entry) => entry.local_id === bookmarkId) ||
             (bookmarksRef.current?.find((item) => item.id === bookmarkId)?.sync_status !== "synced");
