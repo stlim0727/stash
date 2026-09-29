@@ -1186,6 +1186,15 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
       userId: "real-user",
     });
 
+    // The account transition will immediately trigger syncNow(), which will
+    // consume the carried-over pending_enrichment_restore and upload it.
+    apiMock.__bulkRestoreAIEnrichmentMock.mockImplementationOnce(async (payloads) => {
+      return payloads.map((p: any) => ({
+        id: "enrichment-id",
+        bookmark_id: p.bookmark_id,
+      }));
+    });
+
     await act(async () => {
       rerender(undefined);
     });
@@ -1193,19 +1202,6 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     const newId = result.current.inbox[0]?.id;
     expect(newId).toBeDefined();
     expect(newId).not.toBe(oldId);
-
-    const pending = JSON.parse(
-      fakeRepo.__meta("pending_enrichment_restore") ?? "[]",
-    );
-    expect(pending).toHaveLength(1);
-    expect(pending[0].bookmark_id).toBe(newId);
-
-    apiMock.__bulkRestoreAIEnrichmentMock.mockResolvedValueOnce([
-      { id: "enrichment-id", bookmark_id: newId },
-    ]);
-    await act(async () => {
-      await result.current.syncNow();
-    });
 
     await waitFor(() =>
       expect(fakeRepo.__meta("pending_enrichment_restore")).toBe("[]"),

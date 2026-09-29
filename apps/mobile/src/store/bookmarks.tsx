@@ -6092,6 +6092,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // queued edit could never land (see sync-bookmarks.ts). Drop it
             // from in-memory state too — the repository row is already gone.
             const removedId = result.removedBookmarkId;
+            if (bookmarksRef.current) {
+              bookmarksRef.current = bookmarksRef.current.filter((bookmark) => bookmark.id !== removedId);
+            }
             setBookmarks((current) =>
               (current ?? []).filter((bookmark) => bookmark.id !== removedId),
             );
@@ -6124,6 +6127,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // Collapse onto the destination id: a pull that already inserted
               // this bookmark under the existing row's id would otherwise
               // coexist with the just-swapped row as a same-id duplicate.
+              if (bookmarksRef.current) {
+                bookmarksRef.current = bookmarksRef.current.filter((b) => b.id === lookupId || b.id !== merged.id).map((b) => b.id === lookupId ? merged : b);
+              }
               setBookmarks((current) =>
                 (current ?? [])
                   .filter(
@@ -7242,6 +7248,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 result.upserts.map((bookmark) => bookmark.id),
               );
               const removed = new Set(result.deletions);
+              if (bookmarksRef.current) {
+                bookmarksRef.current = [
+                  ...bookmarksRef.current.filter(
+                    (bookmark) =>
+                      !upsertIds.has(bookmark.id) && !removed.has(bookmark.id),
+                  ),
+                  ...result.upserts,
+                ];
+              }
               setBookmarks((current) => [
                 ...(current ?? []).filter(
                   (bookmark) =>
