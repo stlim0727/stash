@@ -1,8 +1,16 @@
 diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..0a4e9259d213621f34bf74024be7184a5923d695 100644
+index 0153c89..22a854d 100644
 --- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 +++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-@@ -54,6 +54,17 @@ class ExpoShareIntentModule : Module() {
+@@ -29,6 +29,7 @@ import android.webkit.MimeTypeMap
+ import expo.modules.kotlin.exception.Exceptions
+ import expo.modules.kotlin.modules.Module
+ import expo.modules.kotlin.modules.ModuleDefinition
++import expo.modules.kotlin.functions.Queues
+ import java.io.File
+ import java.io.FileOutputStream
+ import java.util.Date
+@@ -54,6 +55,17 @@ class ExpoShareIntentModule : Module() {
          private fun notifyError(message: String) {
              instance!!.sendEvent("onError", mapOf("value" to message))
          }
@@ -20,7 +28,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..0a4e9259d213621f34bf74024be7184a
  
          @SuppressLint("Range")
          private fun getFileInfo(uri: Uri): Map<String, String?> {
-@@ -113,7 +124,21 @@ class ExpoShareIntentModule : Module() {
+@@ -113,7 +125,25 @@ class ExpoShareIntentModule : Module() {
  
          fun handleShareIntent(intent: Intent) {
              val activity = instance?.currentActivity
@@ -32,6 +40,10 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..0a4e9259d213621f34bf74024be7184a
 +                "module_handle",
 +            )
 +            if (attemptId != null) notifyDebug("share lifecycle: attemptId=$attemptId phase=module_handle")
++            fun notifyTerminalError(message: String) {
++                // JS needs this UUID to retire a terminal malformed share.
++                notifyError(message + " [attemptId=" + (attemptId ?: "") + "]")
++            }
 +            val isShareAction = intent.action == Intent.ACTION_SEND ||
 +                intent.action == Intent.ACTION_SEND_MULTIPLE
 +            // The upstream non-root relaunch was added for Google Files
@@ -43,7 +55,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..0a4e9259d213621f34bf74024be7184a
                  val newIntent = Intent(intent).apply {
                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                  }
-@@ -121,19 +146,50 @@ class ExpoShareIntentModule : Module() {
+@@ -121,37 +151,71 @@ class ExpoShareIntentModule : Module() {
                  activity.finish()
                  return
              }
@@ -54,13 +66,11 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..0a4e9259d213621f34bf74024be7184a
 +            if (intent.action == Intent.ACTION_VIEW && intent.data != null) {
 +                val scheme = intent.data?.scheme?.lowercase()
 +                if (scheme == "http" || scheme == "https") {
-+                    ShareIntentDebugJournal.markHandled(activity?.applicationContext ?: instance?.context, attemptId)
 +                    notifyShareIntent(mapOf(
 +                        "text" to intent.dataString,
 +                        "type" to "text",
 +                        "meta" to mapOf("attemptId" to attemptId),
 +                    ))
-+                    activity?.intent = Intent(Intent.ACTION_MAIN)
 +                    return
 +                } else {
 +                    // Deep link or custom scheme (e.g. stash://auth/callback) - not a share intent.
@@ -76,16 +86,16 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..0a4e9259d213621f34bf74024be7184a
 +                // surfacing (STASH-2E: the previous unconditional notifyError here
 +                // fired on ordinary app opens, not failed shares).
 +                if (intent.action == Intent.ACTION_SEND || intent.action == Intent.ACTION_SEND_MULTIPLE) {
-+                    notifyError("null intent.type for action: " + intent.action)
++                    notifyTerminalError("null intent.type for action: " + intent.action)
 +                }
 +                return
 +            }
 +            if (intent.type!!.startsWith("text/")) {
                  // text / urls
                  if (intent.action == Intent.ACTION_SEND) {
-+                    ShareIntentDebugJournal.markHandled(activity?.applicationContext ?: instance?.context, attemptId)
                      notifyShareIntent(mapOf(
-                         "text" to intent.getStringExtra(Intent.EXTRA_TEXT),
+-                        "text" to intent.getStringExtra(Intent.EXTRA_TEXT),
++                        "text" to intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString(),
                          "type" to "text",
                          "meta" to mapOf(
                              "title" to intent.getCharSequenceExtra(Intent.EXTRA_TITLE),
@@ -94,39 +104,40 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..0a4e9259d213621f34bf74024be7184a
                      ))
 -                } else if (intent.action == Intent.ACTION_VIEW) {
 -                    notifyShareIntent(mapOf( "text" to intent.dataString, "type" to "text"))
-+                    activity?.intent = Intent(Intent.ACTION_MAIN)
                  } else {
-                     notifyError("Invalid action for text sharing: " + intent.action)
+-                    notifyError("Invalid action for text sharing: " + intent.action)
++                    notifyTerminalError("Invalid action for text sharing: " + intent.action)
                  }
-@@ -142,14 +198,25 @@ class ExpoShareIntentModule : Module() {
+             } else {
+                 // files / medias
                  if (intent.action == Intent.ACTION_SEND) {
                      val uri = intent.parcelable<Uri>(Intent.EXTRA_STREAM);
                      if (uri != null) {
 -                        notifyShareIntent(mapOf( "files" to arrayOf(getFileInfo(uri), "type" to "file")))
-+                        ShareIntentDebugJournal.markHandled(activity?.applicationContext ?: instance?.context, attemptId)
 +                        notifyShareIntent(mapOf(
 +                            "files" to arrayOf(getFileInfo(uri), "type" to "file"),
 +                            "meta" to mapOf("attemptId" to attemptId),
 +                        ))
-+                        activity?.intent = Intent(Intent.ACTION_MAIN)
                      } else {
-                         notifyError("empty uri for file sharing: " + intent.action)
+-                        notifyError("empty uri for file sharing: " + intent.action)
++                        notifyTerminalError("empty uri for file sharing: " + intent.action)
                      }
                  } else if (intent.action == Intent.ACTION_SEND_MULTIPLE) {
                      val uris = intent.parcelableArrayList<Uri>(Intent.EXTRA_STREAM)
                      if (uris != null) {
 -                        notifyShareIntent(mapOf( "files" to uris.map { getFileInfo(it) }, "type" to "file"))
-+                        ShareIntentDebugJournal.markHandled(activity?.applicationContext ?: instance?.context, attemptId)
 +                        notifyShareIntent(mapOf(
 +                            "files" to uris.map { getFileInfo(it) },
 +                            "type" to "file",
 +                            "meta" to mapOf("attemptId" to attemptId),
 +                        ))
-+                        activity?.intent = Intent(Intent.ACTION_MAIN)
                      } else {
-                         notifyError("empty uris array for file sharing: " + intent.action)
+-                        notifyError("empty uris array for file sharing: " + intent.action)
++                        notifyTerminalError("empty uris array for file sharing: " + intent.action)
                      }
-@@ -177,26 +244,55 @@ class ExpoShareIntentModule : Module() {
+                 } else {
+                     notifyError("Invalid action for file sharing: " + intent.action)
+@@ -177,13 +241,16 @@ class ExpoShareIntentModule : Module() {
      override fun definition() = ModuleDefinition {
          Name("ExpoShareIntentModule")
  
@@ -146,13 +157,20 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..0a4e9259d213621f34bf74024be7184a
                  ExpoShareIntentSingleton.intent = null
              }
          }
- 
-         Function("clearShareIntent") { _: String ->
+@@ -192,11 +259,45 @@ class ExpoShareIntentModule : Module() {
              ExpoShareIntentSingleton.intent = null
-+            val activity = instance?.currentActivity
-+            activity?.intent = Intent(Intent.ACTION_MAIN)
          }
  
++        // JS calls this only after local persistence has completed. Clear only
++        // the matching attempt: an older save must not disarm a newer share.
++        AsyncFunction("acknowledgeShareIntent") { attemptId: String ->
++            val activity = currentActivity
++            ShareIntentDebugJournal.markHandled(activity?.applicationContext ?: context, attemptId)
++            if (activity?.intent?.getStringExtra(ShareIntentDebugJournal.ATTEMPT_ID_EXTRA) == attemptId) {
++                activity?.intent = Intent(Intent.ACTION_MAIN)
++            }
++        }.runOnQueue(Queues.MAIN)
++
          Function("hasShareIntent") { _: String ->
              ExpoShareIntentSingleton.isPending
          }
@@ -186,7 +204,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..0a4e9259d213621f34bf74024be7184a
          }
  
 diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentReactActivityLifecycleListener.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentReactActivityLifecycleListener.kt
-index db573ecbd560de3c71aa443b7ad88d1b5e1c8dc7..a1227d71ce7f765e685efee13a6bc3c0dd4e56d7 100644
+index db573ec..d244ea9 100644
 --- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentReactActivityLifecycleListener.kt
 +++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentReactActivityLifecycleListener.kt
 @@ -3,20 +3,39 @@ package expo.modules.shareintent
@@ -210,7 +228,7 @@ index db573ecbd560de3c71aa443b7ad88d1b5e1c8dc7..a1227d71ce7f765e685efee13a6bc3c0
 +        val attemptId = intent?.let { ShareIntentDebugJournal.ensureAttemptId(it) }
 +        val isHandled = ShareIntentDebugJournal.isHandled(activity?.applicationContext, attemptId)
 +        val isFromHistory = intent != null && (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
-+        val isStaleReplay = isHandled || isFromHistory
++        val isStaleReplay = isHandled
 +
 +        intent?.let {
 +            val phase = when {
@@ -226,7 +244,7 @@ index db573ecbd560de3c71aa443b7ad88d1b5e1c8dc7..a1227d71ce7f765e685efee13a6bc3c0
 +            (intent?.action == Intent.ACTION_VIEW && intent.data?.scheme?.lowercase() in listOf("http", "https"))
 +
 +        // Only store when the intent carries share content and has not already been handled
-+        // or launched from history. Activities recreated after process kill or history launches
++        // even on a history launch. Activities recreated after process kill or history launches
 +        // replay the task's initial launch intent and would otherwise duplicate prior shares (STASH-6K).
 +        if (!isStaleReplay && hasShareContent) {
 +            ExpoShareIntentSingleton.intent = intent
@@ -237,9 +255,9 @@ index db573ecbd560de3c71aa443b7ad88d1b5e1c8dc7..a1227d71ce7f765e685efee13a6bc3c0
      }
  }
 \ No newline at end of file
-diff --git a/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt b/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt
+diff --git a/share-patched/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt b/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt
 new file mode 100644
-index 0000000000000000000000000000000000000000..070afd33fad2ef7d1f93cce05772b37f413876b4
+index 0000000..c101682
 --- /dev/null
 +++ b/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt
 @@ -0,0 +1,142 @@
@@ -262,7 +280,7 @@ index 0000000000000000000000000000000000000000..070afd33fad2ef7d1f93cce05772b37f
 +    private const val JOURNAL_KEY = "attempt_journal"
 +    private const val HANDLED_KEY = "handled_attempts"
 +    private const val LEGACY_KEY = "last_intent"
-+    private const val ATTEMPT_ID_EXTRA = "expo.modules.shareintent.DEBUG_ATTEMPT_ID"
++    const val ATTEMPT_ID_EXTRA = "expo.modules.shareintent.DEBUG_ATTEMPT_ID"
 +    // Was 5 (Sentry STASH-2T/STASH-2V: a user who retries a failing share
 +    // several times, plus a couple of ordinary app opens in between, can
 +    // evict every real share attempt from a 5-slot window before they ever
@@ -289,7 +307,7 @@ index 0000000000000000000000000000000000000000..070afd33fad2ef7d1f93cce05772b37f
 +            if (!list.contains(attemptId)) {
 +                list.add(attemptId)
 +                while (list.size > MAX_ATTEMPTS) list.removeAt(0)
-+                prefs.edit().putString(HANDLED_KEY, list.joinToString(",")).apply()
++                prefs.edit().putString(HANDLED_KEY, list.joinToString(",")).commit()
 +            }
 +        } catch (_: Exception) {}
 +    }
@@ -386,10 +404,10 @@ index 0000000000000000000000000000000000000000..070afd33fad2ef7d1f93cce05772b37f
 +    }.format(Date())
 +}
 diff --git a/build/ExpoShareIntentModule.d.ts b/build/ExpoShareIntentModule.d.ts
-index c1179ac96bc17c8c3e00d6fd1bb44ee08d6c2a95..5e330707fa85b18f2f41b51a0946c0fdeb51b55f 100644
+index c1179ac..08b4b58 100644
 --- a/build/ExpoShareIntentModule.d.ts
 +++ b/build/ExpoShareIntentModule.d.ts
-@@ -4,11 +4,17 @@ type ExpoShareIntentModuleEvents = {
+@@ -4,11 +4,18 @@ type ExpoShareIntentModuleEvents = {
      onError: (event: ErrorEventPayload) => void;
      onChange: (event: ChangeEventPayload) => void;
      onStateChange: (event: StateEventPayload) => void;
@@ -403,12 +421,13 @@ index c1179ac96bc17c8c3e00d6fd1bb44ee08d6c2a95..5e330707fa85b18f2f41b51a0946c0fd
      hasShareIntent(key: string): boolean;
 +    // Read-and-clear the five most recent native share lifecycle attempts.
 +    getNativeShareDebugJournal(key: string): Promise<string | null>;
++    acknowledgeShareIntent(attemptId: string): Promise<void>;
 +    dismissApp(key: string): Promise<boolean>;
  }
  declare const ExpoShareIntentModule: ExpoShareIntentModuleType | null;
  export default ExpoShareIntentModule;
 diff --git a/build/useShareIntent.js b/build/useShareIntent.js
-index 1ab12c4c9e429ef8adfdac61c096acc906063dcf..9257fd881d90f62cc05bd3280d9de574d9086dcd 100644
+index 1ab12c4..9257fd8 100644
 --- a/build/useShareIntent.js
 +++ b/build/useShareIntent.js
 @@ -36,6 +36,10 @@ export default function useShareIntent(options = SHAREINTENT_OPTIONS_DEFAULT) {
@@ -441,7 +460,7 @@ index 1ab12c4c9e429ef8adfdac61c096acc906063dcf..9257fd881d90f62cc05bd3280d9de574
       * Detect Native Module response
       */
 diff --git a/build/utils.js b/build/utils.js
-index 3d343c633b4bb267a1ee994352516997f8e058b3..85944f2259df80e970027f4a8212e30fa8b9d2ef 100644
+index 3d343c6..85944f2 100644
 --- a/build/utils.js
 +++ b/build/utils.js
 @@ -68,6 +68,7 @@ export const parseShareIntent = (value, options) => {

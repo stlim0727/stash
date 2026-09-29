@@ -306,6 +306,10 @@ interface BookmarksContextValue {
     /** True when the title came from a source app rather than the user. */
     title_is_derived?: boolean;
     notes?: string;
+    /** Explicit manual save may replace notes on an existing URL. */
+    replace_existing_notes?: boolean;
+    /** Stable native share attempt UUID used to dedupe replayed text/images. */
+    capture_client_id?: string;
     description_format?: TextFormat;
     notes_format?: TextFormat;
     /** Shared text with no usable URL — saved as a text note. */
@@ -2592,12 +2596,38 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [enrichmentsById],
   );
 
+  // Mark a bookmark's newest 'complete' enrichment as stale when the user edits
+  // its title/notes, so Bookmark Detail can flag the suggestions as out of date
+  // until "Refresh AI suggestions" regenerates them. Local-first: never calls
+  // the network here, just updates + persists the status.
+  const markEnrichmentStale = useCallback((bookmarkId: string) => {
+    const current = enrichmentsRef.current
+      .filter((enrichment) => enrichment.bookmark_id === bookmarkId)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+    if (!current || current.status !== "complete") {
+      return;
+    }
+    const stale: AIEnrichment = {
+      ...current,
+      status: "stale",
+      updated_at: new Date().toISOString(),
+    };
+    setEnrichments((rows) =>
+      rows.map((row) => (row.id === stale.id ? stale : row)),
+    );
+    ensureRepositoryReady()
+      .then(() => repository.upsertEnrichments([stale]))
+      .catch((error) => logStorageError("enrichment staleness", error));
+  }, []);
+
   const addBookmark = useCallback(
     ({
       url,
       title,
       title_is_derived = false,
       notes,
+      replace_existing_notes = false,
+      capture_client_id,
       description_format = "plain",
       notes_format = "plain",
       shared_text,
@@ -2607,11 +2637,29 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       title?: string;
       title_is_derived?: boolean;
       notes?: string;
+      replace_existing_notes?: boolean;
+      capture_client_id?: string;
       description_format?: TextFormat;
       notes_format?: TextFormat;
       shared_text?: string;
       image?: SharedImage;
     }): AddBookmarkResult => {
+      const replayedCapture = capture_client_id
+        ? loadedBookmarks.find(
+            // Capture ids are idempotency keys, unlike content URLs: a replay
+            // must find its original row even if the user trashed it after an
+            // acknowledgement failure. Creating another row would later
+            // conflict with the cloud's all-rows client_id uniqueness too.
+            (bookmark) => bookmark.client_id === capture_client_id,
+          )
+        : undefined;
+      if (replayedCapture) {
+        return {
+          status: "duplicate",
+          bookmark: replayedCapture,
+          persisted: Promise.resolve(true),
+        };
+      }
       // A shared image becomes an image bookmark: capture is local-first and
       // optimistic exactly like every other save, then queued for a real
       // background upload (binary to Storage, then the row) — same shape as
@@ -2632,7 +2680,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // stable id, resent unchanged on every upload retry so an interrupted
         // create dedupes against its own first attempt instead of inserting a
         // twin, same role it plays for text notes.
-        const imageClientId = makeClientId();
+        const imageClientId = capture_client_id ?? makeClientId();
         const imageBookmark: Bookmark = {
           id,
           user_id: mockUserId,
@@ -2797,7 +2845,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // notes by design. The client_id below is NOT a content key: it's this
         // capture's stable id, resent on every retry so an interrupted upload
         // dedupes against its own first attempt instead of inserting a twin.
-        const noteClientId = makeClientId();
+        const noteClientId = capture_client_id ?? makeClientId();
         const note: Bookmark = {
           id: makeBookmarkId(),
           user_id: mockUserId,
@@ -2908,23 +2956,34 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             ? true
             : existing.title_is_derived;
 
-        const notesCanBeImproved = Boolean(notes?.trim());
+        const notesCanBeImproved = Boolean(notes?.trim()) &&
+          (replace_existing_notes || !existing.notes);
         const updatedNotes = notesCanBeImproved ? (notes ?? null) : existing.notes;
         const updatedNotesFormat = notesCanBeImproved ? notes_format : existing.notes_format;
         const notesChanged = notesCanBeImproved && updatedNotes !== existing.notes;
+        const notesFormatChanged = updatedNotesFormat !== existing.notes_format;
 
         const needsMetadataRefresh =
           Boolean(existing.url) &&
           (updatedTitle == null || updatedTitleDerived === true || isRepairable);
 
         const titleChanged = titleCanBeImproved && updatedTitle !== existing.title;
-        const contentChanged = titleChanged || notesChanged;
+        // A native share's attempt id is also its retry key.  When a URL is
+        // already present under its canonical form, retain that key on the
+        // existing row before acknowledging the Android intent.  A later
+        // replay can then find this row even after the user changes its URL or
+        // moves it to Trash, instead of treating the edited content as new.
+        const captureClientIdChanged =
+          capture_client_id !== undefined && existing.client_id !== capture_client_id;
+        const contentChanged =
+          titleChanged || notesChanged || notesFormatChanged || captureClientIdChanged;
         const syncsRemotely = contentChanged ? hasSyncedOnce(existing.id) : false;
 
         const updated: Bookmark = {
           ...existing,
           title: updatedTitle,
           title_is_derived: updatedTitleDerived,
+          client_id: capture_client_id ?? existing.client_id,
           notes: updatedNotes,
           notes_format: updatedNotesFormat,
           last_saved_at: now,
@@ -2953,6 +3012,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             return false;
           });
 
+        if (titleChanged && !title_is_derived && !hasSyncedOnce(existing.id)) {
+          pendingUserTitleEdits.current.add(existing.id);
+        }
+        if (titleChanged || notesChanged) {
+          markEnrichmentStale(existing.id);
+        }
+
         if (syncsRemotely) {
           enqueueMutation(existing.id, "update");
         }
@@ -2970,7 +3036,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         return { status: "duplicate", bookmark: updated, persisted };
       }
 
-      const clientId = makeClientId();
+      const clientId = capture_client_id ?? makeClientId();
       const bookmark: Bookmark = {
         id: makeBookmarkId(),
         user_id: mockUserId,
@@ -3045,7 +3111,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
       return { status: "created", bookmark, persisted };
     },
-    [loadedBookmarks, enrichInBackground],
+    [loadedBookmarks, enrichInBackground, hasSyncedOnce, enqueueMutation, markEnrichmentStale],
   );
 
   // Bulk re-ingest of imported items. Mirrors addBookmark's local-first create
@@ -3692,30 +3758,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     (id: string) => applyBookmarkUpdate(id, { deleted_at: null }),
     [applyBookmarkUpdate],
   );
-
-  // Mark a bookmark's newest 'complete' enrichment as stale when the user edits
-  // its title/notes, so Bookmark Detail can flag the suggestions as out of date
-  // until "Refresh AI suggestions" regenerates them. Local-first: never calls
-  // the network here, just updates + persists the status.
-  const markEnrichmentStale = useCallback((bookmarkId: string) => {
-    const current = enrichmentsRef.current
-      .filter((enrichment) => enrichment.bookmark_id === bookmarkId)
-      .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
-    if (!current || current.status !== "complete") {
-      return;
-    }
-    const stale: AIEnrichment = {
-      ...current,
-      status: "stale",
-      updated_at: new Date().toISOString(),
-    };
-    setEnrichments((rows) =>
-      rows.map((row) => (row.id === stale.id ? stale : row)),
-    );
-    ensureRepositoryReady()
-      .then(() => repository.upsertEnrichments([stale]))
-      .catch((error) => logStorageError("enrichment staleness", error));
-  }, []);
 
   const updateBookmarkFields = useCallback(
     (

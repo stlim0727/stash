@@ -110,6 +110,7 @@ let mockShareIntent: {
 let onDebugLogListener: ((event: { value: string }) => void) | null = null;
 const mockRemoveDebugLogListener = jest.fn();
 const mockShareIntentModule = {
+  acknowledgeShareIntent: jest.fn(async (_attemptId: string) => {}),
   addListener: jest.fn((eventName: string, listener: (event: { value: string }) => void) => {
     if (eventName === 'onDebugLog') {
       onDebugLogListener = listener;
@@ -176,6 +177,7 @@ beforeEach(async () => {
   mockRecordLog.mockClear();
   onDebugLogListener = null;
   mockShareIntentModule.addListener.mockClear();
+  mockShareIntentModule.acknowledgeShareIntent.mockClear();
   mockRemoveDebugLogListener.mockClear();
   // Reset the persisted share-behavior preference to the default between tests
   // (the fake repo's meta store outlives a single test).
@@ -572,7 +574,10 @@ describe('ShareIntentHandler', () => {
       shareIntent: {
         webUrl: null,
         text: '내일 3시에 회의 있습니다',
-        meta: { title: 'KakaoTalk message' },
+        meta: {
+          title: 'KakaoTalk message',
+          attemptId: '0d971988-176f-4f82-bb31-6e7b23123c92',
+        },
       },
       resetShareIntent: jest.fn(),
     };
@@ -591,6 +596,7 @@ describe('ShareIntentHandler', () => {
     expect(stored[0].description).toBe('내일 3시에 회의 있습니다');
     expect(stored[0].title).toBe('KakaoTalk message');
     expect(stored[0].title_is_derived).toBe(false);
+    expect(stored[0].client_id).toBe('0d971988-176f-4f82-bb31-6e7b23123c92');
     unmount();
   });
 
@@ -624,7 +630,7 @@ describe('ShareIntentHandler', () => {
       shareIntent: {
         webUrl: 'https://example.com/durable',
         text: null,
-        meta: { attemptId: 'native-attempt-1' },
+        meta: { attemptId: '3f0a8077-18e3-4f30-9d47-2ba6cb6caf35' },
       },
       resetShareIntent: jest.fn(),
     };
@@ -635,7 +641,7 @@ describe('ShareIntentHandler', () => {
     await waitFor(async () => {
       const record = await readLastShareAttempt((key) => fakeRepo.repository.getMeta(key));
       expect(record).toMatchObject({
-        attemptId: 'native-attempt-1',
+        attemptId: '3f0a8077-18e3-4f30-9d47-2ba6cb6caf35',
         hasUrl: true,
         hasText: false,
         hasImage: false,
@@ -644,6 +650,9 @@ describe('ShareIntentHandler', () => {
       });
       expect(record?.receivedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
       expect(record?.persistedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      const bookmarks = await fakeRepo.repository.listBookmarks();
+      expect(bookmarks).toHaveLength(1);
+      expect(bookmarks[0]?.client_id).toBe('3f0a8077-18e3-4f30-9d47-2ba6cb6caf35');
     });
     unmount();
   });
@@ -713,7 +722,7 @@ describe('ShareIntentHandler', () => {
       hasShareIntent: false,
       shareIntent: { webUrl: null, text: null },
       resetShareIntent: jest.fn(),
-      error: 'empty uri for file sharing: android.intent.action.SEND',
+      error: 'empty uri for file sharing: android.intent.action.SEND [attemptId=3f0a8077-18e3-4f30-9d47-2ba6cb6caf35]',
     };
 
     const { findByText, unmount } = await renderHandler();
@@ -731,7 +740,12 @@ describe('ShareIntentHandler', () => {
     const loggedError = mockRecordLog.mock.calls.find(
       ([level, message]) => level === 'error' && message === '[share] native share intent error',
     )?.[2]?.[0];
-    expect(loggedError.message).toBe('empty uri for file sharing: android.intent.action.SEND');
+    expect(loggedError.message).toBe(
+      'empty uri for file sharing: android.intent.action.SEND [attemptId=3f0a8077-18e3-4f30-9d47-2ba6cb6caf35]',
+    );
+    expect(mockShareIntentModule.acknowledgeShareIntent).toHaveBeenCalledWith(
+      '3f0a8077-18e3-4f30-9d47-2ba6cb6caf35',
+    );
     unmount();
   });
 
@@ -781,6 +795,7 @@ describe('ShareIntentHandler', () => {
       shareIntent: {
         webUrl: null,
         text: null,
+        meta: { attemptId: '8bc5967d-d2b6-46a9-8507-385798e98e4a' },
         files: [{ path: 'file:///tmp/share/IMG_042.png', mimeType: 'image/png', fileName: 'IMG_0042.png' }],
       },
       resetShareIntent: jest.fn(),
@@ -808,6 +823,7 @@ describe('ShareIntentHandler', () => {
     // file's extension (which can mislabel an uncommon format's
     // Content-Type; see mimeTypeForImageUri's doc comment).
     expect(stored[0].local_image_mime_type).toBe('image/png');
+    expect(stored[0].client_id).toBe('8bc5967d-d2b6-46a9-8507-385798e98e4a');
     // Queued like any other create — honest 'pending' state (no fake
     // "already synced" bookkeeping), same shape as a text note capture.
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
@@ -908,6 +924,7 @@ describe('ShareIntentHandler', () => {
       const { findByText, unmount } = await renderHandler();
 
       await findByText('Could not save to Keepory');
+      expect(mockShareIntentModule.acknowledgeShareIntent).not.toHaveBeenCalled();
       expect(mockRouter.replace).not.toHaveBeenCalled();
       expect(mockDismiss).not.toHaveBeenCalled();
       unmount();
@@ -1063,5 +1080,50 @@ describe('ShareIntentHandler', () => {
     });
     expect(mockFlush).not.toHaveBeenCalled();
     unmount();
+  });
+
+  it('acknowledges an invalid native share after recording its terminal outcome', async () => {
+    fakeRepo.__reset([]);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: null, text: null, meta: { attemptId: 'native-invalid' } },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { unmount } = await renderHandler();
+
+    await waitFor(() =>
+      expect(mockShareIntentModule.acknowledgeShareIntent).toHaveBeenCalledWith('native-invalid'),
+    );
+    unmount();
+  });
+
+  it('acknowledges the native attempt only after bookmark persistence completes', async () => {
+  fakeRepo.__reset([]);
+  await fakeRepo.repository.setMeta(SHARE_BEHAVIOR_PREF_KEY, 'inbox');
+  const insert = fakeRepo.repository.insertBookmark;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  fakeRepo.repository.insertBookmark = jest.fn(async (bookmark) => {
+    await gate;
+    return insert(bookmark);
+  });
+  mockShareIntent = {
+    hasShareIntent: true,
+    shareIntent: { webUrl: 'https://example.com/ack', text: null, meta: { attemptId: 'native-ack' } },
+    resetShareIntent: jest.fn(),
+  };
+  try {
+    const { unmount } = await renderHandler();
+    await waitFor(() => expect(fakeRepo.repository.insertBookmark).toHaveBeenCalled());
+    expect(mockShareIntentModule.acknowledgeShareIntent).not.toHaveBeenCalled();
+    await act(async () => { release(); });
+    await waitFor(() => expect(mockShareIntentModule.acknowledgeShareIntent).toHaveBeenCalledWith('native-ack'));
+    expect(fakeRepo.__bookmarks()).toHaveLength(1);
+    unmount();
+  } finally {
+    release();
+    fakeRepo.repository.insertBookmark = insert;
+  }
   });
 });

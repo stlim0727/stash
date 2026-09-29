@@ -124,6 +124,7 @@ export default function AddBookmarkScreen() {
           url: trimmedUrl,
           title: trimmedTitle || undefined,
           notes: memo,
+          replace_existing_notes: true,
           notes_format: format,
         })
       : addBookmark({

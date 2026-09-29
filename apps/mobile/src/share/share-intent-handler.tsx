@@ -32,6 +32,19 @@ function nextJsAttemptId(): string {
   return `js-${Date.now()}-${jsAttemptSequence}`;
 }
 
+function nativeCaptureClientId(attemptId: string): string | undefined {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    attemptId,
+  )
+    ? attemptId
+    : undefined;
+}
+
+function nativeErrorAttemptId(error: string): string | undefined {
+  const match = /\s\[attemptId=([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\]$/i.exec(error);
+  return match?.[1];
+}
+
 /**
  * Bridges the OS share sheet to local-first capture. When the app is opened
  * with a shared URL we persist it through the existing store (which queues it
@@ -101,6 +114,12 @@ export function ShareIntentHandler() {
     }
     reportedErrorRef.current = error;
     recordLog('error', '[share] native share intent error', [new Error(error)]);
+    const attemptId = nativeErrorAttemptId(error);
+    if (attemptId && typeof ShareIntentModule?.acknowledgeShareIntent === 'function') {
+      // Parser errors cannot become durable capture work. Retire them after
+      // recording diagnostics; durable save errors stay replayable.
+      void ShareIntentModule.acknowledgeShareIntent(attemptId).catch(() => {});
+    }
     show(t('toast.noLink'));
     router.replace('/');
     resetShareIntent();
@@ -199,11 +218,22 @@ export function ShareIntentHandler() {
     // returns 'invalid' only when there is none of the three, which keeps the
     // "nothing to save" toast for a genuinely empty share.
     const saveStartedAt = Date.now();
+    const captureClientId = nativeCaptureClientId(share.attemptId);
     const result = share.url
-      ? addBookmark({ url: share.url, title: share.title, title_is_derived: true })
+      ? addBookmark({
+          url: share.url,
+          title: share.title,
+          title_is_derived: true,
+          // Find a prior attempt even if its URL was later edited or trashed.
+          capture_client_id: captureClientId,
+        })
       : share.image
-        ? addBookmark({ image: share.image, title: share.title })
-        : addBookmark({ shared_text: share.text, title: share.title });
+        ? addBookmark({ image: share.image, title: share.title, capture_client_id: captureClientId })
+        : addBookmark({
+            shared_text: share.text,
+            title: share.title,
+            capture_client_id: captureClientId,
+          });
     const saved = result.status !== 'invalid';
     // Only a genuinely new save is worth confirming on the next open; a
     // duplicate already lived in the library and a no-link share saved nothing.
@@ -235,11 +265,35 @@ export function ShareIntentHandler() {
     });
     if (saved) {
       message = result.status === 'duplicate' ? t('toast.duplicate') : t('toast.saved');
-      persisted = result.persisted;
-    } else if (result.status === 'invalid' && result.reason === 'too_long') {
-      // Distinguish from the generic "nothing to save" toast (Sentry
-      // STASH-2J): there WAS a link, it was just too long to save.
-      message = t('toast.urlTooLong');
+      persisted = result.persisted.then(async (durable) => {
+        if (durable && typeof ShareIntentModule?.acknowledgeShareIntent === 'function') {
+          try {
+            await ShareIntentModule.acknowledgeShareIntent(share.attemptId);
+          } catch {
+            // Keep the native attempt replayable if acknowledgement fails.
+            // URL captures dedupe by canonical URL; text and image captures
+            // reuse the attempt UUID as client_id so replay is idempotent too.
+          }
+        }
+        return durable;
+      });
+    } else {
+      if (result.status === 'invalid' && result.reason === 'too_long') {
+        // Distinguish from the generic "nothing to save" toast (Sentry
+        // STASH-2J): there WAS a link, it was just too long to save.
+        message = t('toast.urlTooLong');
+      }
+      if (typeof ShareIntentModule?.acknowledgeShareIntent === 'function') {
+        // `invalid` is a terminal outcome: there is no durable work to retry.
+        // Acknowledge it only after recording the diagnostic above, otherwise an
+        // invalid native intent survives activity recreation and repeatedly opens
+        // the app with the same toast. Failed durable writes deliberately stay
+        // unacknowledged through the `saved` branch so they can be replayed.
+        void ShareIntentModule.acknowledgeShareIntent(share.attemptId).catch(() => {
+          // A failed acknowledgement leaves the terminal attempt available for a
+          // later lifecycle retry; its recorded diagnostic explains the outcome.
+        });
+      }
     }
     // Bracket the save so a post-share freeze can be tied to how long the durable
     // write took. Coarse only — status/duration/durability, never content.
