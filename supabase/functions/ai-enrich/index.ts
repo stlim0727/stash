@@ -604,6 +604,9 @@ async function processEnrichmentRow(
     output.suggested_collection,
     bookmark.collection_id,
   );
+  const isIncumbentEcho = Boolean(
+    bookmark.collection_id && matched && matched.id === bookmark.collection_id,
+  );
   const isMove = Boolean(
     bookmark.collection_id &&
       ((matched && matched.id !== bookmark.collection_id) ||
@@ -612,11 +615,13 @@ async function processEnrichmentRow(
   // Hurdle: if the bookmark already lives in a collection, changing it requires
   // convincing confidence (>= 0.85). If the model's confidence does not clear this
   // hurdle, reject the move suggestion (null) rather than encoding the incumbent as one (STASH-74).
+  // Likewise, if the model echoed the incumbent collection, persist no suggestion (null)
+  // so status-quo preservation never persists a phantom recommendation.
   const clearsMoveHurdle = output.confidence !== null && output.confidence >= FOLDER_MOVE_MIN_CONFIDENCE;
   const effectiveMatchedId =
-    isMove && !clearsMoveHurdle ? null : (matched?.id ?? null);
+    isIncumbentEcho || (isMove && !clearsMoveHurdle) ? null : (matched?.id ?? null);
   const effectiveSuggestedName =
-    isMove && !clearsMoveHurdle
+    isIncumbentEcho || (isMove && !clearsMoveHurdle)
       ? null
       : !matched && output.suggested_collection?.trim()
         ? output.suggested_collection.trim()
@@ -1281,6 +1286,11 @@ Deno.serve(async (req) => {
       output.suggested_collection,
       effectiveCollectionId,
     );
+    const isIncumbentEcho = Boolean(
+      effectiveCollectionId &&
+        matchedCollection &&
+        matchedCollection.id === effectiveCollectionId,
+    );
     const isMove = Boolean(
       effectiveCollectionId &&
         ((matchedCollection && matchedCollection.id !== effectiveCollectionId) ||
@@ -1289,11 +1299,15 @@ Deno.serve(async (req) => {
     // Hurdle: if the bookmark already lives in a collection, changing it requires
     // convincing confidence (>= 0.85). If the model's confidence does not clear this
     // hurdle, reject the move suggestion (null) rather than encoding the incumbent as one (STASH-74).
+    // Likewise, if the model echoed the incumbent collection, persist no suggestion (null)
+    // so status-quo preservation never persists a phantom recommendation.
     const clearsMoveHurdle = output.confidence !== null && output.confidence >= FOLDER_MOVE_MIN_CONFIDENCE;
     const suggestedCollectionId =
-      isMove && !clearsMoveHurdle ? null : (matchedCollection?.id ?? null);
+      isIncumbentEcho || (isMove && !clearsMoveHurdle)
+        ? null
+        : (matchedCollection?.id ?? null);
     const suggestedCollectionName =
-      isMove && !clearsMoveHurdle
+      isIncumbentEcho || (isMove && !clearsMoveHurdle)
         ? null
         : !matchedCollection && output.suggested_collection?.trim()
           ? output.suggested_collection.trim()

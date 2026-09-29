@@ -4548,11 +4548,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const hasUnsyncedWork =
           queueRef.current.some((entry) => entry.local_id === bookmarkId) ||
           (latest ? latest.sync_status !== "synced" : false);
-        if (hasUnsyncedWork && !syncPausedRef.current) {
-          try {
-            await syncNowRef.current?.();
-          } catch {
-            // Best effort: proceed with local metadata hint if sync fails
+        if (hasUnsyncedWork) {
+          if (!syncPausedRef.current) {
+            try {
+              await syncNowRef.current?.();
+            } catch {
+              // Best effort: proceed to check if upload succeeded
+            }
+          }
+          const stillUnsynced =
+            queueRef.current.some((entry) => entry.local_id === bookmarkId) ||
+            (bookmarksRef.current?.find((item) => item.id === bookmarkId)?.sync_status !== "synced");
+          if (stillUnsynced) {
+            // Defer enrichment until the mutation uploads to the cloud row.
+            // armAiRetry ensures it will be retried automatically once sync resumes and uploads.
+            armAiRetry(bookmarkId);
+            return null;
           }
         }
         const metadata: EnrichmentMetadataHint | undefined = latest
