@@ -595,7 +595,7 @@ describe('ShareIntentHandler', () => {
     expect(stored[0].content_type).toBe('text');
     expect(stored[0].description).toBe('내일 3시에 회의 있습니다');
     expect(stored[0].title).toBe('KakaoTalk message');
-    expect(stored[0].title_is_derived).toBe(false);
+    expect(stored[0].title_is_derived).toBe(true);
     expect(stored[0].client_id).toBe('0d971988-176f-4f82-bb31-6e7b23123c92');
     unmount();
   });

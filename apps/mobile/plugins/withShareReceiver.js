@@ -1,25 +1,22 @@
-const { withAndroidManifest, withDangerousMod, AndroidConfig } = require('@expo/config-plugins');
+const { withAndroidManifest, withDangerousMod } = require('@expo/config-plugins');
 const fs = require('fs');
 const path = require('path');
 
 function withShareReceiver(config) {
-  // 1. Modify AndroidManifest.xml
   config = withAndroidManifest(config, (config) => {
     const androidManifest = config.modResults;
     const application = androidManifest.manifest.application[0];
     const mainActivity = application.activity.find(a => a.$['android:name'] === '.MainActivity');
 
-    // Remove ACTION_SEND and ACTION_SEND_MULTIPLE from MainActivity
     if (mainActivity && mainActivity['intent-filter']) {
       mainActivity['intent-filter'] = mainActivity['intent-filter'].filter(filter => {
         if (!filter.action) return true;
         const actions = filter.action.map(a => a.$['android:name']);
-        return !actions.includes('android.intent.action.SEND') && 
+        return !actions.includes('android.intent.action.SEND') &&
                !actions.includes('android.intent.action.SEND_MULTIPLE');
       });
     }
 
-    // Add ShareReceiverActivity
     application.activity.push({
       $: {
         'android:name': '.ShareReceiverActivity',
@@ -50,7 +47,6 @@ function withShareReceiver(config) {
     return config;
   });
 
-  // 2. Inject ShareReceiverActivity.kt
   config = withDangerousMod(config, [
     'android',
     async (config) => {
@@ -58,7 +54,7 @@ function withShareReceiver(config) {
       const packageName = config.android.package;
       const packagePath = packageName.replace(/\./g, '/');
       const targetDir = path.join(projectRoot, 'android/app/src/main/java', packagePath);
-      
+
       const activityCode = `package ${packageName}
 
 import android.app.Activity
@@ -72,6 +68,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
 import java.util.Locale
+import android.os.Build
 
 class ShareReceiverActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -82,31 +79,39 @@ class ShareReceiverActivity : Activity() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        
+
         if (success) {
-            val message = if (Locale.getDefault().language == "ko") "Stash에 저장되었습니다" else "Saved to Stash"
+            val message = if (Locale.getDefault().language == "ko") "Keepory로 전송되었습니다" else "Sent to Keepory"
             Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
         }
         finish()
+    }
+
+    private fun <T : android.os.Parcelable> getParcelableExtraCompat(intent: Intent, name: String, clazz: Class<T>): T? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(name, clazz)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(name) as? T
+        }
+    }
+
+    private fun <T : android.os.Parcelable> getParcelableArrayListExtraCompat(intent: Intent, name: String, clazz: Class<T>): ArrayList<T>? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableArrayListExtra(name, clazz)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableArrayListExtra<T>(name)
+        }
     }
 
     private fun handleIntent(intent: Intent): Boolean {
         val action = intent.action
         val type = intent.type ?: return false
 
-        val sharesFile = File(filesDir, "pending_shares.json")
-        val shares = if (sharesFile.exists()) {
-            try {
-                JSONArray(sharesFile.readText())
-            } catch (e: Exception) {
-                JSONArray()
-            }
-        } else {
-            JSONArray()
-        }
-
         val item = JSONObject()
-        item.put("id", UUID.randomUUID().toString())
+        val id = UUID.randomUUID().toString()
+        item.put("id", id)
         item.put("timestamp", System.currentTimeMillis())
         item.put("type", type)
 
@@ -121,7 +126,7 @@ class ShareReceiverActivity : Activity() {
                     hasData = true
                 }
             } else {
-                val uri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+                val uri = getParcelableExtraCompat(intent, Intent.EXTRA_STREAM, Uri::class.java)
                 if (uri != null) {
                     val path = copyFile(uri)
                     if (path != null) {
@@ -132,10 +137,10 @@ class ShareReceiverActivity : Activity() {
                 }
             }
         } else if (Intent.ACTION_SEND_MULTIPLE == action) {
-            val uris = intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+            val uris = getParcelableArrayListExtraCompat(intent, Intent.EXTRA_STREAM, Uri::class.java)
             if (uris != null) {
                 val paths = JSONArray()
-                uris.forEach { uri -> 
+                uris.forEach { uri ->
                     copyFile(uri)?.let { paths.put(it) }
                 }
                 if (paths.length() > 0) {
@@ -146,9 +151,12 @@ class ShareReceiverActivity : Activity() {
             }
         }
 
+        val targetDir = File(filesDir, "pending_shares")
+        targetDir.mkdirs()
+
         if (hasData) {
-            shares.put(item)
-            sharesFile.writeText(shares.toString())
+            val sharesFile = File(targetDir, "share_\${id}.json")
+            sharesFile.writeText(item.toString())
             return true
         }
         return false
@@ -159,8 +167,11 @@ class ShareReceiverActivity : Activity() {
             val resolver = contentResolver
             val mimeType = resolver.getType(uri) ?: "application/octet-stream"
             val ext = android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) ?: "bin"
-            val targetFile = File(cacheDir, "share_img_\${System.currentTimeMillis()}.\$ext")
-            
+
+            val targetDir = File(filesDir, "pending_shares")
+            targetDir.mkdirs()
+            val targetFile = File(targetDir, "share_img_\${UUID.randomUUID()}.$ext")
+
             resolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(targetFile).use { output ->
                     input.copyTo(output)
@@ -179,7 +190,7 @@ class ShareReceiverActivity : Activity() {
       return config;
     }
   ]);
-  
+
   return config;
 }
 
