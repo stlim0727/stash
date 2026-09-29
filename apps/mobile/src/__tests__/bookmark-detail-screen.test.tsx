@@ -1533,6 +1533,41 @@ test('a CHANGE (move) suggestion strikes the current folder and shows the move t
   ).toBeTruthy();
 });
 
+test('a CHANGE (move) suggestion respects the confidence hurdle on Detail (STASH-74)', async () => {
+  mockRouteId = SYNCED_ID;
+  const now = '2026-06-12T00:00:00.000Z';
+  const collections = [
+    { id: 'col-recipes', user_id: 'user-test', name: 'Recipes', description: null, created_at: now, updated_at: now },
+    { id: 'col-watch', user_id: 'user-test', name: 'Watch Later', description: null, created_at: now, updated_at: now },
+  ];
+
+  // 1. Move suggestion with confidence 0.8 (< 0.85 hurdle) should be suppressed on Detail
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: 'col-watch' })],
+    { tags: [], bookmarkTags: [], collections },
+    [makeEnrichment({ bookmark_id: SYNCED_ID, suggested_collection_id: 'col-recipes', confidence: 0.8 })],
+  );
+
+  let screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
+  expect(screen.queryByText('Watch Later')).toBeNull();
+  expect(screen.queryByText('→ Recipes')).toBeNull();
+  expect(screen.queryByLabelText('Move A synced bookmark from Watch Later to Recipes')).toBeNull();
+
+  // 2. Move suggestion with confidence 0.85 (>= 0.85 hurdle) should appear on Detail
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: 'col-watch' })],
+    { tags: [], bookmarkTags: [], collections },
+    [makeEnrichment({ bookmark_id: SYNCED_ID, suggested_collection_id: 'col-recipes', confidence: 0.85 })],
+  );
+
+  screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
+  expect(screen.getByText('Watch Later')).toBeTruthy();
+  expect(screen.getByText('→ Recipes')).toBeTruthy();
+  expect(screen.getByLabelText('Move A synced bookmark from Watch Later to Recipes')).toBeTruthy();
+});
+
 test('offers hashtags from the title as one-tap tag suggestions', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset([

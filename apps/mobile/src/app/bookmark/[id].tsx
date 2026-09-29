@@ -44,6 +44,7 @@ import { hostFromUrl } from '@/domain/item-icon';
 import { displayTitle, isTitleDerived } from '@/domain/item-display';
 import {
   isTitleRestatement,
+  pendingSuggestedFolder,
   pendingSuggestions,
   suggestedFolderTokens,
   summaryToken,
@@ -51,7 +52,6 @@ import {
 import type { SuggestedFolder } from '@/domain/ai-suggestions';
 import { FolderSuggestionLabel, folderChipA11yLabel } from '@/ui/folder-suggestion-chip';
 import { ProposedSummary } from '@/ui/ProposedSummary';
-import { collectionMatchKey } from '@/domain/collection-match';
 import { hashtagSuggestions } from '@/domain/hashtags';
 import { AI_RATE_LIMITED, useBookmarks } from '@/store/bookmarks';
 import { trackBreadcrumb } from '@/observability/sentry';
@@ -373,67 +373,34 @@ export default function BookmarkDetailScreen({
   const pending = pendingSuggestions(enrichment, appliedTagNames, reviewedNames).filter(
     (suggestion) => !dismissed.has(suggestion.name.toLowerCase()),
   );
-  // The AI proposes a collection by name. The edge function resolves it to an
-  // existing collection id when one fits (tolerant of case/spacing); when none
-  // did, it passes the raw name through so we can offer to *create* it. We also
-  // re-check that name against the live collection list here, so a collection
-  // the user made since the enrichment ran is offered as "file in" rather than a
-  // duplicate "create".
-  const suggestedByName = enrichment?.suggested_collection_name?.trim() || null;
-  // Re-match against the live collection list with the SAME tolerant key the
-  // edge function used, so a folder the user created since the enrichment ran
-  // (e.g. "watch-later") still resolves a suggestion of "Watch Later" to "file
-  // into" rather than offering a duplicate "create".
-  const suggestedNameKey = suggestedByName ? collectionMatchKey(suggestedByName) : '';
-  const localNameMatch = suggestedNameKey
-    ? collections.find((item) => collectionMatchKey(item.name) === suggestedNameKey)
-    : undefined;
-  const suggestedCollection =
-    getCollection(enrichment?.suggested_collection_id ?? null) ?? localNameMatch ?? null;
-  // Folder dismissals are durable (per bookmark, keyed by stable tokens) so a
-  // dismissed chip stays gone when the user re-enters Detail — a later enrichment
-  // proposing a *different* folder yields a different token and re-surfaces.
-  //
-  // The SAME recommendation can render as either a "create {name}" chip or a
-  // "file into {existing}" chip depending on whether a matching collection exists
-  // yet — and that can flip after the user dismisses it (a folder named like the
-  // suggestion gets created or pulled later, or an existing one is deleted). So a
-  // suggestion is identified by BOTH its resolved-collection id and the AI's
-  // proposed-name key; a dismissal recorded under either token suppresses both
-  // forms, and dismissing records every applicable token.
-  const dismissedFolderTokens = getDismissedFolderSuggestions(bookmark.id);
-  // The collection the bookmark sits in now (when known) — attached as `from` so
-  // the chip reads as a *move* (📁 ~~from~~ → target) rather than a plain add
-  // when the bookmark already lives somewhere else. Unknown current collection →
-  // no `from` (render as an add), matching resolveSuggestedFolder's rule.
+  // The folder suggestion to surface for this bookmark (honoring durable dismissals,
+  // existing vs create resolution, and confidence hurdles for adds/moves).
+  // Detail routes through the shared pendingSuggestedFolder predicate so rules stay
+  // consistent across Inbox, Review, and Detail.
   const currentFrom =
     collection && bookmark.collection_id
       ? { id: bookmark.collection_id, name: collection.name }
       : null;
-  const suggestedFolder: SuggestedFolder | null = suggestedCollection
-    ? {
-        kind: 'existing',
-        id: suggestedCollection.id,
-        name: suggestedCollection.name,
-        from: currentFrom,
-      }
-    : suggestedByName
-      ? { kind: 'create', name: suggestedByName, from: currentFrom }
+  const dismissedFolderTokens = getDismissedFolderSuggestions(bookmark.id);
+  const suggestedFolder: SuggestedFolder | null = pendingSuggestedFolder(
+    enrichment,
+    collections,
+    bookmark.collection_id,
+    dismissedFolderTokens,
+  );
+  const suggestedCollection =
+    suggestedFolder?.kind === 'existing'
+      ? (getCollection(suggestedFolder.id) ?? { id: suggestedFolder.id, name: suggestedFolder.name })
       : null;
-  const folderTokens = suggestedFolderTokens(suggestedFolder, suggestedByName);
-  const folderSuggestionDismissed = folderTokens.some((token) => dismissedFolderTokens.has(token));
-  const showCollectionSuggestion =
-    !!suggestedCollection &&
-    bookmark.collection_id !== suggestedCollection.id &&
-    !folderSuggestionDismissed;
-  // Offer to create a brand-new collection only when nothing existing matched.
-  const showCreateCollectionSuggestion =
-    !suggestedCollection && !!suggestedByName && !folderSuggestionDismissed;
+  const suggestedByName = suggestedFolder?.kind === 'create' ? suggestedFolder.name : null;
+  const folderTokens = suggestedFolderTokens(suggestedFolder, enrichment?.suggested_collection_name);
+  const showCollectionSuggestion = suggestedFolder?.kind === 'existing';
+  const showCreateCollectionSuggestion = suggestedFolder?.kind === 'create';
   // A folder chip (file-into or create) is currently on screen — so the tag
   // field's "Add all"/"Dismiss all" should sweep it too, like the Review screen.
   const isPreviewFailed = bookmark.metadata_status === 'failed';
 
-  const folderSuggestionVisible = !isPreviewFailed && (showCollectionSuggestion || showCreateCollectionSuggestion);
+  const folderSuggestionVisible = !isPreviewFailed && suggestedFolder !== null;
 
   // Hashtags already written into the captured content (e.g. an Instagram
   // caption's "#목살 #덮밥") make good tags — offer them as one-tap chips, minus
