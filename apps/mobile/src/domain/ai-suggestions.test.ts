@@ -331,14 +331,9 @@ test('pendingSuggestedFolder enforces confidence hurdles for moves and adds (STA
     from: { id: 'col-watch', name: 'Watch Later' },
   });
 
-  // Case 3: confidence is null -> surfaced (unrated / mock tests preserve move capability)
+  // Case 3: confidence is null for move -> suppressed (unrated model output fails the 0.85 hurdle)
   const enrichmentNullConf = makeFolderEnrichment({ suggested_collection_id: 'col-recipes', confidence: null });
-  assert.deepEqual(pendingSuggestedFolder(enrichmentNullConf, COLLECTIONS, 'col-watch'), {
-    kind: 'existing',
-    id: 'col-recipes',
-    name: 'Recipes',
-    from: { id: 'col-watch', name: 'Watch Later' },
-  });
+  assert.equal(pendingSuggestedFolder(enrichmentNullConf, COLLECTIONS, 'col-watch'), null);
 
   // ADD: bookmark is unfiled (currentCollectionId === null)
   // Case 4: confidence is below add threshold (0.5 < 0.6) -> suppressed as noise

@@ -1517,7 +1517,7 @@ test('a CHANGE (move) suggestion strikes the current folder and shows the move t
         { id: 'col-watch', user_id: 'user-test', name: 'Watch Later', description: null, created_at: now, updated_at: now },
       ],
     },
-    [makeEnrichment({ bookmark_id: SYNCED_ID, suggested_collection_id: 'col-recipes' })],
+    [makeEnrichment({ bookmark_id: SYNCED_ID, suggested_collection_id: 'col-recipes', confidence: 0.9 })],
   );
 
   const screen = await renderDetail();

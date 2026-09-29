@@ -4543,18 +4543,25 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const latest = bookmarksRef.current?.find(
           (item) => item.id === bookmarkId,
         );
-        const metadata: EnrichmentMetadataHint | undefined =
-          overrideMetadata ??
-          (latest
-            ? {
-                title: latest.title,
-                description: latest.description,
-                notes: latest.notes,
-                site_name: latest.site_name,
-                content_type: latest.content_type,
-                collection_id: latest.collection_id,
-              }
-            : undefined);
+        // If the bookmark has pending sync work (e.g. an un-uploaded folder move),
+        // flush sync so the cloud row reflects the user's latest organizational state.
+        if (latest?.sync_status === "pending" && !syncPausedRef.current) {
+          try {
+            await syncNowRef.current?.();
+          } catch {
+            // Best effort: proceed with local metadata hint if sync fails
+          }
+        }
+        const metadata: EnrichmentMetadataHint | undefined = latest
+          ? {
+              title: overrideMetadata?.title ?? latest.title,
+              description: overrideMetadata?.description ?? latest.description,
+              notes: overrideMetadata?.notes ?? latest.notes,
+              site_name: overrideMetadata?.site_name ?? latest.site_name,
+              content_type: overrideMetadata?.content_type ?? latest.content_type,
+              collection_id: overrideMetadata?.collection_id ?? latest.collection_id,
+            }
+          : overrideMetadata;
         const activeLocale = localeRef.current;
         let enrichment: AIEnrichment;
         try {
@@ -4763,7 +4770,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // missing session or a synchronous throw must not escape either):
           // an enqueue failure must never change what the caller sees for
           // this 429, and is never retried here.
-          if (session) {
+          // Only enqueue to the server-side overflow queue if the bookmark's local
+          // mutations have uploaded (sync_status !== 'pending'). If the local row still
+          // has pending sync work (e.g. an un-uploaded collection move while sync is paused),
+          // the server worker would reason from the stale cloud row. In that case, let local
+          // retry (armed via armAiRetry above) retry when sync resumes and the row uploads.
+          const hasPendingSync =
+            bookmarksRef.current?.find((item) => item.id === bookmarkId)
+              ?.sync_status === "pending";
+          if (session && !hasPendingSync) {
             // STASH-4D/4E: production keeps reporting "new row violates row-
             // level security policy for table pending_ai_enrichment" on this
             // insert even on builds carrying STASH-49's fix (this call

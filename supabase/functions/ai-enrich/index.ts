@@ -611,11 +611,10 @@ async function processEnrichmentRow(
   );
   // Hurdle: if the bookmark already lives in a collection, changing it requires
   // convincing confidence (>= 0.85). If the model's confidence does not clear this
-  // hurdle, default to retaining the current collection identity rather than
-  // proposing a weak or lateral reclassification (STASH-74).
+  // hurdle, reject the move suggestion (null) rather than encoding the incumbent as one (STASH-74).
   const clearsMoveHurdle = output.confidence !== null && output.confidence >= FOLDER_MOVE_MIN_CONFIDENCE;
   const effectiveMatchedId =
-    isMove && !clearsMoveHurdle ? bookmark.collection_id : (matched?.id ?? null);
+    isMove && !clearsMoveHurdle ? null : (matched?.id ?? null);
   const effectiveSuggestedName =
     isMove && !clearsMoveHurdle
       ? null
@@ -1233,7 +1232,11 @@ Deno.serve(async (req) => {
       // this existed. Same on_conflict/ignore-duplicates shape as the
       // client's own enqueuePendingEnrichment (api/bookmarks.ts) so a bulk
       // import that's already queued this bookmark itself no-ops here too.
-      if (degradedReason === 'rate_limited') {
+      // If the client passed an un-uploaded collection hint (effectiveCollectionId !== bookmark.collection_id),
+      // do not enqueue into the background retry queue where the worker would evaluate against the stale
+      // bookmark.collection_id. The client's local retry will re-trigger once the mutation uploads.
+      const hasStaleCloudCollection = effectiveCollectionId !== bookmark.collection_id;
+      if (degradedReason === 'rate_limited' && !hasStaleCloudCollection) {
         // The slot spent above (request_ai_enrichment_slot(_for)) paid for an
         // attempt that the provider itself rejected — refund it before
         // queueing the retry, for the same reason processEnrichmentRow's
@@ -1289,11 +1292,10 @@ Deno.serve(async (req) => {
     );
     // Hurdle: if the bookmark already lives in a collection, changing it requires
     // convincing confidence (>= 0.85). If the model's confidence does not clear this
-    // hurdle, default to retaining the current collection identity rather than
-    // proposing a weak or lateral reclassification (STASH-74).
+    // hurdle, reject the move suggestion (null) rather than encoding the incumbent as one (STASH-74).
     const clearsMoveHurdle = output.confidence !== null && output.confidence >= FOLDER_MOVE_MIN_CONFIDENCE;
     const suggestedCollectionId =
-      isMove && !clearsMoveHurdle ? effectiveCollectionId : (matchedCollection?.id ?? null);
+      isMove && !clearsMoveHurdle ? null : (matchedCollection?.id ?? null);
     const suggestedCollectionName =
       isMove && !clearsMoveHurdle
         ? null
