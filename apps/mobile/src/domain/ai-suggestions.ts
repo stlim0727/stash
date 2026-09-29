@@ -214,9 +214,11 @@ export function pendingSuggestedFolder(
     return null;
   }
   const confidence = enrichment?.confidence ?? null;
-  if (folder.from) {
-    // MOVE: Bookmark already has a collection assigned. Enforce the higher hurdle
-    // so we never suggest lateral moves or weak reclassifications over user-set info (STASH-74).
+  const isMove = Boolean(currentCollectionId);
+  if (isMove) {
+    // MOVE: Bookmark already has a collection assigned (even if absent from the current
+    // snapshot). Enforce the higher hurdle so we never suggest lateral moves or weak
+    // reclassifications over user-set info (STASH-74).
     if (confidence !== null && confidence < FOLDER_MOVE_MIN_CONFIDENCE) {
       return null;
     }

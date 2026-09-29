@@ -354,7 +354,19 @@ test('pendingSuggestedFolder enforces confidence hurdles for moves and adds (STA
     from: null,
   });
 
-  // Case 6: confidence is null for add -> surfaced (preserves heuristic / unrated model add behavior)
+  // Case 6: bookmark has an orphaned/unknown currentCollectionId (e.g. 'col-orphaned' not in COLLECTIONS)
+  // Even though from is null, it is still a MOVE and requires the 0.85 hurdle!
+  const enrichmentOrphanedLowConf = makeFolderEnrichment({ suggested_collection_id: 'col-recipes', confidence: 0.7 });
+  assert.equal(pendingSuggestedFolder(enrichmentOrphanedLowConf, COLLECTIONS, 'col-orphaned'), null);
+  const enrichmentOrphanedHighConf = makeFolderEnrichment({ suggested_collection_id: 'col-recipes', confidence: 0.9 });
+  assert.deepEqual(pendingSuggestedFolder(enrichmentOrphanedHighConf, COLLECTIONS, 'col-orphaned'), {
+    kind: 'existing',
+    id: 'col-recipes',
+    name: 'Recipes',
+    from: null,
+  });
+
+  // Case 7: confidence is null for add -> surfaced (preserves heuristic / unrated model add behavior)
   assert.deepEqual(pendingSuggestedFolder(enrichmentNullConf, COLLECTIONS, null), {
     kind: 'existing',
     id: 'col-recipes',
