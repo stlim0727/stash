@@ -215,6 +215,17 @@ test('resolveSuggestedFolder returns null when already in the suggested folder',
   assert.equal(resolveSuggestedFolder(enrichment, COLLECTIONS, 'col-recipes'), null);
 });
 
+test('resolveSuggestedFolder prefers incumbent when duplicate collections share the same name', () => {
+  const duplicates = [
+    { id: 'c1', name: 'Food' },
+    { id: 'c2', name: 'Food' },
+  ];
+  const enrichment = makeFolderEnrichment({ suggested_collection_name: 'Food' });
+  // Bookmark is in c2; suggested name is 'Food'. Must resolve to incumbent (c2) and return null (already in folder),
+  // instead of proposing a bogus move to c1.
+  assert.equal(resolveSuggestedFolder(enrichment, duplicates, 'c2'), null);
+});
+
 test('resolveSuggestedFolder returns null with no hint or no enrichment', () => {
   assert.equal(resolveSuggestedFolder(null, COLLECTIONS, null), null);
   assert.equal(resolveSuggestedFolder(makeFolderEnrichment({}), COLLECTIONS, null), null);

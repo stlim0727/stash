@@ -24,14 +24,25 @@ export function collectionMatchKey(name: string): string {
  * Find the existing collection an AI-suggested name refers to, tolerant of
  * case/spacing/punctuation. Returns the matched collection, or null when the
  * name is blank or nothing fits (the signal to propose creating it).
+ *
+ * When `incumbentCollectionId` is provided and that collection's name matches
+ * the suggested name key, it is preferred over other duplicate-named collections
+ * to avoid bogus same-name moves (e.g. Food -> Food).
  */
 export function matchSuggestedCollection(
   collections: readonly NamedCollection[],
   suggestedName: string | null | undefined,
+  incumbentCollectionId?: string | null,
 ): NamedCollection | null {
   const key = suggestedName ? collectionMatchKey(suggestedName) : '';
   if (!key) {
     return null;
+  }
+  if (incumbentCollectionId) {
+    const incumbent = collections.find((col) => col.id === incumbentCollectionId);
+    if (incumbent && collectionMatchKey(incumbent.name) === key) {
+      return incumbent;
+    }
   }
   return collections.find((collection) => collectionMatchKey(collection.name) === key) ?? null;
 }

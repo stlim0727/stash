@@ -162,6 +162,7 @@ export interface EnrichmentMetadataHint {
   notes?: string | null;
   site_name?: string | null;
   content_type?: string | null;
+  collection_id?: string | null;
 }
 
 type PostgrestSort = 'created_at.desc' | 'created_at.asc' | 'updated_at.desc' | 'updated_at.asc';

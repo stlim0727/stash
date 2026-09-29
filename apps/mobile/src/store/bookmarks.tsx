@@ -4552,6 +4552,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 notes: latest.notes,
                 site_name: latest.site_name,
                 content_type: latest.content_type,
+                collection_id: latest.collection_id,
               }
             : undefined);
         const activeLocale = localeRef.current;

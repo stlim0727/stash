@@ -599,7 +599,11 @@ async function processEnrichmentRow(
     return;
   }
 
-  const matched = matchSuggestedCollection(ctx.collections, output.suggested_collection);
+  const matched = matchSuggestedCollection(
+    ctx.collections,
+    output.suggested_collection,
+    bookmark.collection_id,
+  );
   const isMove = Boolean(
     bookmark.collection_id &&
       ((matched && matched.id !== bookmark.collection_id) ||
@@ -1157,8 +1161,21 @@ Deno.serve(async (req) => {
       }
     }
 
-    const currentCollectionName = bookmark.collection_id
-      ? (collections.find((col) => col.id === bookmark.collection_id)?.name ?? null)
+    // The device may pass an authenticated hint of its current local collection
+    // (e.g. if the bookmark was moved locally just before requesting enrichment).
+    // Verify that the hinted collection exists in the user's collections list.
+    const effectiveCollectionId =
+      clientMetadata && 'collection_id' in clientMetadata
+        ? (typeof clientMetadata.collection_id === 'string' &&
+           collections.some((col) => col.id === clientMetadata.collection_id)
+            ? clientMetadata.collection_id
+            : clientMetadata.collection_id === null
+              ? null
+              : bookmark.collection_id)
+        : bookmark.collection_id;
+
+    const currentCollectionName = effectiveCollectionId
+      ? (collections.find((col) => col.id === effectiveCollectionId)?.name ?? null)
       : null;
     const input: EnrichmentInput = {
       url: bookmark.url,
@@ -1260,10 +1277,14 @@ Deno.serve(async (req) => {
     // existing folder" and "make a new one", surfaced as distinct chips client-
     // side. The name is null when the resolution found an existing match (the id
     // covers it) or the provider proposed nothing.
-    const matchedCollection = matchSuggestedCollection(collections, output.suggested_collection);
+    const matchedCollection = matchSuggestedCollection(
+      collections,
+      output.suggested_collection,
+      effectiveCollectionId,
+    );
     const isMove = Boolean(
-      bookmark.collection_id &&
-        ((matchedCollection && matchedCollection.id !== bookmark.collection_id) ||
+      effectiveCollectionId &&
+        ((matchedCollection && matchedCollection.id !== effectiveCollectionId) ||
           (!matchedCollection && output.suggested_collection?.trim())),
     );
     // Hurdle: if the bookmark already lives in a collection, changing it requires
@@ -1272,7 +1293,7 @@ Deno.serve(async (req) => {
     // proposing a weak or lateral reclassification (STASH-74).
     const clearsMoveHurdle = output.confidence !== null && output.confidence >= FOLDER_MOVE_MIN_CONFIDENCE;
     const suggestedCollectionId =
-      isMove && !clearsMoveHurdle ? bookmark.collection_id : (matchedCollection?.id ?? null);
+      isMove && !clearsMoveHurdle ? effectiveCollectionId : (matchedCollection?.id ?? null);
     const suggestedCollectionName =
       isMove && !clearsMoveHurdle
         ? null

@@ -109,7 +109,9 @@ export function resolveSuggestedFolder(
     ? collections.find((collection) => collection.id === enrichment.suggested_collection_id)
     : undefined;
   const byName = suggestedNameKey
-    ? collections.find((collection) => collectionMatchKey(collection.name) === suggestedNameKey)
+    ? (fromCollection && collectionMatchKey(fromCollection.name) === suggestedNameKey
+        ? fromCollection
+        : collections.find((collection) => collectionMatchKey(collection.name) === suggestedNameKey))
     : undefined;
   const existing = byId ?? byName;
   if (existing) {
