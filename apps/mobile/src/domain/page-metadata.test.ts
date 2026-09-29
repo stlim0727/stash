@@ -9,6 +9,7 @@ import {
   fetchNaverMapFolderMetadata,
   fetchPageMetadata,
   htmlHeadSummary,
+  isChallengeOrBoilerplateTitle,
   isGenericNaverMapTitle,
   isNaverMapUrl,
   isYoutubeAvailabilityCandidate,
@@ -609,6 +610,72 @@ test('fetchPageMetadata uses Reddit oEmbed after an app share-link redirect (STA
       'https://www.reddit.com/r/korea/s/shareToken',
       `https://www.reddit.com/oembed?url=${encodeURIComponent(finalUrl)}`,
     ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('isChallengeOrBoilerplateTitle recognizes bot challenge and verification interstitials', () => {
+  assert.equal(isChallengeOrBoilerplateTitle('Reddit - Please wait for verification'), true);
+  assert.equal(isChallengeOrBoilerplateTitle('Please wait for verification'), true);
+  assert.equal(isChallengeOrBoilerplateTitle('Just a moment...'), true);
+  assert.equal(isChallengeOrBoilerplateTitle('Attention Required! | Cloudflare'), true);
+  assert.equal(isChallengeOrBoilerplateTitle('Checking your browser before accessing site'), true);
+  assert.equal(isChallengeOrBoilerplateTitle('How to Set Up Claude Code Agent Teams'), false);
+  assert.equal(isChallengeOrBoilerplateTitle(''), false);
+  assert.equal(isChallengeOrBoilerplateTitle(undefined), false);
+});
+
+test('parsePageMetadata rejects challenge titles and returns undefined title', () => {
+  const parsed = parsePageMetadata(
+    '<head><title>Reddit - Please wait for verification</title></head>',
+    'https://www.reddit.com/r/ClaudeCode/s/xtn2xWW6t2',
+  );
+  assert.equal(parsed.title, undefined);
+});
+
+test('fetchPageMetadata ignores verification challenge title and uses Reddit oEmbed after redirect (STASH-75)', async () => {
+  const originalFetch = globalThis.fetch;
+  const finalUrl =
+    'https://www.reddit.com/r/ClaudeCode/comments/1qz8tyy/how_to_set_up_claude_code_agent_teams_full/';
+  globalThis.fetch = (async (target: string) => {
+    if (target.startsWith('https://www.reddit.com/oembed')) {
+      return {
+        ok: true,
+        json: async () => ({
+          title: 'How to Set Up Claude Code Agent Teams (Full Walkthrough + What Actually Changed)',
+          provider_name: 'Reddit',
+          thumbnail_url: 'https://preview.redd.it/example.jpg',
+        }),
+      } as unknown as Response;
+    }
+    return htmlResponse('<head><title>Reddit - Please wait for verification</title></head>', {
+      url: finalUrl,
+    });
+  }) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata('https://www.reddit.com/r/ClaudeCode/s/xtn2xWW6t2');
+    assert.equal(
+      meta?.title,
+      'How to Set Up Claude Code Agent Teams (Full Walkthrough + What Actually Changed)',
+    );
+    assert.equal(meta?.site_name, 'Reddit');
+    assert.equal(meta?.preview_image_url, 'https://preview.redd.it/example.jpg');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchPageMetadata leaves title undefined when page returns verification challenge with no redirect or oEmbed (STASH-75)', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    return htmlResponse('<head><title>Reddit - Please wait for verification</title></head>', {
+      url: 'https://www.reddit.com/r/ClaudeCode/s/xtn2xWW6t2',
+    });
+  }) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata('https://www.reddit.com/r/ClaudeCode/s/xtn2xWW6t2');
+    assert.equal(meta?.title, undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }

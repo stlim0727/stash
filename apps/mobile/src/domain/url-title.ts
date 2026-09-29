@@ -104,9 +104,23 @@ export function describeKnownUrl(rawUrl: string): UrlTitle | null {
     return { title: user ? `TikTok by @${user}` : 'TikTok video', preview_image_url: null };
   }
 
+  if (host === 'redd.it') {
+    return segs.length > 0 ? { title: 'Reddit post', preview_image_url: null } : null;
+  }
+
   if (host === 'reddit.com' || host === 'old.reddit.com') {
-    if (segs[0] !== 'r' || segs[2] !== 'comments') {
+    if (segs[0] === 'comments' && segs[1]) {
+      if (segs[2] && !looksOpaqueId(segs[2])) {
+        return null;
+      }
+      return { title: 'Reddit post', preview_image_url: null };
+    }
+    if (segs[0] !== 'r' || (segs[2] !== 'comments' && segs[2] !== 's')) {
       return null; // a subreddit or listing page, not a post
+    }
+    // Reddit /s/ share links: segs[0] === 'r', segs[1] === subreddit, segs[2] === 's', segs[3] === opaqueId
+    if (segs[2] === 's') {
+      return { title: `Reddit post in r/${segs[1]}`, preview_image_url: null };
     }
     // Reddit is the exception among these platforms: a comment URL usually
     // carries a readable title slug (segs[4], e.g. `how_to_make_pancakes`), which
@@ -158,7 +172,19 @@ export function isRepairableSourceTitle(bookmark: { url: string | null; title: s
   const trimmed = bookmark.title.trim().toLowerCase();
   try {
     const host = new URL(bookmark.url).hostname.toLowerCase();
-    if (trimmed === 'reddit' && (host === 'reddit.com' || host.endsWith('.reddit.com'))) {
+    if (
+      (trimmed === 'reddit' ||
+        trimmed.includes('please wait for verification') ||
+        trimmed.includes('wait for verification')) &&
+      (host === 'reddit.com' || host.endsWith('.reddit.com') || host === 'redd.it')
+    ) {
+      return true;
+    }
+    if (
+      trimmed === 'just a moment...' ||
+      trimmed.startsWith('attention required! | cloudflare') ||
+      trimmed.includes('checking your browser')
+    ) {
       return true;
     }
     if (
