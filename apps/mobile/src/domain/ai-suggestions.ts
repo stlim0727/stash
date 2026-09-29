@@ -215,7 +215,7 @@ export function pendingSuggestedFolder(
   if (folder.from) {
     // MOVE: Bookmark already has a collection assigned. Enforce the higher hurdle
     // so we never suggest lateral moves or weak reclassifications over user-set info (STASH-74).
-    if (confidence === null || confidence < FOLDER_MOVE_MIN_CONFIDENCE) {
+    if (confidence !== null && confidence < FOLDER_MOVE_MIN_CONFIDENCE) {
       return null;
     }
   } else {

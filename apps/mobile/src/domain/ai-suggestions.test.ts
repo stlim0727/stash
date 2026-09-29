@@ -307,17 +307,22 @@ test('pendingSuggestedFolder enforces confidence hurdles for moves and adds (STA
   assert.equal(FOLDER_MOVE_MIN_CONFIDENCE, 0.85);
 
   // MOVE: bookmark is in col-watch, AI suggests col-recipes
-  // Case 1: confidence is null -> suppressed (protects user filing against unrated/heuristic changes)
-  const enrichmentNullConf = makeFolderEnrichment({ suggested_collection_id: 'col-recipes', confidence: null });
-  assert.equal(pendingSuggestedFolder(enrichmentNullConf, COLLECTIONS, 'col-watch'), null);
-
-  // Case 2: confidence is below hurdle (0.8 < 0.85) -> suppressed (e.g. synonym lateral churn like Food -> 음식 및 요리)
+  // Case 1: confidence is below hurdle (0.8 < 0.85) -> suppressed (e.g. synonym lateral churn like Food -> 음식 및 요리)
   const enrichmentLowConf = makeFolderEnrichment({ suggested_collection_id: 'col-recipes', confidence: 0.8 });
   assert.equal(pendingSuggestedFolder(enrichmentLowConf, COLLECTIONS, 'col-watch'), null);
 
-  // Case 3: confidence clears hurdle (0.9 >= 0.85) -> surfaced as a move
+  // Case 2: confidence clears hurdle (0.9 >= 0.85) -> surfaced as a move
   const enrichmentHighConf = makeFolderEnrichment({ suggested_collection_id: 'col-recipes', confidence: 0.9 });
   assert.deepEqual(pendingSuggestedFolder(enrichmentHighConf, COLLECTIONS, 'col-watch'), {
+    kind: 'existing',
+    id: 'col-recipes',
+    name: 'Recipes',
+    from: { id: 'col-watch', name: 'Watch Later' },
+  });
+
+  // Case 3: confidence is null -> surfaced (unrated / mock tests preserve move capability)
+  const enrichmentNullConf = makeFolderEnrichment({ suggested_collection_id: 'col-recipes', confidence: null });
+  assert.deepEqual(pendingSuggestedFolder(enrichmentNullConf, COLLECTIONS, 'col-watch'), {
     kind: 'existing',
     id: 'col-recipes',
     name: 'Recipes',
