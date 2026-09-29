@@ -52,6 +52,7 @@
           ]
         }
       ],
+      "./plugins/withShareReceiver.js",
       "@sentry/react-native/expo",
       "expo-notifications"
     ],
