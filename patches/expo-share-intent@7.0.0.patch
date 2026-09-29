@@ -1,5 +1,5 @@
 diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-index 0153c89..d6b65fd 100644
+index 0153c89..22a854d 100644
 --- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 +++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 @@ -29,6 +29,7 @@ import android.webkit.MimeTypeMap
@@ -28,7 +28,7 @@ index 0153c89..d6b65fd 100644
  
          @SuppressLint("Range")
          private fun getFileInfo(uri: Uri): Map<String, String?> {
-@@ -113,7 +125,21 @@ class ExpoShareIntentModule : Module() {
+@@ -113,7 +125,25 @@ class ExpoShareIntentModule : Module() {
  
          fun handleShareIntent(intent: Intent) {
              val activity = instance?.currentActivity
@@ -55,7 +55,7 @@ index 0153c89..d6b65fd 100644
                  val newIntent = Intent(intent).apply {
                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                  }
-@@ -121,19 +147,46 @@ class ExpoShareIntentModule : Module() {
+@@ -121,37 +151,71 @@ class ExpoShareIntentModule : Module() {
                  activity.finish()
                  return
              }
@@ -105,9 +105,11 @@ index 0153c89..d6b65fd 100644
 -                } else if (intent.action == Intent.ACTION_VIEW) {
 -                    notifyShareIntent(mapOf( "text" to intent.dataString, "type" to "text"))
                  } else {
-                    notifyTerminalError("Invalid action for text sharing: " + intent.action)
+-                    notifyError("Invalid action for text sharing: " + intent.action)
++                    notifyTerminalError("Invalid action for text sharing: " + intent.action)
                  }
-@@ -142,14 +195,21 @@ class ExpoShareIntentModule : Module() {
+             } else {
+                 // files / medias
                  if (intent.action == Intent.ACTION_SEND) {
                      val uri = intent.parcelable<Uri>(Intent.EXTRA_STREAM);
                      if (uri != null) {
@@ -117,7 +119,8 @@ index 0153c89..d6b65fd 100644
 +                            "meta" to mapOf("attemptId" to attemptId),
 +                        ))
                      } else {
-                        notifyTerminalError("empty uri for file sharing: " + intent.action)
+-                        notifyError("empty uri for file sharing: " + intent.action)
++                        notifyTerminalError("empty uri for file sharing: " + intent.action)
                      }
                  } else if (intent.action == Intent.ACTION_SEND_MULTIPLE) {
                      val uris = intent.parcelableArrayList<Uri>(Intent.EXTRA_STREAM)
@@ -129,9 +132,12 @@ index 0153c89..d6b65fd 100644
 +                            "meta" to mapOf("attemptId" to attemptId),
 +                        ))
                      } else {
-                        notifyTerminalError("empty uris array for file sharing: " + intent.action)
+-                        notifyError("empty uris array for file sharing: " + intent.action)
++                        notifyTerminalError("empty uris array for file sharing: " + intent.action)
                      }
-@@ -177,13 +237,16 @@ class ExpoShareIntentModule : Module() {
+                 } else {
+                     notifyError("Invalid action for file sharing: " + intent.action)
+@@ -177,13 +241,16 @@ class ExpoShareIntentModule : Module() {
      override fun definition() = ModuleDefinition {
          Name("ExpoShareIntentModule")
  
@@ -151,7 +157,7 @@ index 0153c89..d6b65fd 100644
                  ExpoShareIntentSingleton.intent = null
              }
          }
-@@ -192,11 +255,45 @@ class ExpoShareIntentModule : Module() {
+@@ -192,11 +259,45 @@ class ExpoShareIntentModule : Module() {
              ExpoShareIntentSingleton.intent = null
          }
  
@@ -249,7 +255,7 @@ index db573ec..d244ea9 100644
      }
  }
 \ No newline at end of file
-diff --git a/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt b/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt
+diff --git a/share-patched/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt b/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt
 new file mode 100644
 index 0000000..c101682
 --- /dev/null

@@ -2931,13 +2931,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           (updatedTitle == null || updatedTitleDerived === true || isRepairable);
 
         const titleChanged = titleCanBeImproved && updatedTitle !== existing.title;
-        const contentChanged = titleChanged || notesChanged || notesFormatChanged;
+        // A native share's attempt id is also its retry key.  When a URL is
+        // already present under its canonical form, retain that key on the
+        // existing row before acknowledging the Android intent.  A later
+        // replay can then find this row even after the user changes its URL or
+        // moves it to Trash, instead of treating the edited content as new.
+        const captureClientIdChanged =
+          capture_client_id !== undefined && existing.client_id !== capture_client_id;
+        const contentChanged =
+          titleChanged || notesChanged || notesFormatChanged || captureClientIdChanged;
         const syncsRemotely = contentChanged ? hasSyncedOnce(existing.id) : false;
 
         const updated: Bookmark = {
           ...existing,
           title: updatedTitle,
           title_is_derived: updatedTitleDerived,
+          client_id: capture_client_id ?? existing.client_id,
           notes: updatedNotes,
           notes_format: updatedNotesFormat,
           last_saved_at: now,

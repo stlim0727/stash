@@ -1438,6 +1438,42 @@ test("native capture replay finds a trashed capture by client id", async () => {
   expect(fakeRepo.__queue()).toHaveLength(0);
 });
 
+test("native URL duplicate associates its attempt id before acknowledgement", async () => {
+  const attemptId = "3f2b9a00-176f-4f82-bb31-6e7b23123c92";
+  const original = makeStoredBookmark({
+    id: SYNCED_ID,
+    url: "https://example.com/article?utm_source=share",
+    client_id: "existing-url-client-id",
+  });
+  fakeRepo.__reset([original]);
+  const { result } = await renderStore();
+
+  let duplicate!: ReturnType<typeof result.current.addBookmark>;
+  await act(async () => {
+    duplicate = result.current.addBookmark({
+      url: "https://example.com/article",
+      capture_client_id: attemptId,
+    });
+    if (duplicate.status !== "invalid") await duplicate.persisted;
+  });
+
+  expect(duplicate.status).toBe("duplicate");
+  expect(fakeRepo.__bookmarks()[0]?.client_id).toBe(attemptId);
+  await act(async () => {
+    result.current.updateBookmarkFields(SYNCED_ID, { title: "Edited after share" });
+    result.current.trashBookmark(SYNCED_ID);
+  });
+
+  const replayed = result.current.addBookmark({
+    url: "https://example.com/article",
+    capture_client_id: attemptId,
+  });
+  expect(replayed.status).toBe("duplicate");
+  if (replayed.status === "invalid") throw new Error("expected duplicate capture");
+  expect(replayed.bookmark?.id).toBe(SYNCED_ID);
+  expect(fakeRepo.__bookmarks()).toHaveLength(1);
+});
+
 test("JSON restore keeps plain body and Markdown personal notes in both row and create queue", async () => {
   const { result } = await renderStore();
   await act(async () => {
