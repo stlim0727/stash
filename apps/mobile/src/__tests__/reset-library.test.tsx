@@ -172,15 +172,20 @@ beforeEach(async () => {
   );
   fakeRepo.__setMeta(SYNCED_USER_ID_KEY, 'real-user');
   fakeRepo.__setMeta(LAST_PULLED_AT_KEY, '2026-06-12T10:00:00.000Z');
-  await fakeRepo.repository.enqueue(updateEntry(REMOTE_ID));
   apiMock.__setRemote([{ id: REMOTE_ID }]);
   authMock.__setAuth({ status: 'authenticated', session: realSession, userId: 'real-user' });
 });
 
-async function mountSettled() {
+async function mountSettled(withFailedEdit = true) {
+  if (withFailedEdit) {
+    await fakeRepo.repository.enqueue(updateEntry(REMOTE_ID));
+  }
   const rendered = await renderHook(() => useBookmarks(), { wrapper });
   await waitFor(() => expect(rendered.result.current.isLoading).toBe(false));
   await waitFor(() => expect(rendered.result.current.inbox.map((b) => b.id)).toContain(REMOTE_ID));
+  if (!withFailedEdit) {
+    return rendered;
+  }
   // Let the startup sync settle: the queued edit fails fast and stays queued.
   await waitFor(() => expect(rendered.result.current.isSyncing).toBe(false));
   await waitFor(() =>
@@ -250,7 +255,7 @@ test('a failed remote wipe changes nothing locally', async () => {
 });
 
 test('an AI enrichment in flight when the reset lands is discarded, not resurrected (PR #604 review)', async () => {
-  const { result } = await mountSettled();
+  const { result } = await mountSettled(false);
 
   // Start an enrichment request and hold its response open across the reset.
   let resolveEnrichment!: (value: unknown) => void;
@@ -282,7 +287,7 @@ test('an AI enrichment in flight when the reset lands is discarded, not resurrec
 });
 
 test('an AI enrichment FAILING after the reset arms no retry bookkeeping for the deleted bookmark', async () => {
-  const { result } = await mountSettled();
+  const { result } = await mountSettled(false);
 
   let rejectEnrichment!: (error: Error) => void;
   apiMock.__requestEnrichmentMock.mockImplementationOnce(
