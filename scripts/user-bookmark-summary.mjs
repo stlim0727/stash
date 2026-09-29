@@ -293,9 +293,17 @@ Options:
       lastSaved: null,
     };
     const meta = typeof u.user_metadata === 'object' && u.user_metadata !== null ? u.user_metadata : {};
-    const platform = ['android', 'ios', 'web'].includes(meta.platform) ? meta.platform : null;
-    const appVersion = validAppVersion(safeString(meta.app_version)) || validAppVersion(safeString(sync?.app_version));
-    const appVersionUpdatedAt = getLatestTimestamp([meta.app_version_updated_at], now.getTime());
+    const metadataVersion = validAppVersion(safeString(meta.app_version));
+    const syncVersion = validAppVersion(safeString(sync?.app_version));
+    // These values are written independently.  Keep a fallback sync version
+    // with the sync record that observed it rather than attributing it to a
+    // possibly stale metadata platform or metadata timestamp.
+    const usesMetadataVersion = Boolean(metadataVersion);
+    const appVersion = metadataVersion || syncVersion;
+    const platform = usesMetadataVersion && ['android', 'ios', 'web'].includes(meta.platform) ? meta.platform : null;
+    const appVersionUpdatedAt = usesMetadataVersion
+      ? getLatestTimestamp([meta.app_version_updated_at], now.getTime())
+      : getLatestTimestamp([sync?.last_synced_at], now.getTime());
     const versionSeen = appVersionUpdatedAt ? appVersionUpdatedAt.slice(0, 10) : null;
 
     const effectiveLastActive = getLatestTimestamp([

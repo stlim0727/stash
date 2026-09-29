@@ -1,7 +1,9 @@
 import { useSyncExternalStore } from 'react';
 
 export const PREVIEW_IMAGE_RETRY_MS = 60_000;
+export const MAX_AUTOMATIC_PREVIEW_IMAGE_RETRIES = 1;
 const failedImageUris = new Map<string, ReturnType<typeof setTimeout> | null>();
+const automaticRetryCounts = new Map<string, number>();
 const listeners = new Set<() => void>();
 let failureVersion = 0;
 
@@ -27,11 +29,25 @@ export function markPreviewImageFailed(uri: string | null | undefined): void {
     notify();
     return;
   }
-  // A transport error is not permanent. Expiry notifies mounted screens too,
-  // allowing them to retry without navigation or a full app restart.
-  const timer = setTimeout(() => clearPreviewImageFailed(uri), PREVIEW_IMAGE_RETRY_MS);
-  (timer as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
+  // We cannot distinguish HTTP 404/expired URLs from transient transport
+  // failures here. Allow one automatic retry, then retain the fallback until
+  // a user refresh clears the record. This avoids a permanent URI repeatedly
+  // mounting and flickering every minute.
+  const attempts = (automaticRetryCounts.get(uri) ?? 0) + 1;
+  automaticRetryCounts.set(uri, attempts);
+  const retryable = attempts <= MAX_AUTOMATIC_PREVIEW_IMAGE_RETRIES;
+  const timer = retryable
+    ? setTimeout(() => expirePreviewImageFailure(uri), PREVIEW_IMAGE_RETRY_MS)
+    : null;
+  (timer as (ReturnType<typeof setTimeout> & { unref?: () => void }) | null)?.unref?.();
   failedImageUris.set(uri, timer);
+  notify();
+}
+
+function expirePreviewImageFailure(uri: string): void {
+  const timer = failedImageUris.get(uri);
+  if (!timer) return;
+  failedImageUris.delete(uri);
   notify();
 }
 
@@ -55,6 +71,7 @@ export function clearPreviewImageFailed(uri: string | null | undefined): void {
   const timer = failedImageUris.get(uri);
   if (timer) clearTimeout(timer);
   failedImageUris.delete(uri);
+  automaticRetryCounts.delete(uri);
   notify();
 }
 
@@ -119,6 +136,7 @@ export function resetPreviewImageFailuresForTest(): void {
     if (timer) clearTimeout(timer);
   }
   failedImageUris.clear();
+  automaticRetryCounts.clear();
   listeners.clear();
   failureVersion = 0;
 }

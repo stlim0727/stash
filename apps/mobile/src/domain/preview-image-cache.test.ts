@@ -3,6 +3,7 @@ import test, { beforeEach } from 'node:test';
 
 import {
   PREVIEW_IMAGE_RETRY_MS,
+  MAX_AUTOMATIC_PREVIEW_IMAGE_RETRIES,
   selectPreviewImageUri,
   clearPreviewImageFailed,
   didPreviewImageLoad,
@@ -108,4 +109,21 @@ test('temporary failures expire and notify mounted previews to retry', (t) => {
   assert.equal(selectPreviewImageUri(null, uri), uri);
   assert.equal(notified, 1);
   unsubscribe();
+});
+
+test('remote preview retries automatically once, then remains failed until explicitly cleared', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const uri = 'https://example.com/permanently-missing.jpg';
+  markPreviewImageFailed(uri);
+  t.mock.timers.tick(PREVIEW_IMAGE_RETRY_MS);
+  assert.equal(isPreviewImageFailed(uri), false);
+
+  // The attempted reload fails again. It must not schedule another timer.
+  markPreviewImageFailed(uri);
+  t.mock.timers.tick(PREVIEW_IMAGE_RETRY_MS * 2);
+  assert.equal(MAX_AUTOMATIC_PREVIEW_IMAGE_RETRIES, 1);
+  assert.equal(isPreviewImageFailed(uri), true);
+
+  clearPreviewImageFailed(uri);
+  assert.equal(isPreviewImageFailed(uri), false);
 });

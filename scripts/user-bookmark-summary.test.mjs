@@ -26,7 +26,7 @@ async function report(t, args) {
       }
       if (request.searchParams.get('offset') === '0' && url.includes('bookmarks?')) return bookmarks;
       if (request.searchParams.get('offset') === '0' && url.includes('user_sync_status')) {
-        return [{ user_id: 'sync-version', app_version: '2.3.4' }];
+        return [{ user_id: 'sync-version', app_version: '2.3.4', last_synced_at: '2026-09-28T12:34:56Z' }];
       }
       if (request.searchParams.get('offset') === '0' && url.includes('cleanup')) {
         return [{ deleted_count: 7 }];
@@ -56,7 +56,10 @@ test('JSON report redacts anonymous IDs and separates versions, archives, and un
   assert.equal(data.users.at(-1).platform, null);
   assert.equal(data.users.at(-1).app_version, null);
   assert.equal(data.users.at(-1).email, 'hello@example.com');
-  assert.equal(data.users.find(user => user.id === 'sync-version').app_version, '2.3.4');
+  const syncVersionUser = data.users.find(user => user.id === 'sync-version');
+  assert.equal(syncVersionUser.app_version, '2.3.4');
+  assert.equal(syncVersionUser.platform, null);
+  assert.equal(syncVersionUser.version_seen, '2026-09-28');
 });
 
 test('version validation rejects long malformed metadata', async t => {
