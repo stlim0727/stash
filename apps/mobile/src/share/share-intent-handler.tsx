@@ -40,6 +40,11 @@ function nativeCaptureClientId(attemptId: string): string | undefined {
     : undefined;
 }
 
+function nativeErrorAttemptId(error: string): string | undefined {
+  const match = /\s\[attemptId=([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\]$/i.exec(error);
+  return match?.[1];
+}
+
 /**
  * Bridges the OS share sheet to local-first capture. When the app is opened
  * with a shared URL we persist it through the existing store (which queues it
@@ -109,6 +114,12 @@ export function ShareIntentHandler() {
     }
     reportedErrorRef.current = error;
     recordLog('error', '[share] native share intent error', [new Error(error)]);
+    const attemptId = nativeErrorAttemptId(error);
+    if (attemptId && typeof ShareIntentModule?.acknowledgeShareIntent === 'function') {
+      // Parser errors cannot become durable capture work. Retire them after
+      // recording diagnostics; durable save errors stay replayable.
+      void ShareIntentModule.acknowledgeShareIntent(attemptId).catch(() => {});
+    }
     show(t('toast.noLink'));
     router.replace('/');
     resetShareIntent();
@@ -209,7 +220,13 @@ export function ShareIntentHandler() {
     const saveStartedAt = Date.now();
     const captureClientId = nativeCaptureClientId(share.attemptId);
     const result = share.url
-      ? addBookmark({ url: share.url, title: share.title, title_is_derived: true })
+      ? addBookmark({
+          url: share.url,
+          title: share.title,
+          title_is_derived: true,
+          // Find a prior attempt even if its URL was later edited or trashed.
+          capture_client_id: captureClientId,
+        })
       : share.image
         ? addBookmark({ image: share.image, title: share.title, capture_client_id: captureClientId })
         : addBookmark({

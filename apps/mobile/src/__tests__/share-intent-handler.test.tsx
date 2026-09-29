@@ -630,7 +630,7 @@ describe('ShareIntentHandler', () => {
       shareIntent: {
         webUrl: 'https://example.com/durable',
         text: null,
-        meta: { attemptId: 'native-attempt-1' },
+        meta: { attemptId: '3f0a8077-18e3-4f30-9d47-2ba6cb6caf35' },
       },
       resetShareIntent: jest.fn(),
     };
@@ -641,7 +641,7 @@ describe('ShareIntentHandler', () => {
     await waitFor(async () => {
       const record = await readLastShareAttempt((key) => fakeRepo.repository.getMeta(key));
       expect(record).toMatchObject({
-        attemptId: 'native-attempt-1',
+        attemptId: '3f0a8077-18e3-4f30-9d47-2ba6cb6caf35',
         hasUrl: true,
         hasText: false,
         hasImage: false,
@@ -650,6 +650,9 @@ describe('ShareIntentHandler', () => {
       });
       expect(record?.receivedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
       expect(record?.persistedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      const bookmarks = await fakeRepo.repository.listBookmarks();
+      expect(bookmarks).toHaveLength(1);
+      expect(bookmarks[0]?.client_id).toBe('3f0a8077-18e3-4f30-9d47-2ba6cb6caf35');
     });
     unmount();
   });
@@ -719,7 +722,7 @@ describe('ShareIntentHandler', () => {
       hasShareIntent: false,
       shareIntent: { webUrl: null, text: null },
       resetShareIntent: jest.fn(),
-      error: 'empty uri for file sharing: android.intent.action.SEND',
+      error: 'empty uri for file sharing: android.intent.action.SEND [attemptId=3f0a8077-18e3-4f30-9d47-2ba6cb6caf35]',
     };
 
     const { findByText, unmount } = await renderHandler();
@@ -737,7 +740,12 @@ describe('ShareIntentHandler', () => {
     const loggedError = mockRecordLog.mock.calls.find(
       ([level, message]) => level === 'error' && message === '[share] native share intent error',
     )?.[2]?.[0];
-    expect(loggedError.message).toBe('empty uri for file sharing: android.intent.action.SEND');
+    expect(loggedError.message).toBe(
+      'empty uri for file sharing: android.intent.action.SEND [attemptId=3f0a8077-18e3-4f30-9d47-2ba6cb6caf35]',
+    );
+    expect(mockShareIntentModule.acknowledgeShareIntent).toHaveBeenCalledWith(
+      '3f0a8077-18e3-4f30-9d47-2ba6cb6caf35',
+    );
     unmount();
   });
 

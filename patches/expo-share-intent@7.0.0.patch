@@ -40,6 +40,10 @@ index 0153c89..d6b65fd 100644
 +                "module_handle",
 +            )
 +            if (attemptId != null) notifyDebug("share lifecycle: attemptId=$attemptId phase=module_handle")
++            fun notifyTerminalError(message: String) {
++                // JS needs this UUID to retire a terminal malformed share.
++                notifyError(message + " [attemptId=" + (attemptId ?: "") + "]")
++            }
 +            val isShareAction = intent.action == Intent.ACTION_SEND ||
 +                intent.action == Intent.ACTION_SEND_MULTIPLE
 +            // The upstream non-root relaunch was added for Google Files
@@ -82,7 +86,7 @@ index 0153c89..d6b65fd 100644
 +                // surfacing (STASH-2E: the previous unconditional notifyError here
 +                // fired on ordinary app opens, not failed shares).
 +                if (intent.action == Intent.ACTION_SEND || intent.action == Intent.ACTION_SEND_MULTIPLE) {
-+                    notifyError("null intent.type for action: " + intent.action)
++                    notifyTerminalError("null intent.type for action: " + intent.action)
 +                }
 +                return
 +            }
@@ -101,7 +105,7 @@ index 0153c89..d6b65fd 100644
 -                } else if (intent.action == Intent.ACTION_VIEW) {
 -                    notifyShareIntent(mapOf( "text" to intent.dataString, "type" to "text"))
                  } else {
-                     notifyError("Invalid action for text sharing: " + intent.action)
+                    notifyTerminalError("Invalid action for text sharing: " + intent.action)
                  }
 @@ -142,14 +195,21 @@ class ExpoShareIntentModule : Module() {
                  if (intent.action == Intent.ACTION_SEND) {
@@ -113,7 +117,7 @@ index 0153c89..d6b65fd 100644
 +                            "meta" to mapOf("attemptId" to attemptId),
 +                        ))
                      } else {
-                         notifyError("empty uri for file sharing: " + intent.action)
+                        notifyTerminalError("empty uri for file sharing: " + intent.action)
                      }
                  } else if (intent.action == Intent.ACTION_SEND_MULTIPLE) {
                      val uris = intent.parcelableArrayList<Uri>(Intent.EXTRA_STREAM)
@@ -125,7 +129,7 @@ index 0153c89..d6b65fd 100644
 +                            "meta" to mapOf("attemptId" to attemptId),
 +                        ))
                      } else {
-                         notifyError("empty uris array for file sharing: " + intent.action)
+                        notifyTerminalError("empty uris array for file sharing: " + intent.action)
                      }
 @@ -177,13 +237,16 @@ class ExpoShareIntentModule : Module() {
      override fun definition() = ModuleDefinition {

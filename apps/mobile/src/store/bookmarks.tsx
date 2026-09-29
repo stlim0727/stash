@@ -2990,7 +2990,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         return { status: "duplicate", bookmark: updated, persisted };
       }
 
-      const clientId = makeClientId();
+      const clientId = capture_client_id ?? makeClientId();
       const bookmark: Bookmark = {
         id: makeBookmarkId(),
         user_id: mockUserId,
