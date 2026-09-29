@@ -132,7 +132,11 @@ interface BookmarkRow {
   notes: string | null;
   site_name: string | null;
   content_type: string;
+  collection_id?: string | null;
 }
+
+/** Minimum confidence hurdle required before changing an already-filed bookmark's collection (STASH-74). */
+const FOLDER_MOVE_MIN_CONFIDENCE = 0.85;
 
 /**
  * Look up whether a user is an anonymous Supabase account, via the GoTrue admin
@@ -510,6 +514,9 @@ async function processEnrichmentRow(
     return;
   }
   const ctx = contextByUser.get(row.user_id) ?? EMPTY_ENRICHMENT_CONTEXT;
+  const currentCollectionName = bookmark.collection_id
+    ? (ctx.collections.find((col) => col.id === bookmark.collection_id)?.name ?? null)
+    : null;
   const input: EnrichmentInput = {
     url: bookmark.url,
     title: bookmark.title,
@@ -518,6 +525,7 @@ async function processEnrichmentRow(
     site_name: bookmark.site_name,
     content_type: bookmark.content_type,
     collections: ctx.collections.map((col) => col.name),
+    current_collection: currentCollectionName,
     existing_tags: ctx.existingTags,
     locale: row.locale ?? ctx.locale ?? undefined,
   };
@@ -592,15 +600,33 @@ async function processEnrichmentRow(
   }
 
   const matched = matchSuggestedCollection(ctx.collections, output.suggested_collection);
+  const isMove = Boolean(
+    bookmark.collection_id &&
+      ((matched && matched.id !== bookmark.collection_id) ||
+        (!matched && output.suggested_collection?.trim())),
+  );
+  // Hurdle: if the bookmark already lives in a collection, changing it requires
+  // convincing confidence (>= 0.85). If the model's confidence does not clear this
+  // hurdle, default to retaining the current collection identity rather than
+  // proposing a weak or lateral reclassification (STASH-74).
+  const clearsMoveHurdle = output.confidence !== null && output.confidence >= FOLDER_MOVE_MIN_CONFIDENCE;
+  const effectiveMatchedId =
+    isMove && !clearsMoveHurdle ? bookmark.collection_id : (matched?.id ?? null);
+  const effectiveSuggestedName =
+    isMove && !clearsMoveHurdle
+      ? null
+      : !matched && output.suggested_collection?.trim()
+        ? output.suggested_collection.trim()
+        : null;
+
   const enrichmentRow = {
     bookmark_id: row.bookmark_id,
     user_id: row.user_id,
     summary: output.summary,
     topics: output.topics,
     suggested_tags: output.suggested_tags,
-    suggested_collection_id: matched?.id ?? null,
-    suggested_collection_name:
-      !matched && output.suggested_collection?.trim() ? output.suggested_collection.trim() : null,
+    suggested_collection_id: effectiveMatchedId,
+    suggested_collection_name: effectiveSuggestedName,
     model: usedModel,
     status: 'complete',
     confidence: output.confidence,
@@ -808,7 +834,7 @@ async function runBatchWorker(): Promise<Response> {
 
     const bookmarkIds = [...new Set(eligible.map((row) => row.bookmark_id))];
     const bookmarksRes = await serviceRest(
-      `/bookmarks?id=in.(${bookmarkIds.join(',')})&select=id,user_id,url,title,description,notes,site_name,content_type`,
+      `/bookmarks?id=in.(${bookmarkIds.join(',')})&select=id,user_id,url,title,description,notes,site_name,content_type,collection_id`,
     );
     const bookmarks = bookmarksRes.ok ? ((await bookmarksRes.json()) as BookmarkRow[]) : [];
     const bookmarksById = new Map(bookmarks.map((b) => [b.id, b] as const));
@@ -944,7 +970,7 @@ Deno.serve(async (req) => {
 
   try {
     const bookmarkRes = await rest(
-      `/bookmarks?id=eq.${bookmarkId}&select=id,user_id,url,title,description,notes,site_name,content_type&limit=1`,
+      `/bookmarks?id=eq.${bookmarkId}&select=id,user_id,url,title,description,notes,site_name,content_type,collection_id&limit=1`,
     );
     if (!bookmarkRes.ok) {
       return json({ error: 'Failed to load bookmark' }, bookmarkRes.status);
@@ -1131,7 +1157,10 @@ Deno.serve(async (req) => {
       }
     }
 
-    const input = {
+    const currentCollectionName = bookmark.collection_id
+      ? (collections.find((col) => col.id === bookmark.collection_id)?.name ?? null)
+      : null;
+    const input: EnrichmentInput = {
       url: bookmark.url,
       title: overlay(bookmark.title, 'title'),
       description: overlay(bookmark.description, 'description'),
@@ -1139,6 +1168,7 @@ Deno.serve(async (req) => {
       site_name: overlay(bookmark.site_name, 'site_name'),
       content_type: overlay(bookmark.content_type, 'content_type') ?? bookmark.content_type,
       collections: collections.map((col) => col.name),
+      current_collection: currentCollectionName,
       existing_tags: existingTags,
       locale: resolvedLocale,
     };
@@ -1231,11 +1261,24 @@ Deno.serve(async (req) => {
     // side. The name is null when the resolution found an existing match (the id
     // covers it) or the provider proposed nothing.
     const matchedCollection = matchSuggestedCollection(collections, output.suggested_collection);
-    const suggestedCollectionId = matchedCollection?.id ?? null;
+    const isMove = Boolean(
+      bookmark.collection_id &&
+        ((matchedCollection && matchedCollection.id !== bookmark.collection_id) ||
+          (!matchedCollection && output.suggested_collection?.trim())),
+    );
+    // Hurdle: if the bookmark already lives in a collection, changing it requires
+    // convincing confidence (>= 0.85). If the model's confidence does not clear this
+    // hurdle, default to retaining the current collection identity rather than
+    // proposing a weak or lateral reclassification (STASH-74).
+    const clearsMoveHurdle = output.confidence !== null && output.confidence >= FOLDER_MOVE_MIN_CONFIDENCE;
+    const suggestedCollectionId =
+      isMove && !clearsMoveHurdle ? bookmark.collection_id : (matchedCollection?.id ?? null);
     const suggestedCollectionName =
-      !matchedCollection && output.suggested_collection?.trim()
-        ? output.suggested_collection.trim()
-        : null;
+      isMove && !clearsMoveHurdle
+        ? null
+        : !matchedCollection && output.suggested_collection?.trim()
+          ? output.suggested_collection.trim()
+          : null;
 
     const now = new Date().toISOString();
     const row = {

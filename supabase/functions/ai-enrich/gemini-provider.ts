@@ -115,7 +115,7 @@ function buildSystemInstruction(language: string): string {
     '- summary: one or two sentences adding a specific detail that is NOT already obvious from the title — what it specifically covers, a key fact, technique, or outcome. Never just restate, rephrase, or translate the title or content type (e.g. "this is a YouTube video about X"). Null if the metadata gives nothing beyond what the title already says.',
     '- topics: a few short lowercase subject keywords.',
     '- suggested_tags: up to five short lowercase tags, each with a confidence from 0 to 1. If one of the provided existing tags fits the bookmark, reuse its exact name verbatim (do NOT translate it) rather than coining a near-duplicate — this keeps the user\'s tag vocabulary consolidated. Only invent a new tag (in the target language) when no existing tag fits.',
-    '- suggested_collection: a single best-fit collection NAME for filing this bookmark. If one of the provided existing collections fits, copy its NAME verbatim (do NOT translate it). If none fit, propose a concise, reusable new collection name in Title Case (a broad theme, not a one-off). Use null only when the content is too sparse to categorize at all.',
+    '- suggested_collection: a single best-fit collection NAME for filing this bookmark. If the bookmark is already in a collection ("Current collection"), prefer keeping it in that exact collection verbatim unless the current collection is completely irrelevant. Never suggest lateral moves between synonyms, translations, or near-equivalent themes (e.g. do not suggest moving between "Food" and "음식 및 요리", or "Articles" and "글"). If one of the provided existing collections fits, copy its NAME verbatim (do NOT translate it). If none fit, propose a concise, reusable new collection name in Title Case (a broad theme, not a one-off). Use null only when the content is too sparse to categorize at all.',
     '- confidence: your overall confidence from 0 to 1.',
     'For topics and suggested_tags, use all supplied evidence: description, user notes, site name, content type, and meaningful URL path terms are as important as the title. When the title is generic, short, or brand-only, do not let it dominate; prefer the more specific non-title metadata.',
     'Do not suggest labels that only describe the storage action or media format, such as "watch later", "read later", "video", "article", "link", "비디오", or "나중에 보기". A generic existing tag or collection is not a fit by itself; return null/omit it unless you also have a more specific content-based label.',
@@ -188,6 +188,9 @@ function buildPrompt(input: EnrichmentInput): string {
   lines.push(
     'Tagging guidance: derive tags from the combined metadata above, not just the title. Favor concrete concepts from description, notes, site, content type, and URL path when they add signal.',
   );
+  if (input.current_collection) {
+    lines.push(`Current collection: "${input.current_collection}" (preserve unless clearly mismatched)`);
+  }
   if (input.collections && input.collections.length > 0) {
     lines.push(`Existing collections: ${input.collections.join(', ')}`);
   } else {

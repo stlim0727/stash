@@ -105,6 +105,28 @@ test('sends the api key header and existing collection names in the prompt', asy
   assert.match(calls[0].init?.body ?? '', /Development, Reading/);
 });
 
+test('sends current collection in the prompt and instructs preserving status quo (STASH-74)', async () => {
+  const { fetchImpl, calls } = stubFetch({
+    summary: null,
+    topics: [],
+    suggested_tags: [],
+    suggested_collection: 'Food',
+    confidence: 0.9,
+  });
+  const provider = new GeminiProvider({ apiKey: 'secret-key', fetchImpl });
+
+  await provider.enrich(
+    input({
+      collections: ['Food', '음식 및 요리'],
+      current_collection: 'Food',
+    }),
+  );
+  assert.equal(calls.length, 1);
+  const body = calls[0].init?.body ?? '';
+  assert.match(body, /Current collection: \\"Food\\" \(preserve unless clearly mismatched\)/);
+  assert.match(body, /Never suggest lateral moves between synonyms/);
+});
+
 test('includes the user\'s existing tags and asks the model to reuse them', async () => {
   const { fetchImpl, calls } = stubFetch({
     summary: null,

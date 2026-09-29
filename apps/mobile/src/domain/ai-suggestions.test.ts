@@ -20,6 +20,8 @@ import {
   suggestedFolderTokens,
   summaryToken,
   SUGGESTION_MIN_CONFIDENCE,
+  FOLDER_MOVE_MIN_CONFIDENCE,
+  FOLDER_SUGGESTION_MIN_CONFIDENCE,
 } from './ai-suggestions.ts';
 import type { AIEnrichment, SuggestedTag } from './types.ts';
 
@@ -293,6 +295,51 @@ test('pendingSuggestedFolder suppresses a name-matched folder dismissed earlier 
 test('pendingSuggestedFolder ignores an unrelated dismissal', () => {
   const enrichment = makeFolderEnrichment({ suggested_collection_id: 'col-recipes' });
   assert.deepEqual(pendingSuggestedFolder(enrichment, COLLECTIONS, null, new Set(['name:travel'])), {
+    kind: 'existing',
+    id: 'col-recipes',
+    name: 'Recipes',
+    from: null,
+  });
+});
+
+test('pendingSuggestedFolder enforces confidence hurdles for moves and adds (STASH-74)', () => {
+  assert.equal(FOLDER_SUGGESTION_MIN_CONFIDENCE, 0.6);
+  assert.equal(FOLDER_MOVE_MIN_CONFIDENCE, 0.85);
+
+  // MOVE: bookmark is in col-watch, AI suggests col-recipes
+  // Case 1: confidence is null -> suppressed (protects user filing against unrated/heuristic changes)
+  const enrichmentNullConf = makeFolderEnrichment({ suggested_collection_id: 'col-recipes', confidence: null });
+  assert.equal(pendingSuggestedFolder(enrichmentNullConf, COLLECTIONS, 'col-watch'), null);
+
+  // Case 2: confidence is below hurdle (0.8 < 0.85) -> suppressed (e.g. synonym lateral churn like Food -> 음식 및 요리)
+  const enrichmentLowConf = makeFolderEnrichment({ suggested_collection_id: 'col-recipes', confidence: 0.8 });
+  assert.equal(pendingSuggestedFolder(enrichmentLowConf, COLLECTIONS, 'col-watch'), null);
+
+  // Case 3: confidence clears hurdle (0.9 >= 0.85) -> surfaced as a move
+  const enrichmentHighConf = makeFolderEnrichment({ suggested_collection_id: 'col-recipes', confidence: 0.9 });
+  assert.deepEqual(pendingSuggestedFolder(enrichmentHighConf, COLLECTIONS, 'col-watch'), {
+    kind: 'existing',
+    id: 'col-recipes',
+    name: 'Recipes',
+    from: { id: 'col-watch', name: 'Watch Later' },
+  });
+
+  // ADD: bookmark is unfiled (currentCollectionId === null)
+  // Case 4: confidence is below add threshold (0.5 < 0.6) -> suppressed as noise
+  const enrichmentAddNoise = makeFolderEnrichment({ suggested_collection_id: 'col-recipes', confidence: 0.5 });
+  assert.equal(pendingSuggestedFolder(enrichmentAddNoise, COLLECTIONS, null), null);
+
+  // Case 5: confidence meets add threshold (0.7 >= 0.6) -> surfaced
+  const enrichmentAddOk = makeFolderEnrichment({ suggested_collection_id: 'col-recipes', confidence: 0.7 });
+  assert.deepEqual(pendingSuggestedFolder(enrichmentAddOk, COLLECTIONS, null), {
+    kind: 'existing',
+    id: 'col-recipes',
+    name: 'Recipes',
+    from: null,
+  });
+
+  // Case 6: confidence is null for add -> surfaced (preserves heuristic / unrated model add behavior)
+  assert.deepEqual(pendingSuggestedFolder(enrichmentNullConf, COLLECTIONS, null), {
     kind: 'existing',
     id: 'col-recipes',
     name: 'Recipes',
