@@ -2495,3 +2495,21 @@ test('hero row keeps search open action bounded and unshrinkable within viewport
   const wordmarkStyle = StyleSheet.flatten(wordmark.props.style);
   expect(wordmarkStyle.flexShrink).toBe(0);
 });
+
+
+test('card preview uses uploaded image after the local copy fails', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000145',
+      title: 'Recovered image',
+      local_image_uri: 'file:///missing-preview.jpg',
+      preview_image_url: 'https://example.com/uploaded-preview.jpg',
+    }),
+  ]);
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByTestId('inbox-card-preview-image')).toBeTruthy());
+  expect(screen.getByTestId('inbox-card-preview-image').props.source.uri).toBe('file:///missing-preview.jpg');
+  await fireEvent(screen.getByTestId('inbox-card-preview-image'), 'error');
+  await waitFor(() => expect(screen.getByTestId('inbox-card-preview-image').props.source.uri).toBe('https://example.com/uploaded-preview.jpg'));
+  expect(screen.queryByTestId('inbox-card-preview-fallback')).toBeNull();
+});

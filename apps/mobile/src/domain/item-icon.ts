@@ -1,3 +1,6 @@
+import punycode from 'punycode/punycode.js';
+import { parse } from 'tldts';
+
 import { markdownLabel } from '@/domain/markdown';
 import type { Bookmark } from '@/domain/types';
 
@@ -6,7 +9,7 @@ import type { Bookmark } from '@/domain/types';
  * is available yet (offline saves, pending enrichment, bare text) fall back to
  * a deterministic letter monogram so the list never has blank icon slots.
  *
- * Pure and dependency-free so the choice is unit-testable; the screen just
+ * Pure and platform-independent so the choice is unit-testable; the screen just
  * renders whichever variant this returns.
  */
 
@@ -64,15 +67,15 @@ function firstLetter(source: string): string {
   return '#';
 }
 
-const COMMON_SECOND_LEVEL_SUFFIXES = new Set(['ac', 'co', 'com', 'edu', 'gov', 'net', 'org']);
-
 function hostKeyword(host: string): string {
-  const parts = host.split('.');
-  const last = parts.at(-1) ?? '';
-  const secondLast = parts.at(-2) ?? '';
-  const suffixLength =
-    last.length === 2 && COMMON_SECOND_LEVEL_SUFFIXES.has(secondLast) ? 2 : 1;
-  return parts.at(-(suffixLength + 1)) ?? parts.at(-2) ?? parts[0] ?? host;
+  const parsed = parse(host, { allowPrivateDomains: true });
+  if (parsed.isIp) return host;
+  const label = parsed.domainWithoutSuffix ?? host;
+  try {
+    return punycode.toUnicode(label);
+  } catch {
+    return label;
+  }
 }
 
 function relativeLuminance(hex: string): number {

@@ -164,3 +164,18 @@ test('same site keeps its color regardless of www / path', () => {
   const b = itemIcon(make({ url: 'https://example.com/b/c?q=1' })) as { colorIndex: number };
   assert.equal(a.colorIndex, b.colorIndex);
 });
+
+for (const [url, label] of [
+  ['https://project.github.io', 'PROJECT'],
+  ['https://site.netlify.app', 'SITE'],
+  ['https://demo.pages.dev', 'DEMO'],
+  ['https://192.168.1.42/admin', '192.168.1.42'],
+  ['https://[2001:db8::1]/', '[2001:DB8::1]'],
+  ['https://例え.テスト/', '例え'],
+  ['https://xn--r8jz45g.xn--zckzah/', '例え'],
+]) {
+  test(`preview wordmark preserves the display label for ${url}`, () => {
+    assert.equal(previewWordmark(make({ url, site_name: null })).label, label);
+    assert.equal(previewWordmark(make({ url, site_name: new URL(url).hostname })).label, label);
+  });
+}

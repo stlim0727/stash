@@ -133,7 +133,8 @@ import {
 import { didWordmarkImageLoad, shouldShowWordmarkFallback } from '@/domain/wordmark';
 import {
   didPreviewImageLoad,
-  isPreviewImageFailed,
+  markPreviewImageLoaded,
+  selectPreviewImageUri,
   markPreviewImageFailed,
   usePreviewImageFailuresVersion,
 } from '@/domain/preview-image-cache';
@@ -341,7 +342,10 @@ function CardPreviewFallback({
           />
         </View>
       ) : null}
-      <PostHogMaskView style={styles.cardFallbackWordmarkMask}>
+      <PostHogMaskView style={[
+        styles.cardFallbackWordmarkMask,
+        icon.kind === 'favicon' && !hideFavicon && styles.cardFallbackWordmarkBesideFavicon,
+      ]}>
         <Text
           testID={testID}
           style={[styles.cardFallbackWordmark, { color: foregroundColor }]}
@@ -3453,8 +3457,7 @@ export default function InboxScreen() {
           // List density view mode: compact row layout featuring thumbnail image
           // with quick-open badge, title/url/tags in middle, and overflow menu.
           if (viewMode === 'list') {
-            const rawThumbUri = item.local_image_uri ?? item.preview_image_url ?? null;
-            const thumbUri = isPreviewImageFailed(rawThumbUri) ? null : rawThumbUri;
+            const thumbUri = selectPreviewImageUri(item.local_image_uri, item.preview_image_url);
             const compactMeta = metaParts.join('  ·  ');
             return (
               <Pressable
@@ -3517,6 +3520,8 @@ export default function InboxScreen() {
                       onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
                         if (!didPreviewImageLoad(event.nativeEvent)) {
                           markPreviewImageFailed(thumbUri);
+                        } else {
+                          markPreviewImageLoaded(thumbUri);
                         }
                       }}
                     />
@@ -3621,8 +3626,7 @@ export default function InboxScreen() {
             );
           }
 
-          const rawPreviewUri = item.local_image_uri ?? item.preview_image_url ?? null;
-          const previewUri = isPreviewImageFailed(rawPreviewUri) ? null : rawPreviewUri;
+          const previewUri = selectPreviewImageUri(item.local_image_uri, item.preview_image_url);
           const cardElement = (
             <Card
               testID={`inbox-card-${item.id}`}
@@ -3689,6 +3693,8 @@ export default function InboxScreen() {
                         onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
                           if (!didPreviewImageLoad(event.nativeEvent)) {
                             markPreviewImageFailed(previewUri);
+                          } else {
+                            markPreviewImageLoaded(previewUri);
                           }
                         }}
                       />
@@ -4511,6 +4517,10 @@ const styles = StyleSheet.create({
   },
   cardFallbackWordmarkMask: {
     width: '82%',
+  },
+  cardFallbackWordmarkBesideFavicon: {
+    // The tile ends at x=52; text starts at x=64 even when it wraps.
+    paddingLeft: 44,
   },
   cardFallbackWordmark: {
     width: '100%',

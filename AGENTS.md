@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-09-26 (MCP tool precedence over skills; worktree workflow; PR workflow 5-minute bot review wait rule; Supabase direct queries and client timeouts).
+Last updated: 2026-09-28 (reporting and request histories moved into deeper documentation).
 
 ## Successor Agent Orientation
 
@@ -36,8 +36,8 @@ do. This file, `CLAUDE.md`, `docs/`, `.claude/skills` mirrored as
   always give higher priority to using configured MCP tools over skills or
   ad-hoc scripts. For example, for Sentry lookups, always query the Sentry MCP
   server first instead of invoking the `fetch-sentry-issues` skill or running manual
-  curl scripts. When invoking subagents, pass `enable_mcp_tools: true` whenever
-  MCP capabilities are needed. Skills, direct CLI scripts, or manual API fetches
+  curl scripts. When invoking subagents, use only parameters exposed by the
+  active tool schema and verify that the child can access the needed MCP tools. Skills, direct CLI scripts, or manual API fetches
   are strictly fallbacks when an MCP server is unconfigured, unreachable, or
   returns an error.
 - **What is verified vs assumed vs stale** (do not trust silence as proof):
@@ -580,33 +580,15 @@ in-app-feedback`) carry **no Sentry breadcrumbs** — `trackBreadcrumb` writes
   same-object bake with nothing new) is a React no-op that won't re-fire an
   effect keyed on that object — key this class of effect on a monotonic token
   bumped alongside the state write instead, not the object itself.
-- **Client timeout vs Edge Function timeout (`StashSupabaseClient.request`)**:
-  A blanket client-side request timeout (e.g. 15s) must not abort operations
-  that call long-running edge functions. Specifically, `ai-enrich`'s Gemini
-  provider waits 15s before catching its timeout and writing an intended
-  heuristic fallback (`supabase/functions/ai-enrich/gemini-provider.ts`). If the
-  client timer also fires at 15s, it aborts ahead of receiving that fallback
-  and triggers unnecessary client failure/retry paths. Keep timeouts
-  configurable or extended for edge function routes.
-- **Promise chain serialization with `Promise.race`**: Constructing a bounded task
-  like `Promise.race([task(), timeout])` starts `task()` immediately. When
-  chaining onto a serialized queue (`promise.then(() => ...)`), invoking `task()`
-  before or outside the `.then()` callback executes network work in parallel
-  rather than sequentially, allowing older in-flight requests to finish after
-  newer ones. Always defer task invocation inside the `.then(() => ...)` callback.
-- **Supabase credentials & direct querying fallback**: `SUPABASE_SECRET_KEY` in
-  `.env` / `.env.local` uses the `sb_secret_...` format (a service-role secret
-  API key), not a Management API PAT (`sbp_...`). When Supabase MCP is not
-  configured, query `https://<ref>.supabase.co/rest/v1/` and `/auth/v1/admin/`
-  directly with `apikey: <key>` and `Authorization: Bearer <key>`. Do not send it
-  to `https://api.supabase.com/v1/` (fails with `401: JWT could not be decoded`).
-- **Google Play Pre-Launch Report bursts in `auth.users`**: Uploading an APK/AAB
-  triggers Google Play Console's automated Robo test crawler across ~10–15
-  devices in 1–2 minutes. Because Keepory is anonymous-first and stamps
-  metadata on launch, this appears as an immediate cluster of anonymous Android
-  users with 0 bookmarks and `app_version` matching the release. Audits of
-  install base or user growth must filter out these bursts to avoid overcounting
-  organic adoption.
+- Keep request deadlines active through body reads, and allow longer deadlines for
+  enrichment. Otherwise a client can abort before the server returns its fallback.
+  See `docs/development/reporting-and-request-traps.md`.
+- Invoke queued work inside the promise callback; eagerly constructing a race
+  defeats serialization. See `docs/development/reporting-and-request-traps.md`.
+- Supabase secret API keys authenticate project REST/Auth endpoints, not the
+  Management API. See `docs/development/reporting-and-request-traps.md`.
+- Android release test bursts can inflate account counts; auth identities are not
+  device installs. See `docs/development/reporting-and-request-traps.md`.
 
 ## Future Work
 

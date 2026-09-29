@@ -115,6 +115,9 @@ importers:
       posthog-react-native-session-replay:
         specifier: ^1.6.0
         version: 1.6.0(react-native@0.85.3(@babel/core@7.29.7)(@react-native/jest-preset@0.85.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.0(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)
+      punycode:
+        specifier: ^2.3.1
+        version: 2.3.1
       react:
         specifier: 19.2.3
         version: 19.2.3
@@ -142,6 +145,9 @@ importers:
       react-native-web:
         specifier: ~0.21.0
         version: 0.21.2(patch_hash=42c0ecfde3a564935bf83cf98d54297551d21cfb59db72d9424478a6ee1b4ecf)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      tldts:
+        specifier: ^7.4.16
+        version: 7.4.16
     devDependencies:
       '@jest/globals':
         specifier: ^29.7.0
@@ -158,6 +164,9 @@ importers:
       '@types/node':
         specifier: ^22.19.21
         version: 22.19.21
+      '@types/punycode':
+        specifier: ^2.1.4
+        version: 2.1.4
       '@types/react':
         specifier: ~19.2.2
         version: 19.2.17
@@ -1492,6 +1501,9 @@ packages:
 
   '@types/node@22.19.21':
     resolution: {integrity: sha512-VMeFBSCKQKmm2swI2kW51SFusDqekC6q9trBCvJ/JliDchFSuoYYKN7yVNjPthP1HKZcx3U1gI/wTcEBjEFKTA==}
+
+  '@types/punycode@2.1.4':
+    resolution: {integrity: sha512-trzh6NzBnq8yw5e35f8xe8VTYjqM3NE7bohBtvDVf/dtUer3zYTLK1Ka3DG3p7bdtoaOHZucma6FfVKlQ134pQ==}
 
   '@types/react-reconciler@0.33.0':
     resolution: {integrity: sha512-HZOXsKT0tGI9LlUw2LuedXsVeB88wFa536vVL0M6vE8zN63nI+sSr1ByxmPToP5K5bukaVscyeCJcF9guVNJ1g==}
@@ -3999,6 +4011,13 @@ packages:
     resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
     engines: {node: '>=12.0.0'}
 
+  tldts-core@7.4.16:
+    resolution: {integrity: sha512-MDolfaSJtlSK5Y0A1xl3277ekubZwobpBjugknDizI9O5Rm60a1m8k4ICK+MRsCDzPygT81mp3BBf5RKDlFRfA==}
+
+  tldts@7.4.16:
+    resolution: {integrity: sha512-QwBER5KMR86IIjpIiO7H/Z3IMJPsZ1A6RKPAqzTTgOyUQUSt9FdnKcqhTaJmkY6HVrgouZHZR0ncK5QxvmnQeg==}
+    hasBin: true
+
   tmpl@1.0.5:
     resolution: {integrity: sha512-3f0uOEAQwIqGuWW2MVzYg8fV/QNnc/IpuJNG837rLuczAaLVHslWHZQj4IGiEl5Hs3kkbhwL9Ab7Hrsmuj+Smw==}
 
@@ -5837,7 +5856,9 @@ snapshots:
       metro-runtime: 0.84.4
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.74.89': {}
 
@@ -6058,6 +6079,8 @@ snapshots:
   '@types/node@22.19.21':
     dependencies:
       undici-types: 6.21.0
+
+  '@types/punycode@2.1.4': {}
 
   '@types/react-reconciler@0.33.0(@types/react@19.2.17)':
     dependencies:
@@ -8904,6 +8927,12 @@ snapshots:
     dependencies:
       fdir: 6.5.0(picomatch@4.0.4)
       picomatch: 4.0.4
+
+  tldts-core@7.4.16: {}
+
+  tldts@7.4.16:
+    dependencies:
+      tldts-core: 7.4.16
 
   tmpl@1.0.5: {}
 

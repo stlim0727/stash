@@ -2,11 +2,15 @@ import assert from 'node:assert/strict';
 import test, { beforeEach } from 'node:test';
 
 import {
+  PREVIEW_IMAGE_RETRY_MS,
+  MAX_AUTOMATIC_PREVIEW_IMAGE_RETRIES,
+  selectPreviewImageUri,
   clearPreviewImageFailed,
   didPreviewImageLoad,
   getPreviewImageFailuresVersion,
   isPreviewImageFailed,
   markPreviewImageFailed,
+  markPreviewImageLoaded,
   resetPreviewImageFailuresForTest,
   subscribePreviewImageFailures,
 } from './preview-image-cache.ts';
@@ -70,4 +74,72 @@ test('didPreviewImageLoad validates native dimensions', () => {
   assert.equal(didPreviewImageLoad({ source: { width: 0, height: 0 } }), false);
   assert.equal(didPreviewImageLoad({}), false);
   assert.equal(didPreviewImageLoad(undefined), false);
+});
+
+test('failed local image falls through to its uploaded copy', () => {
+  const local = 'file:///missing.jpg';
+  const remote = 'https://example.com/upload.jpg';
+  assert.equal(selectPreviewImageUri(local, remote), local);
+  markPreviewImageFailed(local);
+  assert.equal(selectPreviewImageUri(local, remote), remote);
+  markPreviewImageFailed(remote);
+  assert.equal(selectPreviewImageUri(local, remote), null);
+  assert.equal(selectPreviewImageUri(null, null), null);
+});
+
+test('missing local images stay failed while an uploaded fallback is available', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const local = 'file:///missing.jpg';
+  const remote = 'https://example.com/upload.jpg';
+  markPreviewImageFailed(local);
+  t.mock.timers.tick(PREVIEW_IMAGE_RETRY_MS);
+  assert.equal(isPreviewImageFailed(local), true);
+  assert.equal(selectPreviewImageUri(local, remote), remote);
+});
+
+test('temporary failures expire and notify mounted previews to retry', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const uri = 'https://example.com/transient.jpg';
+  markPreviewImageFailed(uri);
+  let notified = 0;
+  const unsubscribe = subscribePreviewImageFailures(() => notified++);
+  t.mock.timers.tick(PREVIEW_IMAGE_RETRY_MS - 1);
+  assert.equal(isPreviewImageFailed(uri), true);
+  t.mock.timers.tick(1);
+  assert.equal(isPreviewImageFailed(uri), false);
+  assert.equal(selectPreviewImageUri(null, uri), uri);
+  assert.equal(notified, 1);
+  unsubscribe();
+});
+
+test('remote preview retries automatically once, then remains failed until explicitly cleared', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const uri = 'https://example.com/permanently-missing.jpg';
+  markPreviewImageFailed(uri);
+  t.mock.timers.tick(PREVIEW_IMAGE_RETRY_MS);
+  assert.equal(isPreviewImageFailed(uri), false);
+
+  // The attempted reload fails again. It must not schedule another timer.
+  markPreviewImageFailed(uri);
+  t.mock.timers.tick(PREVIEW_IMAGE_RETRY_MS * 2);
+  assert.equal(MAX_AUTOMATIC_PREVIEW_IMAGE_RETRIES, 1);
+  assert.equal(isPreviewImageFailed(uri), true);
+
+  clearPreviewImageFailed(uri);
+  assert.equal(isPreviewImageFailed(uri), false);
+});
+
+test('a successful decoded load restores the automatic retry budget', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const uri = 'https://example.com/intermittent.jpg';
+  markPreviewImageFailed(uri);
+  t.mock.timers.tick(PREVIEW_IMAGE_RETRY_MS);
+  assert.equal(isPreviewImageFailed(uri), false);
+
+  // The retry decoded successfully. A later transient failure should be able
+  // to schedule one more automatic retry instead of becoming permanent.
+  markPreviewImageLoaded(uri);
+  markPreviewImageFailed(uri);
+  t.mock.timers.tick(PREVIEW_IMAGE_RETRY_MS);
+  assert.equal(isPreviewImageFailed(uri), false);
 });
