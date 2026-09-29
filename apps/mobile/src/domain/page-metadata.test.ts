@@ -848,7 +848,7 @@ test('fetchNaverMapFolderMetadata fetches folder details and builds preview meta
   };
 
   globalThis.fetch = (async (input: string) => {
-    if (input.includes('/shares/f65cd3df/bookmarks')) {
+    if (input.includes('/shares/f65cd3df')) {
       return new Response(JSON.stringify(mockApiData), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -894,7 +894,7 @@ test('fetchPageMetadata recovers a Naver Map folder via the bookmark API (STASH-
       });
     }
     // Bookmark API returns the folder data
-    if (target.includes('/shares/f65cd3df/bookmarks')) {
+    if (target.includes('/shares/f65cd3df')) {
       return new Response(JSON.stringify(mockFolderJson), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -909,8 +909,57 @@ test('fetchPageMetadata recovers a Naver Map folder via the bookmark API (STASH-
     assert.equal(meta?.site_name, '네이버 지도');
     assert.ok(meta?.preview_image_url?.includes('staticmap.bin'));
     assert.ok(
-      requested.some((u) => u.includes('/shares/f65cd3df/bookmarks')),
+      requested.some((u) => u.includes('/shares/f65cd3df')),
       'expected a fetch to the bookmark folder API',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchPageMetadata recovers Naver Map folder when bot response has generic title (STASH-72)', async () => {
+  const originalFetch = globalThis.fetch;
+  const requested: string[] = [];
+  const mockFolderJson = {
+    folder: {
+      name: '바다',
+      markerColor: '3',
+      placeUserProfile: {
+        nick: 'AW앤웍',
+      },
+    },
+    bookmarkList: [
+      { px: 126.86644, py: 33.5288 },
+    ],
+  };
+
+  globalThis.fetch = (async (target: string) => {
+    requested.push(target);
+    // Naver Map SPA returns a shell with a generic title
+    if (target.includes('map.naver.com/p/favorite/myPlace/folder/f65cd3df')) {
+      return htmlResponse(
+        '<head><meta charset="utf-8"><title>네이버지도 저장</title><meta property="og:title" content="네이버지도 저장"></head>',
+        { url: 'https://map.naver.com/p/favorite/myPlace/folder/f65cd3df' },
+      );
+    }
+    // Bookmark API returns the folder data
+    if (target.includes('/shares/f65cd3df')) {
+      return new Response(JSON.stringify(mockFolderJson), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response('Not found', { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const meta = await fetchPageMetadata('https://map.naver.com/p/favorite/myPlace/folder/f65cd3df');
+    assert.equal(meta?.title, '바다 (AW앤웍) : 네이버 지도');
+    assert.equal(meta?.site_name, '네이버 지도');
+    assert.ok(meta?.preview_image_url?.includes('staticmap.bin'));
+    assert.ok(
+      requested.some((u) => u.includes('/shares/f65cd3df')),
+      'expected folder API fetch despite generic bot title',
     );
   } finally {
     globalThis.fetch = originalFetch;
@@ -1134,6 +1183,48 @@ test('fetchPageMetadata still buffers a normal non-streaming body', async () => 
   try {
     const meta = await fetchPageMetadata('https://example.com/small');
     assert.equal(meta?.title, 'Local-first software');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchNaverMapFolderMetadata stops reading and returns null for an oversized streamed response', async () => {
+  const originalFetch = globalThis.fetch;
+  const { response, state } = streamingResponse('{"folder":{"name":"big"}', { chunkSize: 64 * 1024 });
+  globalThis.fetch = (async () => response) as unknown as typeof fetch;
+  try {
+    const meta = await fetchNaverMapFolderMetadata('f65cd3df');
+    assert.equal(meta, null);
+    assert.ok(state.reads <= 10, 'expected the cap to terminate reading');
+    assert.equal(state.cancelled, true, 'the reader must be cancelled so the native pump stops');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchNaverMapFolderMetadata refuses an oversized non-streaming response instead of buffering it', async () => {
+  const originalFetch = globalThis.fetch;
+  let bufferedBytes = false;
+  globalThis.fetch = (async () =>
+    ({
+      ok: true,
+      headers: {
+        get: (name: string) => {
+          const key = name.toLowerCase();
+          if (key === 'content-type') return 'application/json';
+          if (key === 'content-length') return String(8 * 1024 * 1024);
+          return null;
+        },
+      },
+      arrayBuffer: async () => {
+        bufferedBytes = true;
+        return new ArrayBuffer(8 * 1024 * 1024);
+      },
+    }) as unknown as Response) as unknown as typeof fetch;
+  try {
+    const meta = await fetchNaverMapFolderMetadata('f65cd3df');
+    assert.equal(meta, null);
+    assert.equal(bufferedBytes, false, 'the oversized body must never be materialized');
   } finally {
     globalThis.fetch = originalFetch;
   }

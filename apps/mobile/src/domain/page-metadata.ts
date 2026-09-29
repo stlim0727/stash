@@ -248,10 +248,14 @@ async function readCappedBody(response: Response): Promise<CappedBody | null> {
 
   const chunks: Uint8Array[] = [];
   let read = 0;
+  let doneReading = false;
   try {
     while (read < MAX_HTML_BYTES) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        doneReading = true;
+        break;
+      }
       if (!value || value.length === 0) continue;
       chunks.push(value);
       read += value.length;
@@ -272,7 +276,7 @@ async function readCappedBody(response: Response): Promise<CappedBody | null> {
     bytes.set(chunk.subarray(0, take), offset);
     offset += take;
   }
-  return { bytes, read, truncated: read > MAX_HTML_BYTES };
+  return { bytes, read, truncated: !doneReading || read > MAX_HTML_BYTES };
 }
 
 /** Fetch and parse a page's HTML metadata with a specific User-Agent. */
@@ -433,7 +437,7 @@ export async function fetchNaverMapFolderMetadata(
   shareId: string,
   fetcher: typeof fetch = globalThis.fetch,
 ): Promise<FetchedMetadata | null> {
-  const apiUrl = `https://pages.map.naver.com/save-pages/api/maps-bookmark/v3/shares/${encodeURIComponent(shareId)}/bookmarks`;
+  const apiUrl = `https://pages.map.naver.com/save-pages/api/maps-bookmark/v3/shares/${encodeURIComponent(shareId)}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -447,7 +451,12 @@ export async function fetchNaverMapFolderMetadata(
     if (!response.ok) {
       return null;
     }
-    const data = (await response.json()) as {
+    const body = await readCappedBody(response);
+    if (!body || body.truncated) {
+      return null;
+    }
+    const text = new TextDecoder('utf-8').decode(body.bytes);
+    const data = JSON.parse(text) as {
       folder?: {
         name?: string;
         memo?: string;
@@ -556,9 +565,6 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
         : `redirect=${redirectedOembed.outcome}`;
     }
   }
-  if (bot.metadata?.title) {
-    return bot.metadata;
-  }
   const earlyFolderShareId =
     (bot.finalUrl ? naverMapFolderShareId(bot.finalUrl) : null) || naverMapFolderShareId(target);
   if (earlyFolderShareId) {
@@ -567,6 +573,9 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
       recordLog('info', `preview: recovered via naver map folder ${earlyFolderShareId} for ${url}`);
       return folderMeta;
     }
+  }
+  if (bot.metadata?.title && !isGenericNaverMapTitle(bot.metadata.title)) {
+    return bot.metadata;
   }
   // The honest request was refused or returned a title-less shell; try once as a
   // browser. Keep the bot result as a fallback so we never discard usable
@@ -599,11 +608,11 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
   // SPA shell with no title: if we landed on a page that has a server-rendered
   // sibling (e.g. a Naver Map place entry), fetch that for the real metadata.
   let spa: HtmlFetchResult | null = null;
-  if (!result?.title) {
+  if (!result?.title || isGenericNaverMapTitle(result.title)) {
     const altUrl = landedOn ? previewSourceUrl(landedOn) : null;
     if (altUrl) {
       spa = await fetchHtmlMetadata(altUrl, BROWSER_USER_AGENT);
-      if (spa.metadata?.title) {
+      if (spa.metadata?.title && !isGenericNaverMapTitle(spa.metadata.title)) {
         recordLog('info', `preview: recovered via ${altUrl} for ${url}`);
         return spa.metadata;
       }
@@ -626,7 +635,7 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
     }
   }
 
-  if (!result?.title) {
+  if (!result?.title || isGenericNaverMapTitle(result.title)) {
     // Full failure: no title from any attempt. Warn level — enrichment is
     // fire-and-forget and no-title is expected for JS-heavy or dead-link pages,
     // so this does not warrant a Sentry error.
