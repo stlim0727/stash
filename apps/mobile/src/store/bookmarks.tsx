@@ -946,6 +946,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const broadcastSyncNudgeRef = useRef<(() => void) | null>(null);
   const syncPendingRef = useRef(false);
   const syncNowRef = useRef<(() => Promise<boolean>) | null>(null);
+  const checkAiRetriesRef = useRef<(() => void) | null>(null);
   const localCreateFlushesInFlight = useRef(0);
   const pendingUserTitleEdits = useRef(new Set<string>());
   // Generated source titles can also improve while a create request is in
@@ -4569,9 +4570,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             (bookmarksRef.current?.find((item) => item.id === bookmarkId)?.sync_status !== "synced");
           if (stillUnsynced) {
             // Defer enrichment until the mutation uploads to the cloud row.
-            // armAiRetry ensures it will be retried automatically once sync resumes and uploads.
-            armAiRetry(bookmarkId);
-            return null;
+            // Do NOT consume the AI retry budget (armAiRetry) for a sync deferral.
+            // Clear the session attempted marker so that when sync later settles, the trigger can re-evaluate.
+            aiTriggerAttempted.current.delete(bookmarkId);
+            return source === "manual"
+              ? "Folder changes must finish syncing before generating AI suggestions."
+              : "sync_deferred";
           }
         }
         const metadata: EnrichmentMetadataHint | undefined = latest
@@ -7505,6 +7509,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
       if (mutationsPushed) {
         broadcastSyncNudgeRef.current?.();
+        checkAiRetriesRef.current?.();
       }
       return mutationsPushed;
     },
@@ -7696,6 +7701,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (bookmark.metadata_status === "pending") {
         continue; // metadata fetch still in flight — fire once it settles
       }
+      if (
+        bookmark.sync_status !== "synced" ||
+        queueRef.current.some((entry) => entry.local_id === id)
+      ) {
+        continue; // creation or local mutations still uploading — wait for sync
+      }
       // Already has suggestions (enriched in a prior session or via the manual
       // action): clear the durable marker without re-requesting.
       if (
@@ -7762,6 +7773,19 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (aiEnriching.current.has(id)) {
         continue; // a retry (or a manual tap) is already in flight for this id
       }
+      const current = bookmarksRef.current?.find((item) => item.id === id);
+      if (!current) {
+        continue;
+      }
+      // If this bookmark has unsynced work (e.g. pending/failed folder move),
+      // defer retry until sync succeeds so we don't dispatch against stale cloud state
+      // or churn the AI retry budget (STASH-74 / Codex catch).
+      const hasUnsyncedWork =
+        queueRef.current.some((entry) => entry.local_id === id) ||
+        current.sync_status !== "synced";
+      if (hasUnsyncedWork) {
+        continue;
+      }
       const waitMs = AI_RETRY_BACKOFF_MS[state.attemptCount];
       if (waitMs === undefined) {
         continue; // defensive: the cap already clears entries before this can happen
@@ -7777,6 +7801,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       );
     }
   }, [auth.session, requestAiEnrichment]);
+  checkAiRetriesRef.current = checkAiRetries;
 
   // STASH #574 Phase 1: drains aiDispatchQueueRef at a steady stagger, calling
   // requestAiEnrichment for one queued id at a time instead of a whole burst
