@@ -127,6 +127,21 @@ export function describeKnownUrl(rawUrl: string): UrlTitle | null {
     return null; // a bare profile has no better label than the host
   }
 
+  if (
+    host === 'map.naver.com' ||
+    host === 'pcmap.place.naver.com' ||
+    host === 'place.naver.com' ||
+    host === 'pages.map.naver.com'
+  ) {
+    if (url.pathname.includes('/favorite/') || url.pathname.includes('/save-pages/')) {
+      return { title: 'Naver Map list', preview_image_url: null };
+    }
+    if (url.pathname.includes('/place/')) {
+      return { title: 'Naver Map place', preview_image_url: null };
+    }
+    return { title: 'Naver Map', preview_image_url: null };
+  }
+
   return null;
 }
 
@@ -155,6 +170,20 @@ export function isRepairableSourceTitle(bookmark: { url: string | null; title: s
     if (
       (trimmed === 'bbs view' || trimmed === 'bbs_view') &&
       (host === 'ppomppu.co.kr' || host.endsWith('.ppomppu.co.kr'))
+    ) {
+      return true;
+    }
+    if (
+      (trimmed === 'naver.me' ||
+        trimmed === 'map.naver.com' ||
+        trimmed === 'naver' ||
+        trimmed === 'naver map' ||
+        trimmed === 'naver map list' ||
+        trimmed === 'naver map place' ||
+        trimmed === '네이버지도' ||
+        trimmed === '네이버 지도' ||
+        trimmed === '네이버지도 저장') &&
+      (host === 'naver.me' || host === 'map.naver.com' || host.endsWith('.naver.com'))
     ) {
       return true;
     }

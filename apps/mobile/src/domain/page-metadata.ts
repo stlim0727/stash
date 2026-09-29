@@ -248,10 +248,14 @@ async function readCappedBody(response: Response): Promise<CappedBody | null> {
 
   const chunks: Uint8Array[] = [];
   let read = 0;
+  let doneReading = false;
   try {
     while (read < MAX_HTML_BYTES) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        doneReading = true;
+        break;
+      }
       if (!value || value.length === 0) continue;
       chunks.push(value);
       read += value.length;
@@ -272,7 +276,7 @@ async function readCappedBody(response: Response): Promise<CappedBody | null> {
     bytes.set(chunk.subarray(0, take), offset);
     offset += take;
   }
-  return { bytes, read, truncated: read > MAX_HTML_BYTES };
+  return { bytes, read, truncated: !doneReading || read > MAX_HTML_BYTES };
 }
 
 /** Fetch and parse a page's HTML metadata with a specific User-Agent. */
@@ -360,6 +364,189 @@ export function previewSourceUrl(rawUrl: string): string | null {
 }
 
 /**
+ * Detects a Naver Map favorite/bookmark folder (MyPlace list) and returns its
+ * share id, or null if the URL is not a Naver Map folder.
+ * Matches:
+ *  - map.naver.com/p/favorite/myPlace/folder/{shareId}
+ *  - map.naver.com/v5/favorite/myPlace/folder/{shareId}
+ *  - map.naver.com/p/favorite/{userEncryptId}/folder/{shareId}
+ *  - pages.map.naver.com/save-pages/pc/detail-list/{shareId}
+ *  - pages.map.naver.com/save-pages/api/maps-bookmark/v3/shares/{shareId}/...
+ */
+export function naverMapFolderShareId(rawUrl: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  const host = parsed.hostname.replace(/^www\./, '');
+  const isNaver = host === 'naver.com' || host.endsWith('.naver.com');
+  if (!isNaver) {
+    return null;
+  }
+  const match = parsed.pathname.match(/\/(?:folder|detail-list|shares)\/([a-zA-Z0-9]+)(?:\/|$)/);
+  return match?.[1] ?? null;
+}
+
+/**
+ * Builds a Naver Map static map thumbnail URL displaying pins for places in the
+ * folder, matching the official Naver Map web client's implementation.
+ */
+export function buildNaverMapFolderStaticMapUrl(
+  markerColor: string | number | undefined,
+  bookmarks: Array<{ px?: number; py?: number }>,
+): string | null {
+  const valid = bookmarks.filter(
+    (b) =>
+      typeof b.px === 'number' &&
+      typeof b.py === 'number' &&
+      !Number.isNaN(b.px) &&
+      !Number.isNaN(b.py),
+  );
+  if (valid.length === 0) {
+    return null;
+  }
+  const color = markerColor ? String(markerColor) : '1';
+  const icon = `https://map.pstatic.net/resource/api/v2/image/maps/bookmark/m_my_folder${color}@2x.png`;
+  // Limit to at most 15 markers to stay well within URL size limits
+  const markers = valid
+    .slice(0, 15)
+    .map((b) => `markers=type:e|icon:${icon}|anchor:center|pos:${b.px} ${b.py}`);
+  return `https://simg.pstatic.net/static.map/v2/map/staticmap.bin?caller=og_map&scale=2&w=500&h=300&${markers.join('&')}`;
+}
+
+export function isNaverMapUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    const host = parsed.hostname.replace(/^www\./, '');
+    if (host === 'naver.me') {
+      return true;
+    }
+    return (
+      host === 'map.naver.com' ||
+      host === 'pcmap.place.naver.com' ||
+      host === 'place.naver.com' ||
+      host === 'pages.map.naver.com'
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function isGenericNaverMapTitle(title: string | undefined, url?: string): boolean {
+  if (!title) return true;
+  if (url && !isNaverMapUrl(url)) {
+    return false;
+  }
+  const t = title.trim();
+  return (
+    t === '네이버지도 저장' ||
+    t === '네이버지도' ||
+    t === '네이버 지도' ||
+    t === 'NAVER Map' ||
+    t === 'Naver Map'
+  );
+}
+
+/**
+ * Fetches structured metadata for a Naver Map folder (MyPlace list) from Naver's
+ * save-pages bookmark API. Returns folder title, site name, author attribution,
+ * and a static map preview image.
+ *
+ * Follows the repository's hybrid UA convention: queries using the honest bot UA
+ * first, and falls back to impersonating a browser only when the bot is refused or
+ * yields an empty response.
+ */
+export async function fetchNaverMapFolderMetadata(
+  shareId: string,
+  fetcher: typeof fetch = globalThis.fetch,
+): Promise<FetchedMetadata | null> {
+  const apiUrl = `https://pages.map.naver.com/save-pages/api/maps-bookmark/v3/shares/${encodeURIComponent(shareId)}`;
+
+  type AttemptResult =
+    | { status: 'success'; metadata: FetchedMetadata }
+    | { status: 'refused' }
+    | { status: 'too_large' }
+    | { status: 'failed' };
+
+  const fetchAttempt = async (userAgent: string): Promise<AttemptResult> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const response = await fetcher(apiUrl, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent': userAgent,
+          Accept: 'application/json',
+        },
+      });
+      if (!response.ok) {
+        return { status: 'refused' };
+      }
+      const body = await readCappedBody(response);
+      if (!body || body.truncated) {
+        return { status: 'too_large' };
+      }
+      const text = new TextDecoder('utf-8').decode(body.bytes);
+      const data = JSON.parse(text) as {
+        folder?: {
+          name?: string;
+          memo?: string;
+          markerColor?: string | number;
+          bookmarkCount?: number;
+          placeUserProfile?: {
+            nick?: string;
+            imageUrl?: string;
+          };
+        };
+        bookmarkList?: Array<{ px?: number; py?: number }>;
+      };
+
+      const folder = data.folder;
+      if (!folder?.name?.trim()) {
+        return { status: 'failed' };
+      }
+      const baseName = folder.name.trim();
+
+      const nick = folder.placeUserProfile?.nick?.trim();
+      const titleSuffix = baseName.includes('네이버 지도') ? '' : ' : 네이버 지도';
+      const title = nick ? `${baseName} (${nick})${titleSuffix}` : `${baseName}${titleSuffix}`;
+
+      const staticMap = buildNaverMapFolderStaticMapUrl(folder.markerColor, data.bookmarkList ?? []);
+      const previewImage =
+        staticMap ||
+        folder.placeUserProfile?.imageUrl ||
+        'https://ssl.pstatic.net/static/maps/assets/images/og-map-400x200.png';
+
+      return {
+        status: 'success',
+        metadata: {
+          title,
+          site_name: '네이버 지도',
+          favicon_url: 'https://ssl.pstatic.net/static/maps/assets/icons/favicon.ico',
+          preview_image_url: previewImage,
+        },
+      };
+    } catch {
+      return { status: 'failed' };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const bot = await fetchAttempt(BOT_USER_AGENT);
+  if (bot.status === 'success') {
+    return bot.metadata;
+  }
+  if (bot.status === 'too_large') {
+    return null;
+  }
+  const browser = await fetchAttempt(BROWSER_USER_AGENT);
+  return browser.status === 'success' ? browser.metadata : null;
+}
+
+/**
  * Fetches a page and extracts its metadata. Resolves to null on timeout,
  * non-OK responses, non-HTML content, or any other failure — never throws.
  *
@@ -425,7 +612,20 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
         : `redirect=${redirectedOembed.outcome}`;
     }
   }
-  if (bot.metadata?.title) {
+  const botTargetUrl = bot.finalUrl || target;
+  const earlyFolderShareId =
+    (bot.finalUrl ? naverMapFolderShareId(bot.finalUrl) : null) || naverMapFolderShareId(target);
+  let folderMeta: FetchedMetadata | null = null;
+  let attemptedFolderShareId: string | null = null;
+  if (earlyFolderShareId) {
+    attemptedFolderShareId = earlyFolderShareId;
+    folderMeta = await fetchNaverMapFolderMetadata(earlyFolderShareId);
+    if (folderMeta?.title) {
+      recordLog('info', `preview: recovered via naver map folder ${earlyFolderShareId} for ${url}`);
+      return folderMeta;
+    }
+  }
+  if (bot.metadata?.title && !isGenericNaverMapTitle(bot.metadata.title, botTargetUrl)) {
     return bot.metadata;
   }
   // The honest request was refused or returned a title-less shell; try once as a
@@ -455,15 +655,16 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
   }
   let result = browser.metadata ?? bot.metadata;
   const landedOn = browser.finalUrl ?? bot.finalUrl;
+  const landedUrl = landedOn || target;
 
   // SPA shell with no title: if we landed on a page that has a server-rendered
   // sibling (e.g. a Naver Map place entry), fetch that for the real metadata.
   let spa: HtmlFetchResult | null = null;
-  if (!result?.title) {
+  if (!result?.title || isGenericNaverMapTitle(result.title, landedUrl)) {
     const altUrl = landedOn ? previewSourceUrl(landedOn) : null;
     if (altUrl) {
       spa = await fetchHtmlMetadata(altUrl, BROWSER_USER_AGENT);
-      if (spa.metadata?.title) {
+      if (spa.metadata?.title && !isGenericNaverMapTitle(spa.metadata.title, altUrl)) {
         recordLog('info', `preview: recovered via ${altUrl} for ${url}`);
         return spa.metadata;
       }
@@ -471,7 +672,25 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
     }
   }
 
-  if (!result?.title) {
+  // Naver Map bookmark folder / MyPlace list: client-side SPA whose folder details
+  // and static map are served from the save-pages bookmark API.
+  if (!result?.title || isGenericNaverMapTitle(result.title, landedUrl)) {
+    const folderShareId =
+      (landedOn ? naverMapFolderShareId(landedOn) : null) || naverMapFolderShareId(target);
+    if (folderShareId) {
+      if (folderShareId !== attemptedFolderShareId) {
+        attemptedFolderShareId = folderShareId;
+        folderMeta = await fetchNaverMapFolderMetadata(folderShareId);
+        if (folderMeta?.title) {
+          recordLog('info', `preview: recovered via naver map folder ${folderShareId} for ${url}`);
+          return folderMeta;
+        }
+      }
+      result = result ?? folderMeta;
+    }
+  }
+
+  if (!result?.title || isGenericNaverMapTitle(result.title, landedUrl)) {
     // Full failure: no title from any attempt. Warn level — enrichment is
     // fire-and-forget and no-title is expected for JS-heavy or dead-link pages,
     // so this does not warrant a Sentry error.
