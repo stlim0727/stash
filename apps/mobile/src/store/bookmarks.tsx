@@ -6092,11 +6092,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // queued edit could never land (see sync-bookmarks.ts). Drop it
             // from in-memory state too — the repository row is already gone.
             const removedId = result.removedBookmarkId;
-            const nextBookmarks = (bookmarksRef.current ?? []).filter(
-              (bookmark) => bookmark.id !== removedId,
+            if (bookmarksRef.current) {
+              bookmarksRef.current = bookmarksRef.current.filter((bookmark) => bookmark.id !== removedId);
+            }
+            setBookmarks((current) =>
+              (current ?? []).filter((bookmark) => bookmark.id !== removedId),
             );
-            bookmarksRef.current = nextBookmarks;
-            setBookmarks(nextBookmarks);
           }
           if (result.bookmarkUpdate) {
             const update = result.bookmarkUpdate;
@@ -6126,16 +6127,19 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // Collapse onto the destination id: a pull that already inserted
               // this bookmark under the existing row's id would otherwise
               // coexist with the just-swapped row as a same-id duplicate.
-              const nextBookmarks = (bookmarksRef.current ?? [])
-                .filter(
-                  (bookmark) =>
-                    bookmark.id === lookupId || bookmark.id !== merged.id,
-                )
-                .map((bookmark) =>
-                  bookmark.id === lookupId ? merged : bookmark,
-                );
-              bookmarksRef.current = nextBookmarks;
-              setBookmarks(nextBookmarks);
+              if (bookmarksRef.current) {
+                bookmarksRef.current = bookmarksRef.current.filter((b) => b.id === lookupId || b.id !== merged.id).map((b) => b.id === lookupId ? merged : b);
+              }
+              setBookmarks((current) =>
+                (current ?? [])
+                  .filter(
+                    (bookmark) =>
+                      bookmark.id === lookupId || bookmark.id !== merged.id,
+                  )
+                  .map((bookmark) =>
+                    bookmark.id === lookupId ? merged : bookmark,
+                  ),
+              );
               ensureRepositoryReady()
                 .then(() => repository.updateBookmark(merged))
                 .catch((error) => logStorageError("post-sync merge", error));
@@ -7244,15 +7248,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 result.upserts.map((bookmark) => bookmark.id),
               );
               const removed = new Set(result.deletions);
-              const nextBookmarks = [
-                ...(bookmarksRef.current ?? []).filter(
+              if (bookmarksRef.current) {
+                bookmarksRef.current = [
+                  ...bookmarksRef.current.filter(
+                    (bookmark) =>
+                      !upsertIds.has(bookmark.id) && !removed.has(bookmark.id),
+                  ),
+                  ...result.upserts,
+                ];
+              }
+              setBookmarks((current) => [
+                ...(current ?? []).filter(
                   (bookmark) =>
                     !upsertIds.has(bookmark.id) && !removed.has(bookmark.id),
                 ),
                 ...result.upserts,
-              ];
-              bookmarksRef.current = nextBookmarks;
-              setBookmarks(nextBookmarks);
+              ]);
             }
             // STASH-4P: enrichments this device never itself requested (the
             // background overflow worker's output, or another device's) used to
