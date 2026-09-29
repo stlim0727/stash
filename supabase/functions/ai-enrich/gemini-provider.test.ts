@@ -41,7 +41,7 @@ function stubFetch(
   return { fetchImpl, calls };
 }
 
-test('parses a well-formed model response into an EnrichmentOutput', async () => {
+test('parses a well-formed model response without producing a summary', async () => {
   const { fetchImpl } = stubFetch({
     summary: 'The React source repository on GitHub.',
     topics: ['react', 'javascript'],
@@ -55,7 +55,7 @@ test('parses a well-formed model response into an EnrichmentOutput', async () =>
   const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
 
   const out = await provider.enrich(input());
-  assert.equal(out.summary, 'The React source repository on GitHub.');
+  assert.equal(out.summary, null);
   assert.deepEqual(out.topics, ['react', 'javascript']);
   assert.equal(out.suggested_collection, 'Development');
   assert.equal(out.confidence, 0.85);
@@ -202,7 +202,7 @@ test('drops generic media tags and collections from model output', async () => {
   assert.equal(out.confidence, 0.82);
 });
 
-test('tells the model not to just restate the title as the summary', async () => {
+test('does not request a summary from the model', async () => {
   const { fetchImpl, calls } = stubFetch({
     summary: null,
     topics: [],
@@ -214,8 +214,10 @@ test('tells the model not to just restate the title as the summary', async () =>
 
   await provider.enrich(input());
   const body = calls[0].init?.body ?? '';
-  assert.match(body, /Never just restate, rephrase, or translate the title/);
-  assert.match(body, /Null if the metadata gives nothing beyond what the title already says/);
+  assert.doesNotMatch(body, /Never just restate, rephrase, or translate the title/);
+  assert.doesNotMatch(body, /Write the summary/);
+  const parsed = JSON.parse(body) as { generationConfig: { responseSchema: { properties: object } } };
+  assert.equal('summary' in parsed.generationConfig.responseSchema.properties, false);
 });
 
 test('omits the existing-tags line when the user has no tags yet', async () => {
@@ -245,7 +247,7 @@ test('asks the model to answer in the user locale when one is given', async () =
   await provider.enrich(input({ locale: 'ko-KR' }));
   // The free-text fields are requested in Korean; the collection name is not
   // (it must match an existing name verbatim).
-  assert.match(calls[0].init?.body ?? '', /summary, suggested_tags, and topics in Korean/);
+  assert.match(calls[0].init?.body ?? '', /suggested_tags and topics in Korean/);
   // …and the directive is also in the system instruction, authoritatively, so
   // short keyword tags don't come back in the source content's language.
   assert.match(calls[0].init?.body ?? '', /regardless of the language of the bookmark/);
@@ -262,7 +264,7 @@ test('defaults to English when the locale is missing or unknown', async () => {
   const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
 
   await provider.enrich(input({ locale: 'fr' }));
-  assert.match(calls[0].init?.body ?? '', /summary, suggested_tags, and topics in English/);
+  assert.match(calls[0].init?.body ?? '', /suggested_tags and topics in English/);
 });
 
 test('aborts and throws when the endpoint hangs past the timeout', async () => {

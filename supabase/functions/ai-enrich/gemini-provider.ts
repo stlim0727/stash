@@ -110,9 +110,8 @@ function languageFor(locale: string | null | undefined): string {
 function buildSystemInstruction(language: string): string {
   return [
     'You organize a user\'s saved bookmarks.',
-    `Write the natural-language fields — summary, topics, and suggested_tags — in ${language}, regardless of the language of the bookmark's title, URL, site, or description. Translate the concepts into ${language}; do not copy words from the source language. (suggested_collection is the one exception — see below.)`,
+    `Write the natural-language fields — topics and suggested_tags — in ${language}, regardless of the language of the bookmark's title, URL, site, or description. Translate the concepts into ${language}; do not copy words from the source language. (suggested_collection is the one exception — see below.)`,
     'Given a bookmark\'s metadata, assess its content and return:',
-    '- summary: one or two sentences adding a specific detail that is NOT already obvious from the title — what it specifically covers, a key fact, technique, or outcome. Never just restate, rephrase, or translate the title or content type (e.g. "this is a YouTube video about X"). Null if the metadata gives nothing beyond what the title already says.',
     '- topics: a few short lowercase subject keywords.',
     '- suggested_tags: up to five short lowercase tags, each with a confidence from 0 to 1. If one of the provided existing tags fits the bookmark, reuse its exact name verbatim (do NOT translate it) rather than coining a near-duplicate — this keeps the user\'s tag vocabulary consolidated. Only invent a new tag (in the target language) when no existing tag fits.',
     '- suggested_collection: a single best-fit collection NAME for filing this bookmark. If one of the provided existing collections fits, copy its NAME verbatim (do NOT translate it). If none fit, propose a concise, reusable new collection name in Title Case (a broad theme, not a one-off). Use null only when the content is too sparse to categorize at all.',
@@ -127,7 +126,6 @@ function buildSystemInstruction(language: string): string {
 const RESPONSE_SCHEMA = {
   type: 'OBJECT',
   properties: {
-    summary: { type: 'STRING', nullable: true },
     topics: { type: 'ARRAY', items: { type: 'STRING' } },
     suggested_tags: {
       type: 'ARRAY',
@@ -204,7 +202,7 @@ function buildPrompt(input: EnrichmentInput): string {
   // deliberately excluded: it must match an existing collection NAME verbatim
   // (resolved by exact name in the edge function), so translating it would break
   // the lookup. The JSON keys themselves stay English so parsing is unchanged.
-  lines.push(`Write the summary, suggested_tags, and topics in ${language}.`);
+  lines.push(`Write the suggested_tags and topics in ${language}.`);
   return `Assess this bookmark and return the structured fields.\n\n${lines.join('\n')}`;
 }
 
@@ -301,7 +299,11 @@ function normalize(parsed: unknown): EnrichmentOutput {
       : clamp01(obj.confidence);
 
   return {
-    summary: nonEmpty(obj.summary),
+    // Summaries are intentionally not an enrichment output: they mostly
+    // paraphrase a bookmark title and add review noise. Keep this guard even
+    // though the response schema omits the field, so a non-conforming model
+    // response can never reintroduce a proposed memo.
+    summary: null,
     topics,
     suggested_tags,
     suggested_collection: (() => {
