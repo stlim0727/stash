@@ -174,8 +174,9 @@ export function isRepairableSourceTitle(bookmark: { url: string | null; title: s
     const host = new URL(bookmark.url).hostname.toLowerCase();
     if (
       (trimmed === 'reddit' ||
-        trimmed.includes('please wait for verification') ||
-        trimmed.includes('wait for verification')) &&
+        trimmed === 'reddit - please wait for verification' ||
+        trimmed === 'please wait for verification' ||
+        trimmed === 'please wait for verification...') &&
       (host === 'reddit.com' || host.endsWith('.reddit.com') || host === 'redd.it')
     ) {
       return true;
@@ -183,7 +184,8 @@ export function isRepairableSourceTitle(bookmark: { url: string | null; title: s
     if (
       trimmed === 'just a moment...' ||
       trimmed.startsWith('attention required! | cloudflare') ||
-      trimmed.includes('checking your browser')
+      trimmed === 'checking your browser...' ||
+      trimmed.startsWith('checking your browser before accessing')
     ) {
       return true;
     }

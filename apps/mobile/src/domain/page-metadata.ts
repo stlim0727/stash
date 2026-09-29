@@ -138,11 +138,13 @@ export function isChallengeOrBoilerplateTitle(title: string | undefined): boolea
   }
   const lower = title.trim().toLowerCase();
   return (
-    lower.includes('please wait for verification') ||
-    lower.includes('wait for verification') ||
+    lower === 'reddit - please wait for verification' ||
+    lower === 'please wait for verification' ||
+    lower === 'please wait for verification...' ||
     lower === 'just a moment...' ||
     lower.startsWith('attention required! | cloudflare') ||
-    lower.includes('checking your browser')
+    lower === 'checking your browser...' ||
+    lower.startsWith('checking your browser before accessing')
   );
 }
 

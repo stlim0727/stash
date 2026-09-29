@@ -192,6 +192,13 @@ test('isRepairableSourceTitle recognizes legacy Reddit and GeekNews Topic placeh
     }),
     false,
   );
+  assert.equal(
+    isRepairableSourceTitle({
+      url: 'https://example.com/blog/debugging-browser-checks',
+      title: 'Debugging checking your browser requests',
+    }),
+    false,
+  );
 });
 
 test('describeKnownUrl identifies Naver Map URLs', () => {

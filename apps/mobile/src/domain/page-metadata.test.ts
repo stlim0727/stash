@@ -621,6 +621,7 @@ test('isChallengeOrBoilerplateTitle recognizes bot challenge and verification in
   assert.equal(isChallengeOrBoilerplateTitle('Just a moment...'), true);
   assert.equal(isChallengeOrBoilerplateTitle('Attention Required! | Cloudflare'), true);
   assert.equal(isChallengeOrBoilerplateTitle('Checking your browser before accessing site'), true);
+  assert.equal(isChallengeOrBoilerplateTitle('Debugging checking your browser requests'), false);
   assert.equal(isChallengeOrBoilerplateTitle('How to Set Up Claude Code Agent Teams'), false);
   assert.equal(isChallengeOrBoilerplateTitle(''), false);
   assert.equal(isChallengeOrBoilerplateTitle(undefined), false);
