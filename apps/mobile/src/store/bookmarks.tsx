@@ -575,17 +575,19 @@ interface AiRetryState {
   firstAttemptAt: string;
   /** When the most recent attempt failed — the backoff clock runs from here. */
   lastAttemptAt: string;
-  /** How many attempts have failed since the streak began (>= 1). */
+  /** Failed attempts since the streak began; 0 means waiting for sync. */
   attemptCount: number;
 }
 
 /** Wall-clock backoff required since a bookmark's last failed attempt before
  *  an AUTOMATIC retry check may fire the next one, indexed by the current
- *  `attemptCount` (how many attempts have failed so far). A manual "Suggest
+ *  `attemptCount` (how many attempts have failed so far; `0` is a durable
+ *  wait-for-sync deferral, not a failed attempt). A manual "Suggest
  *  with AI"/refresh tap ignores this table and always fires immediately. There
  *  is no entry for `AI_RETRY_MAX_ATTEMPTS` (6): that attempt failing exhausts
  *  the cap and clears all bookkeeping instead of scheduling a 7th. */
 const AI_RETRY_BACKOFF_MS: Record<number, number> = {
+  0: 0,
   1: 2 * 60_000,
   2: 10 * 60_000,
   3: 60 * 60_000,
@@ -1739,6 +1741,33 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       );
     },
     [writeAiRetryState],
+  );
+
+  // An unfile mutation intentionally has an empty queue payload, so a pending
+  // entry cannot tell us which field changed. Keep a zero-attempt durable
+  // marker while waiting for sync instead of spending a provider-failure retry.
+  const deferAiEnrichmentUntilSync = useCallback(
+    (bookmarkId: string) => {
+      if (deletedIds.current.has(bookmarkId)) {
+        return;
+      }
+      const existing = aiRetryState.current[bookmarkId];
+      if (existing && existing.attemptCount > 0) {
+        return;
+      }
+      const now = new Date().toISOString();
+      aiRetryState.current = {
+        ...aiRetryState.current,
+        [bookmarkId]: {
+          firstAttemptAt: existing?.firstAttemptAt ?? now,
+          lastAttemptAt: now,
+          attemptCount: 0,
+        },
+      };
+      persistAiRetryState();
+      syncAiRetryIds();
+    },
+    [persistAiRetryState, syncAiRetryIds],
   );
 
   // Clear a bookmark's retry marker after a successful attempt.
@@ -3909,7 +3938,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // staggered burst queue below.
         if (
           metadata_status !== "failed" &&
-          aiSuggestionsModeRef.current !== "off"
+          aiSuggestionsModeRef.current !== "off" &&
+          // A failed → complete refresh is dispatched by the installed
+          // ai_enrich_dispatch trigger when this update uploads. A second
+          // direct request would consume two slots and race its response.
+          !(latest.metadata_status === "failed" && metadata_status === "complete")
         ) {
           void requestAiEnrichmentRef
             .current?.(id, "auto", {
@@ -4558,25 +4591,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // Best effort: proceed to check if upload succeeded
           }
         }
-        // If a bookmark with an assigned collection still has unsynced work (e.g. sync paused
-        // or sync failure), defer enrichment until the mutation uploads so the server worker
-        // never reasons from a stale cloud row without the local collection hint (STASH-74).
-        const hasUnsyncedCollectionWork =
-          Boolean(latest?.collection_id || overrideMetadata?.collection_id) ||
-          queuedEntry?.payload?.collection_id !== undefined;
-        if (hasUnsyncedCollectionWork) {
-          const stillUnsynced =
-            queueRef.current.some((entry) => entry.local_id === bookmarkId) ||
-            (bookmarksRef.current?.find((item) => item.id === bookmarkId)?.sync_status !== "synced");
-          if (stillUnsynced) {
-            // Defer enrichment until the mutation uploads to the cloud row.
-            // Do NOT consume the AI retry budget (armAiRetry) for a sync deferral.
-            // Clear the session attempted marker so that when sync later settles, the trigger can re-evaluate.
-            aiTriggerAttempted.current.delete(bookmarkId);
-            return source === "manual"
-              ? "Folder changes must finish syncing before generating AI suggestions."
-              : "sync_deferred";
-          }
+        // Queue payloads intentionally omit unchanged fields, so an unfile
+        // update has `{}` and cannot be identified from `collection_id` alone.
+        // Any queued local mutation may therefore make this device's folder
+        // state newer than the cloud row. Wait for it rather than allowing the
+        // function (or its overflow worker) to reason from stale cloud state.
+        const stillUnsynced =
+          queueRef.current.some((entry) => entry.local_id === bookmarkId) ||
+          (bookmarksRef.current?.find((item) => item.id === bookmarkId)?.sync_status !== "synced");
+        if (stillUnsynced) {
+          // This durable marker preserves a deferred Preview Refresh as well
+          // as normal automatic work, without consuming the failure budget.
+          deferAiEnrichmentUntilSync(bookmarkId);
+          aiTriggerAttempted.current.delete(bookmarkId);
+          return source === "manual"
+            ? "Folder changes must finish syncing before generating AI suggestions."
+            : "sync_deferred";
         }
         const metadata: EnrichmentMetadataHint | undefined = latest
           ? {
@@ -4585,7 +4615,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               notes: overrideMetadata?.notes ?? latest.notes,
               site_name: overrideMetadata?.site_name ?? latest.site_name,
               content_type: overrideMetadata?.content_type ?? latest.content_type,
-              collection_id: overrideMetadata?.collection_id ?? latest.collection_id,
+              // With no queued local mutation, the server row is newer or
+              // equal. Never send a cached null that could overwrite a folder
+              // another device assigned meanwhile.
+              ...(overrideMetadata?.collection_id !== undefined
+                ? { collection_id: overrideMetadata.collection_id }
+                : {}),
             }
           : overrideMetadata;
         const activeLocale = localeRef.current;
@@ -5021,6 +5056,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       markAiServerQueued,
       clearAiServerQueued,
       hasSyncedOnce,
+      deferAiEnrichmentUntilSync,
     ],
   );
   useEffect(() => {
