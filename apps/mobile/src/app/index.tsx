@@ -133,6 +133,7 @@ import {
 import { didWordmarkImageLoad, shouldShowWordmarkFallback } from '@/domain/wordmark';
 import {
   didPreviewImageLoad,
+  markPreviewImageLoaded,
   selectPreviewImageUri,
   markPreviewImageFailed,
   usePreviewImageFailuresVersion,
@@ -3519,6 +3520,8 @@ export default function InboxScreen() {
                       onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
                         if (!didPreviewImageLoad(event.nativeEvent)) {
                           markPreviewImageFailed(thumbUri);
+                        } else {
+                          markPreviewImageLoaded(thumbUri);
                         }
                       }}
                     />
@@ -3690,6 +3693,8 @@ export default function InboxScreen() {
                         onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
                           if (!didPreviewImageLoad(event.nativeEvent)) {
                             markPreviewImageFailed(previewUri);
+                          } else {
+                            markPreviewImageLoaded(previewUri);
                           }
                         }}
                       />

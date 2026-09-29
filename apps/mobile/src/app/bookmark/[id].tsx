@@ -62,6 +62,7 @@ import {
 } from '@/domain/suggestion-actions';
 import {
   didPreviewImageLoad,
+  markPreviewImageLoaded,
   markPreviewImageFailed,
   selectPreviewImageUri,
   usePreviewImageFailuresVersion,
@@ -982,6 +983,8 @@ export default function BookmarkDetailScreen({
               onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
                 if (!didPreviewImageLoad(event.nativeEvent)) {
                   markPreviewImageFailed(previewUri);
+                } else {
+                  markPreviewImageLoaded(previewUri);
                 }
               }}
             />
@@ -1018,6 +1021,8 @@ export default function BookmarkDetailScreen({
               onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
                 if (!didPreviewImageLoad(event.nativeEvent)) {
                   markPreviewImageFailed(previewUri);
+                } else {
+                  markPreviewImageLoaded(previewUri);
                 }
               }}
             />

@@ -22,7 +22,7 @@
     "lint": "pnpm format:check && pnpm lint:env && pnpm lint:overlay",
     "lint:env": "node scripts/check-static-env.mjs",
     "lint:overlay": "node scripts/check-overlay-elevation.mjs",
-    "test": "pnpm --filter mobile test && pnpm test:functions",
+    "test": "pnpm --filter mobile test && node --test scripts/user-bookmark-summary.test.mjs && pnpm test:functions",
     "test:functions": "node --no-warnings --experimental-transform-types --test \"supabase/functions/**/*.test.ts\"",
     "typecheck": "pnpm --filter mobile typecheck",
     "verify:supabase": "node --no-warnings --experimental-transform-types scripts/verify-supabase.mjs",

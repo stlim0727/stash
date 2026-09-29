@@ -10,6 +10,7 @@ import {
   getPreviewImageFailuresVersion,
   isPreviewImageFailed,
   markPreviewImageFailed,
+  markPreviewImageLoaded,
   resetPreviewImageFailuresForTest,
   subscribePreviewImageFailures,
 } from './preview-image-cache.ts';
@@ -125,5 +126,20 @@ test('remote preview retries automatically once, then remains failed until expli
   assert.equal(isPreviewImageFailed(uri), true);
 
   clearPreviewImageFailed(uri);
+  assert.equal(isPreviewImageFailed(uri), false);
+});
+
+test('a successful decoded load restores the automatic retry budget', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const uri = 'https://example.com/intermittent.jpg';
+  markPreviewImageFailed(uri);
+  t.mock.timers.tick(PREVIEW_IMAGE_RETRY_MS);
+  assert.equal(isPreviewImageFailed(uri), false);
+
+  // The retry decoded successfully. A later transient failure should be able
+  // to schedule one more automatic retry instead of becoming permanent.
+  markPreviewImageLoaded(uri);
+  markPreviewImageFailed(uri);
+  t.mock.timers.tick(PREVIEW_IMAGE_RETRY_MS);
   assert.equal(isPreviewImageFailed(uri), false);
 });

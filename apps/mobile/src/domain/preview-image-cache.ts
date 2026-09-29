@@ -75,6 +75,18 @@ export function clearPreviewImageFailed(uri: string | null | undefined): void {
   notify();
 }
 
+/**
+ * Record a decoded image load. A URI that later fails should get its one
+ * automatic retry again: a successful load proves the previous failure was
+ * transient rather than a permanently broken URL.
+ */
+export function markPreviewImageLoaded(uri: string | null | undefined): void {
+  if (!uri || !automaticRetryCounts.has(uri)) {
+    return;
+  }
+  automaticRetryCounts.delete(uri);
+}
+
 /** Prefer the local copy, but retain a usable uploaded image after local failure. */
 export function selectPreviewImageUri(
   localUri: string | null | undefined,
