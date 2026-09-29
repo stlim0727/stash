@@ -315,6 +315,28 @@ test("store hydration sequentially cleans invalid video_unavailable flags across
   expect(persisted.every((b) => b.video_unavailable === false)).toBe(true);
 });
 
+test("store hydration re-reads each bookmark before delayed cleanup writes to preserve concurrent mutations (STASH-71)", async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: "bm-concurrent",
+      url: "https://www.youtube.com/playlist?list=PLrAXtmErZgOdP",
+      video_unavailable: true,
+      title: "Original Title",
+    }),
+  ]);
+  const originalUpdate = fakeRepo.repository.updateBookmark;
+  const updateSpy = jest.fn(async (b: Bookmark) => originalUpdate(b));
+  fakeRepo.repository.updateBookmark = updateSpy;
+
+  const { result } = await renderStore();
+  await waitFor(() => expect(result.current.inbox).toHaveLength(1));
+
+  await waitFor(() => expect(updateSpy).toHaveBeenCalled());
+  const updatedCall = updateSpy.mock.calls[0]?.[0];
+  expect(updatedCall?.video_unavailable).toBe(false);
+  expect(updatedCall?.title).toBe("Original Title");
+});
+
 test("checkVideoAvailability clears video_unavailable when checkYoutubeAvailability returns not_applicable (STASH-71)", async () => {
   fakeRepo.__reset([
     makeStoredBookmark({

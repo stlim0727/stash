@@ -2263,26 +2263,34 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             }
             // STASH-71: Clean up any erroneously set video_unavailable flags on
             // non-candidate bookmarks (such as YouTube playlists or non-YouTube URLs)
-            // stored from earlier releases. Collect cleaned rows and persist them
+            // stored from earlier releases. Collect cleaned row ids and persist them
             // sequentially to prevent single-connection SQLite actor queue buildup.
-            const cleanedBookmarks: Bookmark[] = [];
+            // Re-read each row immediately before updating to avoid clobbering fresher
+            // metadata/sync mutations applied concurrently during startup.
+            const cleanedIds: string[] = [];
             const sanitizedBookmarks = migratedBookmarks.map((bookmark) => {
               if (
                 bookmark.video_unavailable &&
                 !isYoutubeAvailabilityCandidate(bookmark.url ?? "")
               ) {
                 const cleaned: Bookmark = { ...bookmark, video_unavailable: false };
-                cleanedBookmarks.push(cleaned);
+                cleanedIds.push(bookmark.id);
                 return cleaned;
               }
               return bookmark;
             });
 
-            if (cleanedBookmarks.length > 0) {
+            if (cleanedIds.length > 0) {
               ensureRepositoryReady()
                 .then(async () => {
-                  for (const cleaned of cleanedBookmarks) {
-                    await repository.updateBookmark(cleaned);
+                  for (const id of cleanedIds) {
+                    const fresh = await repository.getBookmark(id);
+                    if (fresh && fresh.video_unavailable) {
+                      await repository.updateBookmark({
+                        ...fresh,
+                        video_unavailable: false,
+                      });
+                    }
                   }
                 })
                 .catch((e) =>

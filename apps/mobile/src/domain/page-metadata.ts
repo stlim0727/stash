@@ -758,7 +758,14 @@ async function resolveKnownYoutubeShortener(rawUrl: string): Promise<string | nu
       redirect: 'follow',
       signal: controller.signal,
     });
-    return response.url || null;
+    if (!response.ok) {
+      return null;
+    }
+    const finalUrl = response.url || null;
+    if (!finalUrl || isKnownYoutubeShortenerHost(finalUrl)) {
+      return null;
+    }
+    return finalUrl;
   } catch {
     return null;
   } finally {
