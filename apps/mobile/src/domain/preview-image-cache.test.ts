@@ -85,6 +85,16 @@ test('failed local image falls through to its uploaded copy', () => {
   assert.equal(selectPreviewImageUri(null, null), null);
 });
 
+test('missing local images stay failed while an uploaded fallback is available', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const local = 'file:///missing.jpg';
+  const remote = 'https://example.com/upload.jpg';
+  markPreviewImageFailed(local);
+  t.mock.timers.tick(PREVIEW_IMAGE_RETRY_MS);
+  assert.equal(isPreviewImageFailed(local), true);
+  assert.equal(selectPreviewImageUri(local, remote), remote);
+});
+
 test('temporary failures expire and notify mounted previews to retry', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const uri = 'https://example.com/transient.jpg';

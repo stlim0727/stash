@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 export const PREVIEW_IMAGE_RETRY_MS = 60_000;
-const failedImageUris = new Map<string, ReturnType<typeof setTimeout>>();
+const failedImageUris = new Map<string, ReturnType<typeof setTimeout> | null>();
 const listeners = new Set<() => void>();
 let failureVersion = 0;
 
@@ -18,6 +18,13 @@ function notify() {
  */
 export function markPreviewImageFailed(uri: string | null | undefined): void {
   if (!uri || failedImageUris.has(uri)) {
+    return;
+  }
+  // Missing device files cannot recover without a new local preview. Retain
+  // that failure so a working uploaded fallback is not replaced every minute.
+  if (uri.startsWith('file://')) {
+    failedImageUris.set(uri, null);
+    notify();
     return;
   }
   // A transport error is not permanent. Expiry notifies mounted screens too,
@@ -45,7 +52,8 @@ export function clearPreviewImageFailed(uri: string | null | undefined): void {
   if (!uri || !failedImageUris.has(uri)) {
     return;
   }
-  clearTimeout(failedImageUris.get(uri));
+  const timer = failedImageUris.get(uri);
+  if (timer) clearTimeout(timer);
   failedImageUris.delete(uri);
   notify();
 }
@@ -107,7 +115,9 @@ export function usePreviewImageFailuresVersion(): number {
 }
 
 export function resetPreviewImageFailuresForTest(): void {
-  for (const timer of failedImageUris.values()) clearTimeout(timer);
+  for (const timer of failedImageUris.values()) {
+    if (timer) clearTimeout(timer);
+  }
   failedImageUris.clear();
   listeners.clear();
   failureVersion = 0;

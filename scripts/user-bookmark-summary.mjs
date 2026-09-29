@@ -24,6 +24,15 @@ import { stripVTControlCharacters } from 'node:util';
 const DEFAULT_SUPABASE_URL = 'https://stzutoejnhzxzhjsjtsi.supabase.co';
 const DEFAULT_TIMEOUT_MS = 15000;
 
+function validAppVersion(value) {
+  if (typeof value !== 'string' || value.length > 128) return null;
+  // Each component is bounded, so validation remains linear for metadata that
+  // comes from untrusted clients.
+  return /^v?\d{1,10}\.\d{1,10}\.\d{1,10}(?:[-+][0-9A-Za-z.-]{1,96})?$/.test(value)
+    ? value
+    : null;
+}
+
 function readDotEnv(filePath) {
   if (!filePath || !fs.existsSync(filePath)) return {};
   const env = {};
@@ -285,8 +294,7 @@ Options:
     };
     const meta = typeof u.user_metadata === 'object' && u.user_metadata !== null ? u.user_metadata : {};
     const platform = ['android', 'ios', 'web'].includes(meta.platform) ? meta.platform : null;
-    const version = safeString(meta.app_version) || safeString(sync?.app_version);
-    const appVersion = version && /^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)*$/.test(version) ? version : null;
+    const appVersion = validAppVersion(safeString(meta.app_version)) || validAppVersion(safeString(sync?.app_version));
     const appVersionUpdatedAt = getLatestTimestamp([meta.app_version_updated_at], now.getTime());
     const versionSeen = appVersionUpdatedAt ? appVersionUpdatedAt.slice(0, 10) : null;
 

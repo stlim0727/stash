@@ -9,10 +9,11 @@ async function report(t, args) {
     user_metadata: { platform: i % 2 ? 'android' : 'web', app_version: '1.2.3', app_version_updated_at: '2999-01-01T00:00:00Z' },
   }));
   users.push({ id: 'registered', email: '\u001b[31mhello\n@example.com', user_metadata: { platform: '\u001b]0;bad\u0007', app_version: '\nforged row' } });
+  users.push({ id: 'sync-version', email: 'sync@example.com', user_metadata: { app_version: 'bad' } });
   users.push({
     id: 'registered-controls',
     email: '\u001b[31mhello\n@example.com',
-    user_metadata: { platform: '\u001b]0;bad\u0007', app_version: '\nforged row' },
+    user_metadata: { platform: '\u001b]0;bad\u0007', app_version: `1.2.3${'-'.repeat(500)}!` },
   });
   const bookmarks = users.slice(0, 22).map(u => ({ user_id: u.id, is_archived: false }));
   bookmarks.push({ user_id: users[0].id, is_archived: true, collection_id: 'archived-only' });
@@ -24,6 +25,9 @@ async function report(t, args) {
         return { users: request.searchParams.get('page') === '1' ? users : [] };
       }
       if (request.searchParams.get('offset') === '0' && url.includes('bookmarks?')) return bookmarks;
+      if (request.searchParams.get('offset') === '0' && url.includes('user_sync_status')) {
+        return [{ user_id: 'sync-version', app_version: '2.3.4' }];
+      }
       if (request.searchParams.get('offset') === '0' && url.includes('cleanup')) {
         return [{ deleted_count: 7 }];
       }
@@ -39,7 +43,7 @@ async function report(t, args) {
 test('JSON report redacts anonymous IDs and separates versions, archives, and unfiltered totals', async t => {
   const output = await report(t, ['--json']);
   const data = JSON.parse(output);
-  assert.equal(data.cumulative_unfiltered_accounts, 31);
+  assert.equal(data.cumulative_unfiltered_accounts, 32);
   assert.equal(data.historical_automation_classification, 'unknown');
   assert.equal(data.cumulative_lifetime_sessions, undefined);
   assert.equal(data.users[0].id, '00000000');
@@ -52,6 +56,12 @@ test('JSON report redacts anonymous IDs and separates versions, archives, and un
   assert.equal(data.users.at(-1).platform, null);
   assert.equal(data.users.at(-1).app_version, null);
   assert.equal(data.users.at(-1).email, 'hello@example.com');
+  assert.equal(data.users.find(user => user.id === 'sync-version').app_version, '2.3.4');
+});
+
+test('version validation rejects long malformed metadata', async t => {
+  const output = await report(t, ['--json']);
+  assert.doesNotMatch(output, /1\.2\.3--------------------------------/);
 });
 
 test('text report includes all nonempty anonymous users without terminal controls', async t => {
