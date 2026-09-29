@@ -1125,7 +1125,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const requestAiEnrichmentRef = useRef<
     | ((
         bookmarkId: string,
-        source?: "auto" | "manual",
+        source?: "auto" | "manual" | "preview",
         overrideMetadata?: EnrichmentMetadataHint,
       ) => Promise<string | null>)
     | null
@@ -4003,7 +4003,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             !needsDirectPreviewRefresh)
         ) {
           void requestAiEnrichmentRef
-            .current?.(id, "auto", {
+            .current?.(id, "preview", {
               title: updated.title,
               description: updated.description,
               notes: updated.notes,
@@ -4595,7 +4595,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const requestAiEnrichment = useCallback(
     async (
       bookmarkId: string,
-      source: "auto" | "manual" = "manual",
+      source: "auto" | "manual" | "preview" = "manual",
       overrideMetadata?: EnrichmentMetadataHint,
     ): Promise<string | null> => {
       if (!auth.session) {
@@ -4614,7 +4614,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         return "AI suggestions are available once this bookmark has synced.";
       }
       if (aiEnriching.current.has(bookmarkId)) {
-        return null;
+        // A Preview Refresh must retain its durable replacement marker when a
+        // pre-refresh request is already running; `null` means this call
+        // actually generated a fresh enrichment.
+        return source === "preview" ? "enrichment_in_flight" : null;
       }
       // Library-reset race guard: snapshot the epoch now; every settle path
       // below re-checks it and discards if a reset completed meanwhile.
@@ -4777,7 +4780,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // already witnessing it — so it doesn't (and Detail clears the flag).
         // In auto_accept mode this only fires for whatever auto-accept left
         // behind (e.g. a pending summary — auto-accept never touches notes).
-        if (source === "auto") {
+        if (source === "auto" || source === "preview") {
           noteUnseenSuggestions(enrichment);
         }
         return null;
