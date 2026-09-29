@@ -1074,6 +1074,22 @@ describe('ShareIntentHandler', () => {
     unmount();
   });
 
+  it('acknowledges an invalid native share after recording its terminal outcome', async () => {
+    fakeRepo.__reset([]);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: null, text: null, meta: { attemptId: 'native-invalid' } },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { unmount } = await renderHandler();
+
+    await waitFor(() =>
+      expect(mockShareIntentModule.acknowledgeShareIntent).toHaveBeenCalledWith('native-invalid'),
+    );
+    unmount();
+  });
+
   it('acknowledges the native attempt only after bookmark persistence completes', async () => {
   fakeRepo.__reset([]);
   await fakeRepo.repository.setMeta(SHARE_BEHAVIOR_PREF_KEY, 'inbox');

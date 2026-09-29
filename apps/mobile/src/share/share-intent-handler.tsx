@@ -260,10 +260,23 @@ export function ShareIntentHandler() {
         }
         return durable;
       });
-    } else if (result.status === 'invalid' && result.reason === 'too_long') {
-      // Distinguish from the generic "nothing to save" toast (Sentry
-      // STASH-2J): there WAS a link, it was just too long to save.
-      message = t('toast.urlTooLong');
+    } else {
+      if (result.status === 'invalid' && result.reason === 'too_long') {
+        // Distinguish from the generic "nothing to save" toast (Sentry
+        // STASH-2J): there WAS a link, it was just too long to save.
+        message = t('toast.urlTooLong');
+      }
+      if (typeof ShareIntentModule?.acknowledgeShareIntent === 'function') {
+        // `invalid` is a terminal outcome: there is no durable work to retry.
+        // Acknowledge it only after recording the diagnostic above, otherwise an
+        // invalid native intent survives activity recreation and repeatedly opens
+        // the app with the same toast. Failed durable writes deliberately stay
+        // unacknowledged through the `saved` branch so they can be replayed.
+        void ShareIntentModule.acknowledgeShareIntent(share.attemptId).catch(() => {
+          // A failed acknowledgement leaves the terminal attempt available for a
+          // later lifecycle retry; its recorded diagnostic explains the outcome.
+        });
+      }
     }
     // Bracket the save so a post-share freeze can be tied to how long the durable
     // write took. Coarse only — status/duration/durability, never content.

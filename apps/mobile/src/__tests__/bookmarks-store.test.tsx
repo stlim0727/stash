@@ -1416,6 +1416,28 @@ test("native capture client ids make replayed text and image shares idempotent",
   expect(fakeRepo.__queue()).toHaveLength(0);
 });
 
+test("native capture replay finds a trashed capture by client id", async () => {
+  const attemptId = "0d971988-176f-4f82-bb31-6e7b23123c92";
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      url: null,
+      content_type: "text",
+      client_id: attemptId,
+      deleted_at: "2026-09-28T00:00:00.000Z",
+    }),
+  ]);
+  const { result } = await renderStore();
+
+  const replayed = result.current.addBookmark({
+    shared_text: "Keep this thought",
+    capture_client_id: attemptId,
+  });
+
+  expect(replayed.status).toBe("duplicate");
+  expect(fakeRepo.__bookmarks()).toHaveLength(1);
+  expect(fakeRepo.__queue()).toHaveLength(0);
+});
+
 test("JSON restore keeps plain body and Markdown personal notes in both row and create queue", async () => {
   const { result } = await renderStore();
   await act(async () => {

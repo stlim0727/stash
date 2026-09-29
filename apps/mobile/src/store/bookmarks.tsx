@@ -2609,8 +2609,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     }): AddBookmarkResult => {
       const replayedCapture = capture_client_id
         ? loadedBookmarks.find(
-            (bookmark) =>
-              isActiveBookmark(bookmark) && bookmark.client_id === capture_client_id,
+            // Capture ids are idempotency keys, unlike content URLs: a replay
+            // must find its original row even if the user trashed it after an
+            // acknowledgement failure. Creating another row would later
+            // conflict with the cloud's all-rows client_id uniqueness too.
+            (bookmark) => bookmark.client_id === capture_client_id,
           )
         : undefined;
       if (replayedCapture) {
