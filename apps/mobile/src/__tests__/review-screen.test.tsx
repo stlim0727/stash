@@ -260,7 +260,7 @@ test('accepting a folder recommendation records it so undoing the move does not 
   fakeRepo.__reset(
     [makeStoredBookmark({ id, title: 'Move me', collection_id: 'col-watch' })],
     TWO_COLLECTIONS(now),
-    [makeEnrichment({ bookmark_id: id, suggested_collection_id: 'col-recipes' })],
+    [makeEnrichment({ bookmark_id: id, suggested_collection_id: 'col-recipes', confidence: 0.9 })],
   );
 
   const screen = await renderReview();
@@ -437,7 +437,7 @@ test('a CHANGE chip strikes the current folder and shows the move target; tappin
   fakeRepo.__reset(
     [makeStoredBookmark({ id, title: 'Move me', collection_id: 'col-watch' })],
     TWO_COLLECTIONS(),
-    [makeEnrichment({ bookmark_id: id, suggested_collection_id: 'col-recipes' })],
+    [makeEnrichment({ bookmark_id: id, suggested_collection_id: 'col-recipes', confidence: 0.9 })],
   );
 
   const screen = await renderReview();
