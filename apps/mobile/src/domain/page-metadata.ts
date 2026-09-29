@@ -790,9 +790,19 @@ async function resolveKnownYoutubeShortener(rawUrl: string): Promise<string | nu
  * Detail screen opens), never as background polling of the whole library —
  * "Capture is sacred" and privacy/battery both rule that out.
  */
+export type YoutubeAvailabilityResult =
+  | 'available'
+  | 'unavailable'
+  | 'unknown'
+  | 'not_applicable';
+
 export async function checkYoutubeAvailability(
   rawUrl: string,
-): Promise<'available' | 'unavailable' | 'unknown'> {
+): Promise<YoutubeAvailabilityResult> {
+  // Direct YouTube playlist URLs are never video availability candidates (STASH-71).
+  if (youtubePlaylistId(rawUrl)) {
+    return 'not_applicable';
+  }
   // oembedEndpoint also supports Reddit previews and YouTube playlists for metadata;
   // availability is specifically a YouTube *video* lifecycle check, so never query
   // playlists or other providers here (STASH-71).
@@ -802,10 +812,17 @@ export async function checkYoutubeAvailability(
   let videoId = youtubeVideoId(rawUrl);
   if (!videoId) {
     const resolved = await resolveKnownYoutubeShortener(rawUrl);
-    videoId = resolved ? youtubeVideoId(resolved) : null;
-  }
-  if (!videoId) {
-    return 'unknown';
+    if (!resolved) {
+      // Failed to resolve shortener (network error, timeout, or invalid host).
+      return 'unknown';
+    }
+    videoId = youtubeVideoId(resolved);
+    if (!videoId) {
+      // Resolved to a non-video URL (such as a YouTube playlist or channel).
+      // Return 'not_applicable' so callers can distinguish from network failures
+      // and clear any stale video_unavailable flags (STASH-71).
+      return 'not_applicable';
+    }
   }
   const endpoint = `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}`;
   const controller = new AbortController();
