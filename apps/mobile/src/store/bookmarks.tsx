@@ -4543,9 +4543,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const latest = bookmarksRef.current?.find(
           (item) => item.id === bookmarkId,
         );
-        // If the bookmark has pending sync work (e.g. an un-uploaded folder move),
+        // If the bookmark has unsynced work (e.g. an un-uploaded folder move),
         // flush sync so the cloud row reflects the user's latest organizational state.
-        if (latest?.sync_status === "pending" && !syncPausedRef.current) {
+        const hasUnsyncedWork =
+          queueRef.current.some((entry) => entry.local_id === bookmarkId) ||
+          (latest ? latest.sync_status !== "synced" : false);
+        if (hasUnsyncedWork && !syncPausedRef.current) {
           try {
             await syncNowRef.current?.();
           } catch {
@@ -4771,14 +4774,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // an enqueue failure must never change what the caller sees for
           // this 429, and is never retried here.
           // Only enqueue to the server-side overflow queue if the bookmark's local
-          // mutations have uploaded (sync_status !== 'pending'). If the local row still
-          // has pending sync work (e.g. an un-uploaded collection move while sync is paused),
+          // mutations have uploaded. If the local row still has unsynced work in the
+          // queue (pending, syncing, or failed) or sync_status !== 'synced',
           // the server worker would reason from the stale cloud row. In that case, let local
           // retry (armed via armAiRetry above) retry when sync resumes and the row uploads.
-          const hasPendingSync =
-            bookmarksRef.current?.find((item) => item.id === bookmarkId)
-              ?.sync_status === "pending";
-          if (session && !hasPendingSync) {
+          const queuedEntry = queueRef.current.find(
+            (entry) => entry.local_id === bookmarkId,
+          );
+          const currentBookmark = bookmarksRef.current?.find(
+            (item) => item.id === bookmarkId,
+          );
+          const hasUnsyncedQueueWork =
+            Boolean(queuedEntry) ||
+            (currentBookmark ? currentBookmark.sync_status !== "synced" : false);
+          if (session && !hasUnsyncedQueueWork) {
             // STASH-4D/4E: production keeps reporting "new row violates row-
             // level security policy for table pending_ai_enrichment" on this
             // insert even on builds carrying STASH-49's fix (this call

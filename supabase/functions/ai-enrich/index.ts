@@ -1232,11 +1232,7 @@ Deno.serve(async (req) => {
       // this existed. Same on_conflict/ignore-duplicates shape as the
       // client's own enqueuePendingEnrichment (api/bookmarks.ts) so a bulk
       // import that's already queued this bookmark itself no-ops here too.
-      // If the client passed an un-uploaded collection hint (effectiveCollectionId !== bookmark.collection_id),
-      // do not enqueue into the background retry queue where the worker would evaluate against the stale
-      // bookmark.collection_id. The client's local retry will re-trigger once the mutation uploads.
-      const hasStaleCloudCollection = effectiveCollectionId !== bookmark.collection_id;
-      if (degradedReason === 'rate_limited' && !hasStaleCloudCollection) {
+      if (degradedReason === 'rate_limited') {
         // The slot spent above (request_ai_enrichment_slot(_for)) paid for an
         // attempt that the provider itself rejected — refund it before
         // queueing the retry, for the same reason processEnrichmentRow's
