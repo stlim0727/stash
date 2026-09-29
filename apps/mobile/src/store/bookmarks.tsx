@@ -2263,22 +2263,40 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             }
             // STASH-71: Clean up any erroneously set video_unavailable flags on
             // non-candidate bookmarks (such as YouTube playlists or non-YouTube URLs)
-            // stored from earlier releases.
+            // stored from earlier releases. Collect cleaned row ids and persist them
+            // sequentially to prevent single-connection SQLite actor queue buildup.
+            // Re-read each row immediately before updating to avoid clobbering fresher
+            // metadata/sync mutations applied concurrently during startup.
+            const cleanedIds: string[] = [];
             const sanitizedBookmarks = migratedBookmarks.map((bookmark) => {
               if (
                 bookmark.video_unavailable &&
                 !isYoutubeAvailabilityCandidate(bookmark.url ?? "")
               ) {
                 const cleaned: Bookmark = { ...bookmark, video_unavailable: false };
-                ensureRepositoryReady()
-                  .then(() => repository.updateBookmark(cleaned))
-                  .catch((e) =>
-                    logStorageError("clear invalid video_unavailable on load", e),
-                  );
+                cleanedIds.push(bookmark.id);
                 return cleaned;
               }
               return bookmark;
             });
+
+            if (cleanedIds.length > 0) {
+              ensureRepositoryReady()
+                .then(async () => {
+                  for (const id of cleanedIds) {
+                    const fresh = await repository.getBookmark(id);
+                    if (fresh && fresh.video_unavailable) {
+                      await repository.updateBookmark({
+                        ...fresh,
+                        video_unavailable: false,
+                      });
+                    }
+                  }
+                })
+                .catch((e) =>
+                  logStorageError("clear invalid video_unavailable on load", e),
+                );
+            }
 
             // Merge instead of replace: saves made while loading must survive.
             setBookmarks((current) =>
@@ -3624,6 +3642,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // current flag as-is rather than guess.
           return;
         }
+        // STASH-71: 'unavailable' marks the video as unavailable. 'available' and
+        // 'not_applicable' (such as a short link that resolved to a playlist or
+        // non-video) clear any stale video_unavailable flag.
         const unavailable = result === "unavailable";
         const latest = bookmarksRef.current?.find(
           (bookmark) => bookmark.id === id,

@@ -27,7 +27,7 @@ jest.mock("@/domain/enrichment", () => ({
     mockEnrichBookmark(bookmark, fetcher),
 }));
 const mockCheckYoutubeAvailability = jest.fn<
-  Promise<"available" | "unavailable" | "unknown">,
+  Promise<"available" | "unavailable" | "unknown" | "not_applicable">,
   [string]
 >(async () => "unknown");
 jest.mock("@/domain/page-metadata", () => ({
@@ -284,6 +284,87 @@ test("store hydration cleans invalid video_unavailable flags on playlist bookmar
 
   const persisted = (await fakeRepo.repository.listBookmarks()).find(
     (b) => b.id === "bm-playlist-hydration",
+  );
+  expect(persisted?.video_unavailable).toBe(false);
+  expect(fakeRepo.__queue()).toHaveLength(0);
+});
+
+test("store hydration sequentially cleans invalid video_unavailable flags across multiple bookmarks (STASH-71)", async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: "bm-p1",
+      url: "https://www.youtube.com/playlist?list=PL1",
+      video_unavailable: true,
+    }),
+    makeStoredBookmark({
+      id: "bm-p2",
+      url: "https://www.youtube.com/playlist?list=PL2",
+      video_unavailable: true,
+    }),
+    makeStoredBookmark({
+      id: "bm-p3",
+      url: "https://www.youtube.com/playlist?list=PL3",
+      video_unavailable: true,
+    }),
+  ]);
+  const { result } = await renderStore();
+  await waitFor(() => expect(result.current.inbox).toHaveLength(3));
+  expect(result.current.inbox.every((b) => b.video_unavailable === false)).toBe(true);
+
+  const persisted = await fakeRepo.repository.listBookmarks();
+  expect(persisted.every((b) => b.video_unavailable === false)).toBe(true);
+});
+
+test("store hydration re-reads each bookmark before delayed cleanup writes to preserve concurrent mutations (STASH-71)", async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: "bm-concurrent",
+      url: "https://www.youtube.com/playlist?list=PLrAXtmErZgOdP",
+      video_unavailable: true,
+      title: "Original Title",
+    }),
+  ]);
+  const originalUpdate = fakeRepo.repository.updateBookmark;
+  const updateSpy = jest.fn(async (b: Bookmark) => originalUpdate(b));
+  fakeRepo.repository.updateBookmark = updateSpy;
+
+  const { result } = await renderStore();
+  await waitFor(() => expect(result.current.inbox).toHaveLength(1));
+
+  await waitFor(() => expect(updateSpy).toHaveBeenCalled());
+  const updatedCall = updateSpy.mock.calls[0]?.[0];
+  expect(updatedCall?.video_unavailable).toBe(false);
+  expect(updatedCall?.title).toBe("Original Title");
+});
+
+test("checkVideoAvailability clears video_unavailable when checkYoutubeAvailability returns not_applicable (STASH-71)", async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: "bm-short-playlist",
+      url: "https://share.google/bb3vpuiCbbyVhrpTp",
+      video_unavailable: true,
+    }),
+  ]);
+  mockCheckYoutubeAvailability.mockResolvedValueOnce("not_applicable");
+  const { result } = await renderStore();
+  await waitFor(() => expect(result.current.inbox).toHaveLength(1));
+
+  await act(async () => {
+    result.current.checkVideoAvailability(
+      "bm-short-playlist",
+      "https://share.google/bb3vpuiCbbyVhrpTp",
+    );
+    await Promise.resolve();
+  });
+
+  expect(mockCheckYoutubeAvailability).toHaveBeenCalledWith(
+    "https://share.google/bb3vpuiCbbyVhrpTp",
+  );
+  await waitFor(() =>
+    expect(result.current.inbox[0]?.video_unavailable).toBe(false),
+  );
+  const persisted = (await fakeRepo.repository.listBookmarks()).find(
+    (b) => b.id === "bm-short-playlist",
   );
   expect(persisted?.video_unavailable).toBe(false);
   expect(fakeRepo.__queue()).toHaveLength(0);

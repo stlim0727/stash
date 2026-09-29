@@ -42,7 +42,7 @@ jest.mock('@/domain/enrichment', () => ({
   enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
 }));
 const mockCheckYoutubeAvailability = jest.fn<
-  Promise<'available' | 'unavailable' | 'unknown'>,
+  Promise<'available' | 'unavailable' | 'unknown' | 'not_applicable'>,
   [string]
 >(async () => 'unknown');
 jest.mock('@/domain/page-metadata', () => ({
@@ -307,6 +307,33 @@ test('STASH-71: a YouTube playlist bookmark never triggers availability check an
   expect(mockCheckYoutubeAvailability).not.toHaveBeenCalled();
   expect(screen.queryByText(/video unavailable/)).toBeNull();
   expect(screen.queryByLabelText('Search YouTube')).toBeNull();
+});
+
+test('STASH-71: a share.google bookmark resolving to a playlist clears video_unavailable and hides chip/action', async () => {
+  mockRouteId = SYNCED_ID;
+  mockCheckYoutubeAvailability.mockReset();
+  mockCheckYoutubeAvailability.mockResolvedValueOnce('not_applicable');
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      title: 'Shared Playlist',
+      url: 'https://share.google/playlist-redirect',
+      url_hash: 'https://share.google/playlist-redirect',
+      video_unavailable: true,
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('Shared Playlist')).toBeTruthy());
+
+  await waitFor(() => {
+    expect(mockCheckYoutubeAvailability).toHaveBeenCalledWith('https://share.google/playlist-redirect');
+  });
+
+  await waitFor(() => {
+    expect(screen.queryByText(/video unavailable/)).toBeNull();
+    expect(screen.queryByLabelText('Search YouTube')).toBeNull();
+  });
 });
 
 test('copy link action copies the bookmark URL and confirms with a toast', async () => {

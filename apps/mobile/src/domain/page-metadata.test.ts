@@ -305,7 +305,7 @@ test('checkYoutubeAvailability resolves a share.google redirect via HEAD before 
   globalThis.fetch = (async (target: string, init?: RequestInit) => {
     calls.push({ url: target, method: init?.method });
     if (target.startsWith('https://share.google/')) {
-      return { url: 'https://www.youtube.com/shorts/MufIgnqP1vk' } as unknown as Response;
+      return { ok: true, status: 200, url: 'https://www.youtube.com/shorts/MufIgnqP1vk' } as unknown as Response;
     }
     return { ok: false, status: 404 } as unknown as Response;
   }) as typeof fetch;
@@ -362,15 +362,84 @@ test('isYoutubeAvailabilityCandidate accepts direct YouTube video URLs and the s
   assert.equal(isYoutubeAvailabilityCandidate('not a url'), false);
 });
 
-test('checkYoutubeAvailability reports unknown on playlist URLs and shorteners resolving to playlists (STASH-71)', async () => {
+test('checkYoutubeAvailability reports not_applicable on playlist URLs and shorteners resolving to playlists (STASH-71)', async () => {
   assert.equal(
     await checkYoutubeAvailability('https://youtube.com/playlist?list=RDVAerYplzZUE'),
-    'unknown',
+    'not_applicable',
   );
   assert.equal(
     await checkYoutubeAvailability('https://www.youtube.com/playlist?list=PLrAXtmErZgOdP_8GztsuKi9nrraNbKKp4'),
-    'unknown',
+    'not_applicable',
   );
+});
+
+test('checkYoutubeAvailability reports not_applicable when a share.google link resolves to a playlist (STASH-71)', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (target: string) => {
+    if (target.startsWith('https://share.google/')) {
+      return { ok: true, status: 200, url: 'https://www.youtube.com/playlist?list=PLrAXtmErZgOdP_8GztsuKi9nrraNbKKp4' } as unknown as Response;
+    }
+    return { ok: false, status: 404 } as unknown as Response;
+  }) as typeof fetch;
+  try {
+    assert.equal(
+      await checkYoutubeAvailability('https://share.google/bb3vpuiCbbyVhrpTp'),
+      'not_applicable',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('checkYoutubeAvailability reports unknown when resolving a short link fails due to network error', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new Error('network down');
+  }) as unknown as typeof fetch;
+  try {
+    assert.equal(
+      await checkYoutubeAvailability('https://share.google/bb3vpuiCbbyVhrpTp'),
+      'unknown',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('checkYoutubeAvailability reports unknown when shortener HEAD returns HTTP error (404/503)', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (target: string) => {
+    if (target.startsWith('https://share.google/')) {
+      return { ok: false, status: 404, url: target } as unknown as Response;
+    }
+    return { ok: false, status: 404 } as unknown as Response;
+  }) as typeof fetch;
+  try {
+    assert.equal(
+      await checkYoutubeAvailability('https://share.google/bb3vpuiCbbyVhrpTp'),
+      'unknown',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('checkYoutubeAvailability reports unknown when shortener does not redirect off shortener host', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (target: string) => {
+    if (target.startsWith('https://share.google/')) {
+      return { ok: true, status: 200, url: 'https://share.google/bb3vpuiCbbyVhrpTp' } as unknown as Response;
+    }
+    return { ok: false, status: 404 } as unknown as Response;
+  }) as typeof fetch;
+  try {
+    assert.equal(
+      await checkYoutubeAvailability('https://share.google/bb3vpuiCbbyVhrpTp'),
+      'unknown',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('checkYoutubeAvailability reports unknown on a non-YouTube URL, a 5xx, and a network error', async () => {
