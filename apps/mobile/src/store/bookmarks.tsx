@@ -542,6 +542,11 @@ const PENDING_TAG_OPS_KEY = "pending_tag_ops";
  *  drop the auto-trigger — the marker is re-hydrated and fired on next launch. */
 const PENDING_AI_TRIGGER_KEY = "pending_ai_trigger";
 
+/** Durable ids whose Preview Refresh discarded a locally cached enrichment.
+ * A later successful refresh must replace the still-present cloud enrichment;
+ * the server dispatch trigger intentionally skips rows that already have one. */
+const PENDING_AI_PREVIEW_REFRESH_KEY = "pending_ai_preview_refresh";
+
 /** Durable key (JSON `{ [bookmarkId]: AiRetryState }` in meta) for bookmarks
  *  with a failed AI-enrichment attempt (auto OR manual) that wrote no
  *  `ai_enrichments` row, awaiting a backoff-scheduled retry. Populated by any
@@ -1033,6 +1038,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // meta (PENDING_AI_TRIGGER_KEY) so the trigger survives an app kill during the
   // metadata-fetch window. Cleared only once enrichment succeeds.
   const pendingAiTrigger = useRef(new Set<string>());
+  const pendingAiPreviewRefresh = useRef(new Set<string>());
   // Ids already attempted this session, so the effect doesn't re-fire on every
   // render while a marker lingers (e.g. after a failed request). In-memory on
   // purpose: a fresh launch retries a marker that never succeeded.
@@ -1653,6 +1659,31 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     },
     [persistPendingAiTrigger],
   );
+  const persistPendingAiPreviewRefresh = useCallback((): Promise<void> => {
+    return ensureRepositoryReady()
+      .then(() =>
+        repository.setMeta(
+          PENDING_AI_PREVIEW_REFRESH_KEY,
+          JSON.stringify([...pendingAiPreviewRefresh.current]),
+        ),
+      )
+      .catch((error) => logStorageError("preview AI refresh queue", error));
+  }, []);
+  const markPendingAiPreviewRefresh = useCallback(
+    (id: string) => {
+      pendingAiPreviewRefresh.current.add(id);
+      void persistPendingAiPreviewRefresh();
+    },
+    [persistPendingAiPreviewRefresh],
+  );
+  const clearPendingAiPreviewRefresh = useCallback(
+    (id: string) => {
+      if (pendingAiPreviewRefresh.current.delete(id)) {
+        void persistPendingAiPreviewRefresh();
+      }
+    },
+    [persistPendingAiPreviewRefresh],
+  );
 
   // Write aiRetryState.current to durable storage, rejecting (rather than
   // swallowing) on failure. Only armAiRetry uses this directly — its caller
@@ -1853,6 +1884,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           serverQueuedChanged = true;
         }
         pendingAiTrigger.current.delete(id);
+        pendingAiPreviewRefresh.current.delete(id);
         aiTriggerAttempted.current.delete(id);
       }
       // The staggered auto-dispatch queue is account-scoped bookkeeping too:
@@ -1873,6 +1905,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         syncAiServerQueuedIds();
       }
       persistPendingAiTrigger();
+      persistPendingAiPreviewRefresh();
     },
     [
       persistAiRetryState,
@@ -1880,6 +1913,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       persistPendingAiTrigger,
       persistAiServerQueued,
       syncAiServerQueuedIds,
+      persistPendingAiPreviewRefresh,
     ],
   );
 
@@ -2154,6 +2188,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             storedImportCollectionsRaw,
             storedEnrichmentRestoresRaw,
             storedAiTriggerRaw,
+            storedAiPreviewRefreshRaw,
             storedAiRetryRaw,
             storedAiServerQueuedRaw,
             storedReviewedRaw,
@@ -2172,6 +2207,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             repository.getMeta(PENDING_IMPORT_COLLECTIONS_KEY),
             repository.getMeta(PENDING_ENRICHMENT_RESTORE_KEY),
             repository.getMeta(PENDING_AI_TRIGGER_KEY),
+            repository.getMeta(PENDING_AI_PREVIEW_REFRESH_KEY),
             repository.getMeta(AI_RETRY_STATE_KEY),
             repository.getMeta(AI_SERVER_QUEUED_KEY),
             repository.getMeta(REVIEWED_SUGGESTIONS_KEY),
@@ -2202,6 +2238,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             for (const id of parseIdSet(storedAiTriggerRaw)) {
               pendingAiTrigger.current.add(id);
             }
+            pendingAiPreviewRefresh.current = parseIdSet(
+              storedAiPreviewRefreshRaw,
+            );
             // Re-hydrate the AI-suggestion retry bookkeeping so a backoff that
             // elapsed while the app was closed can fire right away (the
             // cold-launch retry check below reads this ref).
@@ -3921,6 +3960,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           await ensureRepositoryReady();
           await repository.updateBookmark(updated);
           if (metadata_status === "failed") {
+            // The cloud enrichment remains intact; remember that a later
+            // successful refresh must replace it because the server trigger
+            // deliberately skips rows that already have an enrichment.
+            if (
+              enrichmentsRef.current.some(
+                (enrichment) => enrichment.bookmark_id === id,
+              )
+            ) {
+              markPendingAiPreviewRefresh(id);
+            }
             await repository.deleteEnrichment(id);
             setEnrichments((current) =>
               current.filter((item) => item.bookmark_id !== id),
@@ -3936,13 +3985,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // direct continuation of the user's own "refresh preview" tap (not a
         // background batch), so it fires immediately rather than through the
         // staggered burst queue below.
+        const needsDirectPreviewRefresh =
+          pendingAiPreviewRefresh.current.has(id);
         if (
           metadata_status !== "failed" &&
           aiSuggestionsModeRef.current !== "off" &&
           // A failed → complete refresh is dispatched by the installed
           // ai_enrich_dispatch trigger when this update uploads. A second
           // direct request would consume two slots and race its response.
-          !(latest.metadata_status === "failed" && metadata_status === "complete")
+          !(latest.metadata_status === "failed" &&
+            metadata_status === "complete" &&
+            !needsDirectPreviewRefresh)
         ) {
           void requestAiEnrichmentRef
             .current?.(id, "auto", {
@@ -3951,6 +4004,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               notes: updated.notes,
               site_name: updated.site_name,
               content_type: updated.content_type,
+            })
+            .then((error) => {
+              if (!error) {
+                clearPendingAiPreviewRefresh(id);
+              }
             })
             .catch(() => {});
         }
@@ -3972,7 +4030,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         });
       }
     },
-    [enqueueMutation, previewRefreshingIds, hasSyncedOnce],
+    [
+      enqueueMutation,
+      previewRefreshingIds,
+      hasSyncedOnce,
+      markPendingAiPreviewRefresh,
+      clearPendingAiPreviewRefresh,
+    ],
   );
 
   const deleteBookmark = useCallback(
@@ -4270,10 +4334,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       aiRetryState.current = {};
       aiServerQueued.current.clear();
       pendingAiTrigger.current.clear();
+      pendingAiPreviewRefresh.current.clear();
       aiTriggerAttempted.current.clear();
       void persistAiRetryState();
       void persistAiServerQueued();
       void persistPendingAiTrigger();
+      void persistPendingAiPreviewRefresh();
       syncAiRetryIds();
       syncAiServerQueuedIds();
       // The remote wipe above cascades pending_ai_enrichment rows away with
@@ -4306,6 +4372,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     persistAiRetryState,
     persistAiServerQueued,
     persistPendingAiTrigger,
+    persistPendingAiPreviewRefresh,
     syncAiRetryIds,
     syncAiServerQueuedIds,
   ]);
