@@ -1980,6 +1980,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (triggerChanged) {
         persistPendingAiTrigger();
       }
+      let previewRefreshChanged = false;
+      for (const [oldId, newId] of idMap) {
+        if (pendingAiPreviewRefresh.current.delete(oldId)) {
+          pendingAiPreviewRefresh.current.add(newId);
+          previewRefreshChanged = true;
+        }
+      }
+      if (previewRefreshChanged) {
+        persistPendingAiPreviewRefresh();
+      }
       // Re-key the staggered auto-dispatch burst queue too — without this, a
       // bookmark staged here under its old anonymous id silently no-ops the
       // moment the drain loop pops it: `requestAiEnrichment`'s first check
@@ -1997,6 +2007,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       persistPendingAiTrigger,
       persistAiServerQueued,
       syncAiServerQueuedIds,
+      persistPendingAiPreviewRefresh,
     ],
   );
 
@@ -3960,16 +3971,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           await ensureRepositoryReady();
           await repository.updateBookmark(updated);
           if (metadata_status === "failed") {
-            // The cloud enrichment remains intact; remember that a later
-            // successful refresh must replace it because the server trigger
-            // deliberately skips rows that already have an enrichment.
-            if (
-              enrichmentsRef.current.some(
-                (enrichment) => enrichment.bookmark_id === id,
-              )
-            ) {
-              markPendingAiPreviewRefresh(id);
-            }
+            // Its later successful update may coalesce over an unchanged
+            // cloud metadata status, leaving the server trigger nothing to
+            // dispatch from. Preserve a direct-refresh marker either way.
+            markPendingAiPreviewRefresh(id);
             await repository.deleteEnrichment(id);
             setEnrichments((current) =>
               current.filter((item) => item.bookmark_id !== id),
