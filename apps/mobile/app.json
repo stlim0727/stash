@@ -45,13 +45,10 @@
             "NSExtensionActivationSupportsWebPageWithMaxCount": 1,
             "NSExtensionActivationSupportsImageWithMaxCount": 1
           },
-          "androidIntentFilters": [
-            "text/*",
-            "image/*",
-            "video/*"
-          ]
+          "androidIntentFilters": []
         }
       ],
+      "./plugins/withShareReceiver.js",
       "@sentry/react-native/expo",
       "expo-notifications"
     ],

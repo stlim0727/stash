@@ -1,7 +1,9 @@
 import { useRouter } from 'expo-router';
 import { ShareIntentModule, useShareIntentContext } from 'expo-share-intent';
 import { useEffect, useRef, useState } from 'react';
-import { Platform } from 'react-native';
+import { Platform, AppState } from 'react-native';
+
+import { consumeNativePendingShares, deleteNativePendingShare } from './native-pending-shares';
 
 import { useAnalytics } from '@/analytics/provider';
 import { createCaptureCompletedEvent } from '@/analytics/events';
@@ -228,10 +230,11 @@ export function ShareIntentHandler() {
           capture_client_id: captureClientId,
         })
       : share.image
-        ? addBookmark({ image: share.image, title: share.title, capture_client_id: captureClientId })
+        ? addBookmark({ image: share.image, title: share.title, title_is_derived: true, capture_client_id: captureClientId })
         : addBookmark({
             shared_text: share.text,
             title: share.title,
+            title_is_derived: true,
             capture_client_id: captureClientId,
           });
     const saved = result.status !== 'invalid';
@@ -429,6 +432,117 @@ export function ShareIntentHandler() {
       router.replace('/');
     })();
   }, [pendingShare, isLoading, addBookmark, router, show, t]);
+
+  // Process lightweight native shares (Android only)
+  const isCheckingNativeRef = useRef(false);
+  useEffect(() => {
+    if (isLoading || Platform.OS !== 'android') return;
+
+    let active = true;
+    async function checkOfflineShares() {
+      if (isCheckingNativeRef.current) return;
+      isCheckingNativeRef.current = true;
+      try {
+        const shares = await consumeNativePendingShares();
+        if (!active || shares.length === 0) return;
+
+        for (const record of shares) {
+          const share = record.payload;
+          const textUrlCandidate = extractFirstUrl(share.text);
+          const url = textUrlCandidate;
+
+          let image: SharedImage | null = null;
+          if (share.file && share.mimeType?.startsWith('image/')) {
+            image = {
+              uri: share.file,
+              mimeType: share.mimeType, fileName: 'share.jpg'
+            };
+          } else if (share.files && share.files.length > 0 && share.mimeType?.startsWith('image/')) {
+            image = {
+              uri: share.files[0],
+              mimeType: share.mimeType, fileName: 'share.jpg'
+            };
+          }
+
+          const saveStartedAt = Date.now();
+          const result = url
+            ? addBookmark({ url, title: share.title, title_is_derived: true })
+            : image
+              ? addBookmark({ image, title: share.title, title_is_derived: true })
+              : addBookmark({ shared_text: share.text, title: share.title, title_is_derived: true });
+
+          recordShareAttempt({
+            attemptId: share.id,
+            receivedAt: new Date(share.timestamp).toISOString(),
+            hasUrl: url !== null,
+            hasText: Boolean(share.text?.trim()),
+            hasImage: image !== null,
+            fileCount: share.file ? 1 : share.files ? share.files.length : 0,
+            fileMimeTypes: share.mimeType ? [share.mimeType] : [],
+            result: result.status,
+            urlSource: textUrlCandidate ? 'text' : 'none',
+            loadWaitMs: saveStartedAt - share.timestamp,
+          });
+
+          try {
+            if (result.status === 'invalid') {
+               analytics.capture(
+                 createCaptureCompletedEvent(
+                   'share',
+                   'invalid',
+                   false,
+                   0,
+                   'android'
+                 )
+               );
+               continue;
+            }
+
+            if (result.persisted) {
+              const durable = await result.persisted.catch(() => false);
+              recordSharePersistence(share.id, durable);
+              analytics.capture(
+                createCaptureCompletedEvent(
+                  'share',
+                  result.status as 'created' | 'duplicate',
+                  durable,
+                  Date.now() - saveStartedAt,
+                  'android'
+                )
+              );
+            }
+
+            if (result.status === 'created') {
+               // Intentionally skipping recordPendingShareConfirm() because
+               // the native Android ShareReceiverActivity already showed a Toast
+               // to the user at the exact moment of capture.
+            }
+          } finally {
+            await deleteNativePendingShare(record.filename);
+          }
+        }
+      } finally {
+        isCheckingNativeRef.current = false;
+      }
+    }
+
+    checkOfflineShares();
+    const interval = setInterval(checkOfflineShares, 5000);
+    if (typeof (interval as any).unref === 'function') {
+      (interval as any).unref();
+    }
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        checkOfflineShares();
+      }
+    });
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+      subscription.remove();
+    };
+  }, [isLoading, addBookmark, analytics]);
 
   return null;
 }
