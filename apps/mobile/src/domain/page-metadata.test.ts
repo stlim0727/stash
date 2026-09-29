@@ -10,6 +10,7 @@ import {
   fetchPageMetadata,
   htmlHeadSummary,
   isGenericNaverMapTitle,
+  isNaverMapUrl,
   isYoutubeAvailabilityCandidate,
   naverMapFolderShareId,
   normalizeCharsetLabel,
@@ -827,6 +828,36 @@ test('isGenericNaverMapTitle recognizes generic fallback titles', () => {
   assert.equal(isGenericNaverMapTitle('네이버 지도'), true);
   assert.equal(isGenericNaverMapTitle('바다 (AW앤웍) : 네이버 지도'), false);
   assert.equal(isGenericNaverMapTitle('스타벅스'), false);
+
+  // When URL is provided, it only flags generic titles for Naver Map URLs
+  assert.equal(
+    isGenericNaverMapTitle('네이버 지도', 'https://map.naver.com/p/entry/place/123'),
+    true,
+  );
+  assert.equal(
+    isGenericNaverMapTitle('네이버 지도', 'https://naver.me/xyz'),
+    true,
+  );
+  assert.equal(
+    isGenericNaverMapTitle('네이버 지도', 'https://blog.naver.com/myblog/123'),
+    false,
+  );
+  assert.equal(
+    isGenericNaverMapTitle('Naver Map', 'https://techcrunch.com/article'),
+    false,
+  );
+});
+
+test('isNaverMapUrl distinguishes Naver Map URLs from other domains or Naver services', () => {
+  assert.equal(isNaverMapUrl('https://map.naver.com/p/favorite/myPlace/folder/123'), true);
+  assert.equal(isNaverMapUrl('https://pages.map.naver.com/save-pages/pc/detail-list/123'), true);
+  assert.equal(isNaverMapUrl('https://naver.me/xyz'), true);
+  assert.equal(isNaverMapUrl('https://pcmap.place.naver.com/place/123/home'), true);
+  assert.equal(isNaverMapUrl('https://place.naver.com/place/123'), true);
+  assert.equal(isNaverMapUrl('https://blog.naver.com/post/123'), false);
+  assert.equal(isNaverMapUrl('https://news.naver.com/article/123'), false);
+  assert.equal(isNaverMapUrl('https://google.com/maps'), false);
+  assert.equal(isNaverMapUrl('invalid-url'), false);
 });
 
 test('fetchNaverMapFolderMetadata fetches folder details and builds preview metadata', async () => {
@@ -960,6 +991,99 @@ test('fetchPageMetadata recovers Naver Map folder when bot response has generic 
     assert.ok(
       requested.some((u) => u.includes('/shares/f65cd3df')),
       'expected folder API fetch despite generic bot title',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchNaverMapFolderMetadata tries bot UA first and falls back to browser UA when refused', async () => {
+  const originalFetch = globalThis.fetch;
+  const userAgents: string[] = [];
+  const mockApiData = {
+    folder: {
+      name: '단풍길',
+      markerColor: '1',
+      placeUserProfile: { nick: '산악인' },
+    },
+    bookmarkList: [{ px: 127.1, py: 37.5 }],
+  };
+
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    const ua = (init?.headers as Record<string, string>)?.[
+      'User-Agent'
+    ];
+    if (ua) userAgents.push(ua);
+    // Refuse the bot UA (e.g. 403)
+    if (ua?.includes('StashBot')) {
+      return new Response('Forbidden', { status: 403 });
+    }
+    // Accept browser UA
+    return new Response(JSON.stringify(mockApiData), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const meta = await fetchNaverMapFolderMetadata('f65cd3df');
+    assert.equal(meta?.title, '단풍길 (산악인) : 네이버 지도');
+    assert.equal(userAgents.length, 2);
+    assert.ok(userAgents[0]?.includes('StashBot'), 'expected bot UA first');
+    assert.ok(userAgents[1]?.includes('Mozilla/5.0'), 'expected browser UA fallback');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchPageMetadata does not treat non-map URLs with Naver Map title as empty shells', async () => {
+  const originalFetch = globalThis.fetch;
+  let browserFetched = false;
+  globalThis.fetch = (async (target: string, init?: RequestInit) => {
+    const ua = (init?.headers as Record<string, string>)?.[
+      'User-Agent'
+    ];
+    if (ua && !ua.includes('StashBot')) {
+      browserFetched = true;
+    }
+    return htmlResponse(
+      '<head><title>네이버 지도</title><meta property="og:title" content="네이버 지도"></head>',
+      { url: target },
+    );
+  }) as typeof fetch;
+
+  try {
+    const meta = await fetchPageMetadata('https://blog.naver.com/post/naver-map-review');
+    assert.equal(meta?.title, '네이버 지도');
+    assert.equal(browserFetched, false, 'should not retry as browser for non-map URLs');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchPageMetadata avoids re-fetching the same failed folder share ID', async () => {
+  const originalFetch = globalThis.fetch;
+  let folderApiCalls = 0;
+  globalThis.fetch = (async (target: string) => {
+    if (target.includes('map.naver.com/p/favorite/myPlace/folder/failedId')) {
+      return htmlResponse(
+        '<head><title>네이버지도 저장</title></head>',
+        { url: 'https://map.naver.com/p/favorite/myPlace/folder/failedId' },
+      );
+    }
+    if (target.includes('/shares/failedId')) {
+      folderApiCalls += 1;
+      return new Response('Not found', { status: 404 });
+    }
+    return new Response('Not found', { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    await fetchPageMetadata('https://map.naver.com/p/favorite/myPlace/folder/failedId');
+    assert.equal(
+      folderApiCalls,
+      2,
+      'should only attempt the folder share once (bot + browser fallback), not duplicate in late recovery',
     );
   } finally {
     globalThis.fetch = originalFetch;
