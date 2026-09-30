@@ -1755,6 +1755,7 @@ test("session expiry hides cached content without deleting it and recovery revea
   const row = makeStoredBookmark({ id: SYNCED_ID, sync_status: "pending", ever_synced: true, notes: "Unsynced edit" });
   fakeRepo.__reset([row]);
   const { result, rerender } = await renderStore();
+  await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
   const storedBefore = fakeRepo.__bookmarks();
   const queueBefore = fakeRepo.__queue();
   mockAuthStatus = "session_expired";
