@@ -243,7 +243,7 @@ test('renders Markdown memos with a plain preview and memo metadata', async () =
 
   await waitFor(() => expect(screen.getByText('Release notes')).toBeTruthy());
   expect(screen.getByText('Priorities Ship memo support')).toBeTruthy();
-  expect(screen.getAllByText('Memo').length).toBeGreaterThan(0);
+  expect(screen.getAllByText('Note').length).toBeGreaterThan(0);
 });
 
 test('an untitled Markdown memo uses its first rendered line as the Inbox title', async () => {

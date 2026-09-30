@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState, type ComponentProps } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -30,6 +30,8 @@ import {
   videoUnavailableLabel,
 } from '@/i18n/status';
 import { usePalette } from '@/theme';
+import { Button } from '@/ui/Button';
+import { ActionSheet } from '@/ui/ActionSheet';
 import { Card } from '@/ui/Card';
 import { CollectionPicker } from '@/ui/CollectionPicker';
 import { KeyboardAvoidingScreen } from '@/ui/KeyboardAvoidingScreen';
@@ -138,6 +140,7 @@ export default function BookmarkDetailScreen({
   const [draftTitle, setDraftTitle] = useState<string | null>(null);
   const [draftNotes, setDraftNotes] = useState<MemoDraft | null>(null);
   const [draftDescription, setDraftDescription] = useState<MemoDraft | null>(null);
+  const [actionsOpen, setActionsOpen] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   // Long titles (e.g. a full Instagram caption pasted as the title) are
   // collapsed to a few lines with a "Show more" toggle so they don't push the
@@ -902,100 +905,6 @@ export default function BookmarkDetailScreen({
           <Ionicons name="close" size={18} color={palette.textSecondary} />
         </Pressable>
       ) : null}
-      {/* Prefer a captured image's local URI (image bookmarks) over a fetched
-          preview; either renders the same hero. */}
-      {(() => {
-        if (isPreviewFailed) {
-          return (
-            <View
-              style={[
-                styles.previewFailedBanner,
-                { backgroundColor: palette.dangerSoft, borderColor: palette.danger },
-              ]}
-            >
-              <Ionicons name="warning-outline" size={24} color={palette.danger} />
-              <Text style={[styles.previewFailedText, { color: palette.text }]}>
-                {t('detail.previewFailedNote')}
-              </Text>
-            </View>
-          );
-        }
-        if (hidePreviewHero) {
-          return null;
-        }
-        const previewUri = rawPreviewUri;
-        if (!previewUri) {
-          return null;
-        }
-        return bookmark.url ? (
-          <Pressable
-            testID="bookmark-detail-preview-pressable"
-            accessibilityRole="link"
-            accessibilityLabel={t('common.openLink')}
-            accessibilityState={{ busy: isOpeningLink }}
-            onPress={handleOpenLink}
-            style={({ pressed }) => [
-              styles.previewContainer,
-              { backgroundColor: palette.mutedSurface },
-              pressed && styles.previewPressed,
-              isOpeningLink && { borderColor: palette.accent },
-            ]}
-          >
-            <Image
-              testID="bookmark-detail-preview"
-              source={{ uri: previewUri }}
-              style={styles.preview}
-              resizeMode="cover"
-              onError={() => markPreviewImageFailed(previewUri)}
-              onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
-                if (!didPreviewImageLoad(event.nativeEvent)) {
-                  markPreviewImageFailed(previewUri);
-                } else {
-                  markPreviewImageLoaded(previewUri);
-                }
-              }}
-            />
-            <View
-              testID="bookmark-detail-preview-ribbon"
-              style={styles.previewRibbon}
-              pointerEvents="none"
-            >
-              <PostHogMaskView>
-                <Text style={styles.previewRibbonText} numberOfLines={1}>
-                  {host ?? t('common.open')}
-                </Text>
-              </PostHogMaskView>
-              <Ionicons name="open-outline" size={12} color="#ffffff" />
-            </View>
-            {isOpeningLink ? (
-              <View
-                testID="bookmark-detail-preview-opening"
-                pointerEvents="auto"
-                style={[styles.previewOpeningOverlay, { backgroundColor: palette.accentSoft }]}
-              >
-                <ActivityIndicator color={palette.accent} />
-              </View>
-            ) : null}
-          </Pressable>
-        ) : (
-          <View style={[styles.previewContainer, { backgroundColor: palette.mutedSurface }]}>
-            <Image
-              testID="bookmark-detail-preview"
-              source={{ uri: previewUri }}
-              style={styles.preview}
-              resizeMode="cover"
-              onError={() => markPreviewImageFailed(previewUri)}
-              onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
-                if (!didPreviewImageLoad(event.nativeEvent)) {
-                  markPreviewImageFailed(previewUri);
-                } else {
-                  markPreviewImageLoaded(previewUri);
-                }
-              }}
-            />
-          </View>
-        );
-      })()}
       {/* Compact byline: favicon · host · status, instead of a header card. */}
       <View style={styles.byline}>
         {bookmark.favicon_url ? (
@@ -1106,59 +1015,33 @@ export default function BookmarkDetailScreen({
         />
       )}
 
+      {bookmark.url ? <Button testID="detail-open-website" accessibilityLabel={t('detail.openWebsite')} icon="open-outline" size="lg"
+        disabled={busy || isOpeningLink} onPress={handleOpenLink}>{t('detail.openWebsite')}</Button> : null}
       <View style={styles.actionBar}>
-        {bookmark.url ? (
-          <ActionButton
-            icon="open-outline"
-            label={t('common.open')}
-            tint={palette.accent}
-            disabled={busy || isOpeningLink}
-            onPress={handleOpenLink}
-          />
-        ) : null}
+        {bookmark.url || isTextMemo ? <Button variant="ghost" icon="share-social" accessibilityLabel={t('common.share')} onPress={handleShare}>
+          {t('common.share')}</Button> : null}
         {bookmark.video_unavailable && isYoutubeAvailabilityCandidate(bookmark.url ?? '') ? (
-          <ActionButton
-            icon="search-outline"
-            label={t('detail.searchYoutube')}
-            tint={palette.text}
-            onPress={handleSearchYoutube}
-          />
+          <Button variant="ghost" icon="search-outline" accessibilityLabel={t('detail.searchYoutube')} onPress={handleSearchYoutube}>{t('detail.searchYoutube')}</Button>
         ) : null}
-        {bookmark.url || isTextMemo ? (
-          <ActionButton icon="copy-outline" label={t('common.copy')} tint={palette.text} onPress={handleCopyLink} />
-        ) : null}
-        {bookmark.url || isTextMemo ? (
-          <ActionButton icon="share-social" label={t('common.share')} tint={palette.text} onPress={handleShare} />
-        ) : null}
-        {bookmark.url ? (
-          <ActionButton
-            icon="refresh"
-            label={previewRefreshing ? t('detail.previewRefreshing') : t('detail.previewRefresh')}
-            tint={palette.text}
-            disabled={busy || previewRefreshing}
-            onPress={handleRefreshPreview}
-          />
-        ) : null}
-        {bookmark.deleted_at ? (
-          <ActionButton
-            icon="arrow-undo"
-            label={t('common.restore')}
-            tint={palette.text}
-            onPress={() => {
+        <Button variant="ghost" icon="ellipsis-horizontal" accessibilityLabel={t('inbox.moreActions')} onPress={() => setActionsOpen(true)}>
+          {t('inbox.moreActions')}</Button>
+      </View>
+      <ActionSheet visible={actionsOpen} title={t('inbox.moreActions')} onClose={() => setActionsOpen(false)}
+        actions={[
+          ...(bookmark.url || isTextMemo ? [{ key: 'copy', label: bookmark.url ? t('common.copyLink') : t('common.copy'),
+            onPress: () => { setActionsOpen(false); void handleCopyLink(); } }] : []),
+          ...(bookmark.url ? [{ key: 'refresh', label: previewRefreshing ? t('detail.previewRefreshing') : t('detail.previewRefresh'),
+            disabled: busy || previewRefreshing, onPress: () => { setActionsOpen(false); void handleRefreshPreview(); } }] : []),
+          bookmark.deleted_at ? { key: 'restore', label: t('common.restore'), onPress: () => {
+            setActionsOpen(false);
               restoreBookmark(bookmark.id);
               if (inline) {
                 onInlineClose?.();
               } else {
                 router.back();
               }
-            }}
-          />
-        ) : (
-          <ActionButton
-            icon="trash"
-            label={t('common.trash')}
-            tint={palette.danger}
-            onPress={() => {
+          }} : { key: 'trash', label: t('common.trash'), destructive: true, onPress: () => {
+            setActionsOpen(false);
               const trashedId = bookmark.id;
               trashBookmark(trashedId);
               // The toast lives above the navigator, so it survives the back nav;
@@ -1172,10 +1055,8 @@ export default function BookmarkDetailScreen({
               } else {
                 router.back();
               }
-            }}
-          />
-        )}
-      </View>
+          }},
+        ]} />
 
       {isTextMemo ? (
         <MemoEditor
@@ -1200,20 +1081,6 @@ export default function BookmarkDetailScreen({
         onChange={changeNotes}
         onCommit={commitNotes}
       />
-
-      {/* The AI summary is proposed as a note here — in its own clearly-labeled
-          dashed ghost block, never poured into the field above — so it can't be
-          mistaken for user-authored text (sacred-fields principle). Accept fills
-          an empty note or appends to a non-empty one; both are durable. */}
-      {showAiSummary ? (
-        <ProposedSummary
-          summary={enrichment?.summary ?? ''}
-          noteEmpty={notesValue.trim() === ''}
-          busy={busy}
-          onUse={handleUseSummary}
-          onDismiss={handleDismissSummary}
-        />
-      ) : null}
 
       {/* Collection — no title; the folder-icon picker speaks for itself.
           It leads the organize controls, directly above the tag field. The AI's
@@ -1320,6 +1187,114 @@ export default function BookmarkDetailScreen({
           canOrganizeRemotely ? undefined : t('detail.tagsDisabledHint')
         }
       />
+
+      {/* Prefer a captured image's local URI (image bookmarks) over a fetched
+          preview; either renders the same hero. */}
+      {(() => {
+        if (isPreviewFailed) {
+          return (
+            <View
+              style={[
+                styles.previewFailedBanner,
+                { backgroundColor: palette.dangerSoft, borderColor: palette.danger },
+              ]}
+            >
+              <Ionicons name="warning-outline" size={24} color={palette.danger} />
+              <Text style={[styles.previewFailedText, { color: palette.text }]}>
+                {t('detail.previewFailedNote')}
+              </Text>
+            </View>
+          );
+        }
+        if (hidePreviewHero) {
+          return null;
+        }
+        const previewUri = rawPreviewUri;
+        if (!previewUri) {
+          return null;
+        }
+        return bookmark.url ? (
+          <Pressable
+            testID="bookmark-detail-preview-pressable"
+            accessibilityRole="link"
+            accessibilityLabel={t('common.openLink')}
+            accessibilityState={{ busy: isOpeningLink }}
+            onPress={handleOpenLink}
+            style={({ pressed }) => [
+              styles.previewContainer,
+              { backgroundColor: palette.mutedSurface },
+              pressed && styles.previewPressed,
+              isOpeningLink && { borderColor: palette.accent },
+            ]}
+          >
+            <Image
+              testID="bookmark-detail-preview"
+              source={{ uri: previewUri }}
+              style={styles.preview}
+              resizeMode="cover"
+              onError={() => markPreviewImageFailed(previewUri)}
+              onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
+                if (!didPreviewImageLoad(event.nativeEvent)) {
+                  markPreviewImageFailed(previewUri);
+                } else {
+                  markPreviewImageLoaded(previewUri);
+                }
+              }}
+            />
+            <View
+              testID="bookmark-detail-preview-ribbon"
+              style={styles.previewRibbon}
+              pointerEvents="none"
+            >
+              <PostHogMaskView>
+                <Text style={styles.previewRibbonText} numberOfLines={1}>
+                  {host ?? t('common.open')}
+                </Text>
+              </PostHogMaskView>
+              <Ionicons name="open-outline" size={12} color="#ffffff" />
+            </View>
+            {isOpeningLink ? (
+              <View
+                testID="bookmark-detail-preview-opening"
+                pointerEvents="auto"
+                style={[styles.previewOpeningOverlay, { backgroundColor: palette.accentSoft }]}
+              >
+                <ActivityIndicator color={palette.accent} />
+              </View>
+            ) : null}
+          </Pressable>
+        ) : (
+          <View style={[styles.previewContainer, { backgroundColor: palette.mutedSurface }]}>
+            <Image
+              testID="bookmark-detail-preview"
+              source={{ uri: previewUri }}
+              style={styles.preview}
+              resizeMode="cover"
+              onError={() => markPreviewImageFailed(previewUri)}
+              onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
+                if (!didPreviewImageLoad(event.nativeEvent)) {
+                  markPreviewImageFailed(previewUri);
+                } else {
+                  markPreviewImageLoaded(previewUri);
+                }
+              }}
+            />
+          </View>
+        );
+      })()}
+      {/* The AI summary is proposed as a note here — in its own clearly-labeled
+          dashed ghost block, never poured into the field above — so it can't be
+          mistaken for user-authored text (sacred-fields principle). Accept fills
+          an empty note or appends to a non-empty one; both are durable. */}
+      {showAiSummary ? (
+        <ProposedSummary
+          summary={enrichment?.summary ?? ''}
+          noteEmpty={notesValue.trim() === ''}
+          busy={busy}
+          onUse={handleUseSummary}
+          onDismiss={handleDismissSummary}
+        />
+      ) : null}
 
       {/* AI suggestions — no redundant header; the action button names itself. */}
       <Card elevated={false} style={styles.field}>
@@ -1512,45 +1487,6 @@ export default function BookmarkDetailScreen({
   );
 }
 
-/** One item in the detail action bar: a vector icon above a small label. */
-function ActionButton({
-  icon,
-  label,
-  tint,
-  disabled = false,
-  onPress,
-}: {
-  icon: ComponentProps<typeof Ionicons>['name'];
-  label: string;
-  tint: string;
-  disabled?: boolean;
-  onPress: () => void;
-}) {
-  const palette = usePalette();
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityState={{ disabled }}
-      disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.action,
-        {
-          backgroundColor: palette.card,
-          borderColor: palette.border,
-          opacity: disabled ? 0.5 : pressed ? 0.7 : 1,
-        },
-      ]}
-    >
-      <Ionicons name={icon} size={22} color={tint} />
-      <Text style={[styles.actionBtnLabel, { color: tint }]} numberOfLines={1}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
 const styles = StyleSheet.create({
   container: {
     padding: 16,
@@ -1730,19 +1666,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
-  },
-  action: {
-    flex: 1,
-    minWidth: 76,
-    alignItems: 'center',
-    gap: 4,
-    paddingVertical: 12,
-    borderRadius: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  actionBtnLabel: {
-    fontSize: 12,
-    fontWeight: '600',
   },
   detailRow: {
     paddingVertical: 10,

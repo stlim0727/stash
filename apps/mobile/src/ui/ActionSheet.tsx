@@ -28,6 +28,7 @@ export interface SheetAction {
   destructive?: boolean;
   /** Shows a trailing checkmark (e.g. the bookmark's current collection). */
   selected?: boolean;
+  disabled?: boolean;
   onPress: () => void;
 }
 
@@ -114,7 +115,8 @@ export function ActionSheet({
                 key={action.key}
                 testID={action.testID}
                 accessibilityRole="button"
-                accessibilityState={{ selected: action.selected }}
+                disabled={action.disabled}
+                accessibilityState={{ selected: action.selected, disabled: action.disabled }}
                 accessibilityLabel={
                   action.accessibilityLabel ??
                   (action.description ? `${action.label}. ${action.description}` : action.label)
