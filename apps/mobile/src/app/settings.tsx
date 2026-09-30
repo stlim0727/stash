@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Application from "expo-application";
 import Constants from "expo-constants";
 import { useRouter } from "expo-router";
+import { useOpenReport } from "@/feedback/open-report";
 import { PostHogMaskView } from "posthog-react-native";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -156,6 +157,7 @@ export default function SettingsScreen() {
   const palette = usePalette();
   const styles = makeStyles(palette);
   const router = useRouter();
+  const { openReport, capturing } = useOpenReport('/settings');
   // Wide viewports present Settings as a right-side sheet over a dimmed Inbox;
   // phones keep the full-screen layout. One width rule, no Platform branch.
   const { width, height } = useWindowDimensions();
@@ -848,9 +850,7 @@ export default function SettingsScreen() {
       style={[styles.scroll, webOverscrollContain]}
       contentContainerStyle={[
         styles.container,
-        // Clear the global report FAB when the final setting is scrolled into
-        // view instead of letting the floating control cover the row.
-        { paddingBottom: insets.bottom + 80 },
+        { paddingBottom: insets.bottom + 24 },
       ]}
     >
       {/* Account — identity, sign in/out only. Sync/metadata/AI status moved
@@ -1279,9 +1279,17 @@ export default function SettingsScreen() {
           icon="help-circle-outline"
           label={t("settings.tutorial.label")}
           value={t("settings.tutorial.value")}
-          last
           testID="settings-tutorial-row"
           onPress={() => setTutorialOpen(true)}
+        />
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="chatbubble-ellipses-outline"
+          label={t("settings.report.label")}
+          last
+          testID="settings-report-row"
+          onPress={capturing ? undefined : () => void openReport()}
         />
       </Group>
 

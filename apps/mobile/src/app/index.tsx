@@ -41,6 +41,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { usePalette } from '@/theme';
+import { useOpenReport } from '@/feedback/open-report';
 import { AnonymousNudgeBanner } from '@/ui/AnonymousNudgeBanner';
 import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
@@ -579,6 +580,8 @@ export default function InboxScreen() {
   const t = useT();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { openReport, capturing } = useOpenReport('/');
+  const [homeMenuOpen, setHomeMenuOpen] = useState(false);
   const auth = useSupabaseAuth();
   // Pick the wordmark variant that matches the active light/dark theme. If a
   // locale ever ships a native form (app.nameLocal differs from app.name) the
@@ -2610,11 +2613,8 @@ export default function InboxScreen() {
               {t('inbox.savedCount', { count: inbox.length })}
             </Text>
           </View>
-          {/* Right-side hero actions: a tap-to-open search magnifier (morphs to
-              ✕ while open — the search field mounts below only when this is
-              tapped, keeping the resting top thin, à la Telegram) and the single
-              settings entry point. Account sign-in/management lives inside
-              Settings, so the hero stays focused on bookmarks. */}
+          {/* Search and secondary navigation. Reporting captures the screen
+              after this menu has been dismissed. */}
           <View style={styles.heroActions}>
             {inbox.length > 0 ? (
               <Pressable
@@ -2632,14 +2632,15 @@ export default function InboxScreen() {
               </Pressable>
             ) : null}
             <Pressable
+              testID="inbox-menu-open"
               accessibilityRole="button"
-              accessibilityLabel={t('inbox.settingsA11y')}
-              hitSlop={8}
-              onPress={() => router.push('/settings')}
+              accessibilityLabel={t('inbox.menuA11y')}
+              accessibilityState={{ expanded: homeMenuOpen, disabled: capturing }}
+              disabled={capturing}
+              onPress={() => setHomeMenuOpen(true)}
+              style={{ minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' }}
             >
-              <View style={[styles.avatar, { backgroundColor: palette.surface, borderColor: palette.border }]}>
-                <Ionicons name="settings-sharp" size={20} color={palette.text} />
-              </View>
+              <Ionicons name="ellipsis-horizontal" size={24} color={palette.text} />
             </Pressable>
           </View>
         </>
@@ -3901,6 +3902,21 @@ export default function InboxScreen() {
           bottomInset={insets.bottom}
         />
       )}
+      <ActionSheet
+        visible={homeMenuOpen}
+        title={t('inbox.menuA11y')}
+        onClose={() => setHomeMenuOpen(false)}
+        actions={[
+          { key: 'settings', label: t('nav.settings'), icon: 'settings-outline', onPress: () => {
+            setHomeMenuOpen(false);
+            router.push('/settings');
+          } },
+          { key: 'report', label: t('settings.report.label'), icon: 'chatbubble-ellipses-outline', onPress: () => {
+            setHomeMenuOpen(false);
+            void openReport();
+          } },
+        ]}
+      />
       <ActionSheet
         visible={bulkMoveSheetOpen}
         title={t('inbox.bulkMoveTitle', { count: selectedIds.size })}

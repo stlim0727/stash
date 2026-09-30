@@ -78,7 +78,7 @@ import {
   setPendingFeedbackSource,
   setPendingFeedbackScreenshot,
 } from '@/feedback/screenshot-session';
-import { feedbackSourceFromPath } from '@/feedback/FloatingReportButton';
+import { feedbackSourceFromPath } from '@/feedback/open-report';
 import { getLogEntries } from '@/observability/log-buffer';
 import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
 import { type FakeRepositoryModule, makeStoredBookmark } from './helpers/fake-repository';

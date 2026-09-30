@@ -1,7 +1,7 @@
 /**
  * A live snapshot of the Inbox hero/collapsing-header render state, written by
  * `InboxScreen` on every relevant state change and read once when a feedback
- * report is opened (`FloatingReportButton`). Every prior "hero not visible"
+ * report is opened (`useOpenReport`). Every prior "hero not visible"
  * Sentry report (STASH-1X, STASH-2G, STASH-2P) arrived with `screenshot:
  * absent` and no capture of this state, so root cause had to be guessed from
  * sync/auth logs alone. This gives the next report a direct, timely read of

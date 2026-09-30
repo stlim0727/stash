@@ -263,6 +263,7 @@ export const en = {
   'inbox.memoType': 'Memo',
   'inbox.photoType': 'Photo',
   'inbox.addBookmark': 'Add bookmark',
+  'inbox.menuA11y': 'More options',
   'inbox.settingsA11y': 'Settings',
   'inbox.scrollToTopA11y': 'Scroll to top',
   'inbox.searchOpenA11y': 'Search',
