@@ -1732,7 +1732,7 @@ test("duplicate manual content edits invalidate completed enrichment", async () 
   expect(await fakeRepo.repository.listEnrichments()).toEqual([expect.objectContaining({ status: "stale" })]);
 });
 
-test.each(["signed_out", "session_expired"])(
+test.each(["signed_out"])(
   "%s clears cached cloud bookmarks and preserves unsynced captures",
   async (status) => {
     const synced = makeStoredBookmark({ id: SYNCED_ID, sync_status: "synced", ever_synced: true });
@@ -1749,3 +1749,23 @@ test.each(["signed_out", "session_expired"])(
     await waitFor(() => expect(fakeRepo.__bookmarks().map((row) => row.id)).toEqual([local.id]));
   },
 );
+
+
+test("session expiry hides cached content without deleting it and recovery reveals it", async () => {
+  const row = makeStoredBookmark({ id: SYNCED_ID, sync_status: "pending", ever_synced: true, notes: "Unsynced edit" });
+  fakeRepo.__reset([row]);
+  const { result, rerender } = await renderStore();
+  const storedBefore = fakeRepo.__bookmarks();
+  const queueBefore = fakeRepo.__queue();
+  mockAuthStatus = "session_expired";
+  await rerender({});
+  expect(result.current.inbox).toEqual([]);
+  expect(result.current.trash).toEqual([]);
+  expect(result.current.getBookmark(row.id)).toBeUndefined();
+  expect(fakeRepo.__bookmarks()).toEqual(storedBefore);
+  expect(fakeRepo.__queue()).toEqual(queueBefore);
+  mockAuthStatus = "not_configured";
+  await rerender({});
+  expect(result.current.getBookmark(row.id)?.notes).toBe("Unsynced edit");
+  expect(result.current.inbox).toHaveLength(1);
+});

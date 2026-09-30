@@ -132,8 +132,8 @@ These are "do not break" rules, not just implementation notes.
   - real A -> real B replaces the local cache.
   - real -> anonymous preserves local data and must not wipe the cache.
 - Expired real sessions enter `session_expired`; do not mint a fresh anonymous
-  user or run destructive sync while there is no real session. Clear cached
-  cloud bookmarks on expiry just as on logout, preserving never-synced captures.
+  user or run destructive sync while there is no real session. Hide cached
+  bookmarks on expiry, preserving durable rows and queued edits for recovery.
 - Anonymous sessions must never run the remote-deletion diff; anonymous data is
   single-device, so an empty remote set is not evidence that local rows vanished
   elsewhere.

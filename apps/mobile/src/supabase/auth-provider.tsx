@@ -158,8 +158,8 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
           // user: that silently logs the user out AND makes the sync
           // account-transition treat it as an account switch and drop their
           // local bookmark cache under an unrelated anonymous identity.
-          // Surface a re-sign-in prompt; the store clears synced account rows
-          // while preserving never-synced captures until the user signs in.
+          // Surface a re-sign-in prompt; the store hides account content
+          // while preserving cached rows and pending edits for recovery.
           setSession(null);
           setStatus('session_expired');
           setMessage('Session expired. Sign back in to resume syncing.');
