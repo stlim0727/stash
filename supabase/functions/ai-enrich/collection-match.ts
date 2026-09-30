@@ -20,6 +20,50 @@ export function collectionMatchKey(name: string): string {
   return name.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 }
 
+export const GENERIC_COLLECTION_KEYS = new Set([
+  'article',
+  'articles',
+  'blog',
+  'bookmark',
+  'bookmarks',
+  'link',
+  'links',
+  'media',
+  'readlater',
+  'reading',
+  'saved',
+  'toread',
+  'towatch',
+  'video',
+  'videos',
+  'watchlist',
+  'watchlater',
+  '나중에보기',
+  '동영상',
+  '미디어',
+  '북마크',
+  '비디오',
+  '아티클',
+  '읽을거리',
+  '저장',
+  '콘텐츠',
+]);
+
+/**
+ * Returns true if the collection name describes a generic holding bucket or media
+ * format (such as "Watch Later", "Bookmarks", "나중에 보기", "Saved", "Articles")
+ * rather than a specific topical theme.
+ *
+ * Triage moves out of generic holding buckets into substantive topical folders
+ * are supported; moves out of already-established topical folders (e.g.
+ * 'Food' -> '음식 및 요리' or '요리 레시피' -> '음식 및 요리') are unconvincing
+ * lateral churn and suppressed (STASH-74, STASH-78).
+ */
+export function isGenericCollection(name: string | null | undefined): boolean {
+  if (!name) return false;
+  return GENERIC_COLLECTION_KEYS.has(collectionMatchKey(name));
+}
+
 /**
  * Find the existing collection an AI-suggested name refers to, tolerant of
  * case/spacing/punctuation. Returns the matched collection, or null when the

@@ -6,7 +6,7 @@
  * filter live in exactly one place.
  */
 
-import { collectionMatchKey } from './collection-match.ts';
+import { collectionMatchKey, isGenericCollection } from './collection-match.ts';
 import { addToStringSet, parseStringSetMap, stringSetFor } from './string-set-map.ts';
 import type { StringSetMap } from './string-set-map.ts';
 import type { AIEnrichment, MetadataStatus, SuggestedTag } from './types';
@@ -216,9 +216,16 @@ export function pendingSuggestedFolder(
   const confidence = enrichment?.confidence ?? null;
   const isMove = Boolean(currentCollectionId);
   if (isMove) {
-    // MOVE: Bookmark already has a collection assigned (even if absent from the current
-    // snapshot). Enforce the higher hurdle so we never suggest lateral moves or weak
-    // reclassifications over user-set info (STASH-74).
+    // MOVE: Bookmark already has a collection assigned.
+    // If the bookmark is currently in an established, substantive collection (not a
+    // generic holding bucket like "Watch Later" or "Saved"), lateral moves between
+    // synonyms or parent categories (e.g. "Food" -> "음식 및 요리" or "요리 레시피" -> "음식 및 요리")
+    // are unconvincing and suppressed (STASH-74, STASH-78).
+    if (folder.from?.name && !isGenericCollection(folder.from.name)) {
+      return null;
+    }
+    // Moves out of generic holding buckets (or orphaned collection IDs) require
+    // high confidence hurdle.
     if (confidence === null || confidence < FOLDER_MOVE_MIN_CONFIDENCE) {
       return null;
     }

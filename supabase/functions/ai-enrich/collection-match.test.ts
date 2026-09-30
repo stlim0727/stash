@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { collectionMatchKey, matchSuggestedCollection } from './collection-match.ts';
+import { collectionMatchKey, isGenericCollection, matchSuggestedCollection } from './collection-match.ts';
 
 const collections = [
   { id: 'c1', name: 'Watch Later' },
@@ -56,4 +56,24 @@ test('prefers incumbent collection when duplicate collections share the same mat
   assert.equal(matchSuggestedCollection(duplicates, 'Food', 'c1')?.id, 'c1');
   // With unrelated incumbent hint, falls back to first match
   assert.equal(matchSuggestedCollection(duplicates, 'Food', 'other')?.id, 'c1');
+});
+
+test('identifies generic holding collections vs substantive topical collections', () => {
+  assert.equal(isGenericCollection('Watch Later'), true);
+  assert.equal(isGenericCollection('watch-later'), true);
+  assert.equal(isGenericCollection('Saved'), true);
+  assert.equal(isGenericCollection('Bookmarks'), true);
+  assert.equal(isGenericCollection('나중에 보기'), true);
+  assert.equal(isGenericCollection('동영상'), true);
+  assert.equal(isGenericCollection('Articles'), true);
+
+  assert.equal(isGenericCollection('Recipes'), false);
+  assert.equal(isGenericCollection('Food'), false);
+  assert.equal(isGenericCollection('음식 및 요리'), false);
+  assert.equal(isGenericCollection('요리 레시피'), false);
+  assert.equal(isGenericCollection('수영'), false);
+  assert.equal(isGenericCollection('스포츠 및 건강'), false);
+  assert.equal(isGenericCollection(null), false);
+  assert.equal(isGenericCollection(undefined), false);
+  assert.equal(isGenericCollection(''), false);
 });
