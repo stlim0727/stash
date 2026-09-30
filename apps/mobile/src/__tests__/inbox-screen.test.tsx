@@ -919,7 +919,7 @@ test('centers the search suggestion shelf on the same rail as the search field o
   expect(shelfStyle.maxWidth).toBe(1116);
 });
 
-test('the card Open action opens the bookmark URL in the system browser', async () => {
+test('the card source quick-open action opens the bookmark URL in the system browser', async () => {
   const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
   fakeRepo.__reset([
     makeStoredBookmark({
@@ -932,7 +932,6 @@ test('the card Open action opens the bookmark URL in the system browser', async 
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
 
-  await fireEvent.press(screen.getByLabelText('More actions'));
   await fireEvent.press(screen.getByLabelText('Open link'));
 
   expect(openURL).toHaveBeenCalledWith('https://www.inkandswitch.com/local-first/');
@@ -2575,13 +2574,27 @@ test('waits for storage startup before restoring a saved layout', async () => {
     const screen = await renderInbox({ layout: null });
     expect(metaSpy.mock.calls.filter(([key]) => key === INBOX_VIEW_PREF_KEY)).toHaveLength(0);
     expect(screen.getByTestId('inbox-view-options').props.accessibilityState.disabled).toBe(true);
+    expect(screen.getByTestId('inbox-search-input').props.editable).toBe(false);
     await act(async () => { finishInit(); });
     await waitFor(() => expect(screen.getByTestId('inbox-card-title')).toBeTruthy());
     expect(screen.queryByTestId('inbox-list-title')).toBeNull();
     expect(fakeRepo.__meta(INBOX_VIEW_PREF_KEY)).toBe('card');
+    await waitFor(() => expect(screen.getByTestId('inbox-search-input').props.editable).toBe(true));
   } finally {
     finishInit();
     loadSpy.mockRestore();
     metaSpy.mockRestore();
   }
+});
+
+
+test('List results retain the collection that matched a search', async () => {
+  fakeRepo.__reset([makeStoredBookmark({ title: 'An unrelated title', collection_id: 'col-work' })],
+    { tags: [], bookmarkTags: [], collections: [makeCollection('col-work', 'Work')] });
+  fakeRepo.__setMeta(INBOX_VIEW_PREF_KEY, 'list');
+  const screen = await renderInbox({ layout: null });
+  await waitFor(() => expect(screen.getByTestId('inbox-list-title')).toBeTruthy());
+  await fireEvent.changeText(screen.getByTestId('inbox-search-input'), 'Work');
+  await waitFor(() => expect(screen.getByText('in Work')).toBeTruthy());
+  expect(screen.getByTestId('inbox-list-title')).toBeTruthy();
 });

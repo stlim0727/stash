@@ -896,7 +896,7 @@ export default function InboxScreen() {
   // phones the width is below one column's worth (~380dp), so columns collapses
   // to 1 and the content cap falls back to the fixed 720px column — the current
   // phone behavior is preserved exactly with no Platform.OS branch.
-  const { width: winWidth, fontScale } = useWindowDimensions();
+  const { width: winWidth } = useWindowDimensions();
   const columns = viewMode === 'card'
     ? Math.min(3, Math.max(1, Math.floor(winWidth / 380)))
     // Folder View is always a fixed 2-column grid of tiles (phone and web
@@ -1236,6 +1236,7 @@ export default function InboxScreen() {
   // Mirror the sort-pref guard: don't let the initial empty default clobber the
   // stored recents before they load.
   const recentsLoaded = useRef(false);
+  const [recentsReady, setRecentsReady] = useState(false);
   // True while a recents persist write is in flight. The focus re-read (below)
   // must NOT clobber a just-submitted recent with a stale store read before its
   // async write commits — so it skips while this is set.
@@ -1252,6 +1253,7 @@ export default function InboxScreen() {
       .catch(() => {})
       .finally(() => {
         recentsLoaded.current = true;
+        if (active) setRecentsReady(true);
       });
     getPreference(INBOX_SORT_PREF_KEY)
       .then((raw) => {
@@ -1939,6 +1941,7 @@ export default function InboxScreen() {
   // Record a submitted query into recents (trim + case-insensitive dedupe-to-
   // front + cap). The ONLY write path for recents — never on every keystroke.
   const recordRecent = useCallback((raw: string) => {
+    if (!recentsLoaded.current) return;
     setRecentSearches((current) => addRecent(current, raw));
   }, []);
 
@@ -2676,7 +2679,7 @@ export default function InboxScreen() {
               testID="inbox-search-open"
               accessibilityRole="button"
               accessibilityLabel={searchOpen ? t('inbox.searchCloseA11y') : t('inbox.searchOpenA11y')}
-              disabled={selectionMode}
+              disabled={selectionMode || !recentsReady}
               onPress={() => (searchOpen ? closeSearch() : openSearch())}
               style={styles.searchAction}
               {...preventMouseDownFocusSteal}
@@ -2687,7 +2690,7 @@ export default function InboxScreen() {
               ref={searchRef}
               testID="inbox-search-input"
               accessibilityLabel={searchPlaceholder}
-              editable={!selectionMode}
+              editable={!selectionMode && recentsReady}
               style={[styles.searchInput, { backgroundColor: palette.card, color: palette.text }]}
               placeholder={searchPlaceholder}
               placeholderTextColor={palette.textSecondary}
@@ -3331,10 +3334,13 @@ export default function InboxScreen() {
           const handleItemLongPress = selectionMode ? () => toggleSelect(item.id) : () => enterSelectionMode(item.id);
 
           // List density view mode: compact row layout featuring thumbnail image
-          // with quick-open badge, title/url/tags in middle, and overflow menu.
+          // with a quick-open thumbnail, title/source/organization, and overflow.
           if (viewMode === 'list') {
             const thumbUri = selectPreviewImageUri(item.local_image_uri, item.preview_image_url);
-            const compactMeta = orderedTags.map((tag) => `#${tag.name}`).join('  ·  ');
+            const compactMeta = [
+              ...(collectionName ? [t('inbox.inCollection', { name: collectionName })] : []),
+              ...orderedTags.map((tag) => `#${tag.name}`),
+            ].join('  ·  ');
             return (
               <Pressable
                 testID={`inbox-list-row-${item.id}`}
@@ -3418,7 +3424,7 @@ export default function InboxScreen() {
                     style={[
                       styles.listTitle,
                       {
-                        lineHeight: Math.round(22 * fontScale),
+                        lineHeight: 22,
                           color: isTitleDerived(item) ? palette.textSecondary : palette.text,
                         fontWeight: isTitleDerived(item) ? WEB_MEDIUM_WEIGHT : WEB_SEMIBOLD_WEIGHT,
                       },
@@ -3430,7 +3436,7 @@ export default function InboxScreen() {
                   />
                   {memoPreview ? (
                     <HighlightedText
-                      style={[styles.listUrl, { color: palette.textSecondary, lineHeight: Math.round(20 * fontScale) }]}
+                      style={[styles.listUrl, { color: palette.textSecondary, lineHeight: 20 }]}
                       numberOfLines={1}
                       text={memoPreview}
                       query={highlightQuery}
@@ -3439,7 +3445,7 @@ export default function InboxScreen() {
                   ) : null}
                   {item.url ? (
                     <HighlightedText
-                      style={[styles.listUrl, { color: palette.textSecondary, lineHeight: Math.round(20 * fontScale) }]}
+                      style={[styles.listUrl, { color: palette.textSecondary, lineHeight: 20 }]}
                       numberOfLines={1}
                       text={siteLabelText}
                       query={highlightQuery}
@@ -3448,7 +3454,7 @@ export default function InboxScreen() {
                   ) : null}
                   {showUrlMatchLine && item.url ? (
                     <HighlightedText
-                      style={[styles.listUrl, { color: palette.textSecondary, lineHeight: Math.round(20 * fontScale) }]}
+                      style={[styles.listUrl, { color: palette.textSecondary, lineHeight: 20 }]}
                       numberOfLines={1}
                       text={item.url}
                       query={highlightQuery}
@@ -3457,7 +3463,7 @@ export default function InboxScreen() {
                   ) : null}
                   {compactMeta ? (
                     <PostHogMaskView>
-                      <Text style={[styles.compactMeta, { color: palette.textSecondary, lineHeight: Math.round(20 * fontScale) }]} numberOfLines={1}>
+                      <Text style={[styles.compactMeta, { color: palette.textSecondary, lineHeight: 20 }]} numberOfLines={1}>
                         {compactMeta}
                       </Text>
                     </PostHogMaskView>
@@ -3613,7 +3619,7 @@ export default function InboxScreen() {
                       style={[
                         styles.cardTitle,
                         {
-                          lineHeight: Math.round(22 * fontScale),
+                          lineHeight: 22,
                           color: isTitleDerived(item) ? palette.textSecondary : palette.text,
                           fontWeight: isTitleDerived(item) ? WEB_MEDIUM_WEIGHT : WEB_SEMIBOLD_WEIGHT,
                         },
@@ -3649,7 +3655,13 @@ export default function InboxScreen() {
                   ) : null}
                 </View>
                 {item.url ? (
-                  <View accessible accessibilityLabel={siteLabelText}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={t('common.openLink')}
+                    onPress={selectionMode ? () => toggleSelect(item.id) : openLink}
+                    onLongPress={handleItemLongPress}
+                    style={{ minHeight: uiMetrics.touchTarget, justifyContent: 'center' }}
+                  >
                     <HighlightedText
                       style={[styles.cardUrl, { color: palette.textSecondary }]}
                       numberOfLines={1}
@@ -3657,7 +3669,7 @@ export default function InboxScreen() {
                       query={highlightQuery}
                       highlightStyle={highlightStyle}
                     />
-                  </View>
+                  </Pressable>
                 ) : null}
                 {memoPreview ? (
                   <HighlightedText
