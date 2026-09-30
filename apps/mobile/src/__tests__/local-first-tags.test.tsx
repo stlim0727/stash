@@ -56,7 +56,7 @@ test('adding a tag offline shows it immediately and queues the op', async () => 
   await waitFor(() => expect(fakeRepo.__meta('pending_tag_ops') ?? '').toContain('korean'));
 });
 
-test('removing a just-added (unsynced) tag cancels the queued op', async () => {
+test('removing a just-added tag retains a durable removal intent', async () => {
   const { result } = await renderStore();
 
   await act(async () => {
@@ -67,9 +67,66 @@ test('removing a just-added (unsynced) tag cancels the queued op', async () => {
   });
 
   expect(result.current.getTagsForBookmark(SYNCED_ID).map((tag) => tag.name)).not.toContain('korean');
-  // add + remove of an unsynced tag cancel out — nothing left to upload.
+  // A removal must survive a possibly in-flight add and the next pull.
   await waitFor(() => {
     const ops = JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]');
-    expect(ops).toHaveLength(0);
+    expect(ops).toHaveLength(1);
+    expect(ops[0].op).toBe('remove');
   });
+});
+
+
+test('a never-synced bookmark can be tagged offline and survives a provider restart', async () => {
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, sync_status: 'pending', ever_synced: false })]);
+  const first = await renderStore();
+  await act(async () => {
+    expect(await first.result.current.addTagsToBookmark(SYNCED_ID, ['offline'])).toBeNull();
+  });
+  expect(JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]')[0].tag_name).toBe('offline');
+  await first.unmount();
+  const second = await renderStore();
+  expect(second.result.current.getTagsForBookmark(SYNCED_ID).map((tag) => tag.name)).toContain('offline');
+  await second.unmount();
+});
+
+test('a removed association stays removed across restart and a stale cached snapshot', async () => {
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID })], {
+    tags: [{ id: 'remote-tag', user_id: 'user-test', name: 'old', slug: 'old', source: 'user', created_at: 'now' }],
+    bookmarkTags: [{ bookmark_id: SYNCED_ID, tag_id: 'remote-tag', source: 'user', confidence: null, created_at: 'now' }],
+    collections: [],
+  });
+  const first = await renderStore();
+  await act(async () => {
+    expect(await first.result.current.removeTagFromBookmark(SYNCED_ID, 'old')).toBeNull();
+  });
+  await first.unmount();
+  const second = await renderStore();
+  expect(second.result.current.getTagsForBookmark(SYNCED_ID)).toEqual([]);
+  expect(JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]')[0].op).toBe('remove');
+  await second.unmount();
+});
+
+
+test('the durable journal restores an add even if its derived tag snapshot was not written', async () => {
+  const spy = jest.spyOn(fakeRepo.repository, 'replaceTagData').mockRejectedValueOnce(new Error('snapshot interrupted'));
+  const first = await renderStore();
+  try {
+    await act(async () => {
+      expect(await first.result.current.addTagsToBookmark(SYNCED_ID, ['journal-only'])).toBeNull();
+    });
+    await first.unmount();
+    const second = await renderStore();
+    expect(second.result.current.getTagsForBookmark(SYNCED_ID).map((tag) => tag.name)).toContain('journal-only');
+    await second.unmount();
+  } finally { spy.mockRestore(); }
+});
+
+test('a failed journal write returns an error rather than reporting a durable save', async () => {
+  const first = await renderStore();
+  const spy = jest.spyOn(fakeRepo.repository, 'setMeta').mockImplementationOnce(async () => { throw new Error('disk full'); });
+  try {
+    await act(async () => {
+      expect(await first.result.current.addTagsToBookmark(SYNCED_ID, ['not-saved'])).toContain('Could not save');
+    });
+  } finally { spy.mockRestore(); await first.unmount(); }
 });

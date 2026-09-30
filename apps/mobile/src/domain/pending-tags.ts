@@ -1,7 +1,7 @@
 /**
  * Local-first tagging engine (pure). Tag add/remove is applied to local state
  * immediately and recorded as a pending operation that the sync service uploads
- * later — so tagging a synced bookmark works instantly and offline, and a failed
+ * later — so tagging any captured bookmark works instantly and offline, and a failed
  * upload is just a retry, never lost work.
  *
  * A pending "add" creates an optimistic local tag (`local-tag-<slug>` id) and a
@@ -25,6 +25,14 @@ export interface PendingTagOp {
   source: TagSource;
   confidence: number | null;
   created_at: string;
+  /** Durable retry bookkeeping; absent on older persisted queues. */
+  retry_count?: number;
+  last_attempt_at?: string;
+  last_error?: string;
+  last_error_kind?: 'other' | 'transient_network' | 'transient_dns';
+  health_escalated_at?: string;
+  /** Acknowledged removal remains a tombstone until a pull confirms absence. */
+  confirmed?: boolean;
 }
 
 function localTagId(name: string): string {
@@ -94,19 +102,15 @@ export function applyPendingTagOps(
 }
 
 /**
- * Add an op to the queue. Opposite ops for the same (bookmark, tag) cancel out;
- * a repeat of the same op de-dupes. Keeps the queue minimal and correct.
+ * Add an op to the queue. The latest intent replaces the previous intent for the same target.
+ * Never cancel opposite edits: the earlier request may already be in flight
+ * or have reached the server before a lost response.
  */
 export function enqueueTagOp(ops: PendingTagOp[], next: PendingTagOp): PendingTagOp[] {
   const slug = tagSlug(next.tag_name);
   const sameTarget = (op: PendingTagOp) =>
     op.bookmark_id === next.bookmark_id && tagSlug(op.tag_name) === slug;
-  const existing = ops.find(sameTarget);
   const rest = ops.filter((op) => !sameTarget(op));
-  if (existing && existing.op !== next.op) {
-    // add↔remove cancel: the earlier op never synced, so we're back to baseline.
-    return rest;
-  }
   return [...rest, next];
 }
 
@@ -115,17 +119,19 @@ export function dequeueTagOp(
   ops: PendingTagOp[],
   bookmarkId: string,
   tagName: string,
+  confirmedOpId?: string,
 ): PendingTagOp[] {
   const slug = tagSlug(tagName);
   return ops.filter(
-    (op) => !(op.bookmark_id === bookmarkId && tagSlug(op.tag_name) === slug),
+    (op) => !(op.bookmark_id === bookmarkId && tagSlug(op.tag_name) === slug &&
+      (confirmedOpId === undefined || op.id === confirmedOpId)),
   );
 }
 
 /**
  * Re-key pending tag ops from old bookmark ids to new ones. Used on account
  * carry-over (anonymous → real): re-homing a bookmark swaps it to a fresh
- * `local-*` id, so any tag ops still keyed by the OLD id would fire `addTags`
+ * UUID, so any tag ops still keyed by the OLD id would fire `addTags`
  * against an id that no longer exists in the new account and be orphaned.
  * Ops whose `bookmark_id` isn't in `idMap` pass through unchanged.
  */
@@ -139,7 +145,7 @@ export function rekeyPendingTagOps(
   return ops.map((op) => {
     const newId = idMap.get(op.bookmark_id);
     return newId ? { ...op, bookmark_id: newId } : op;
-  });
+  }).reduce<PendingTagOp[]>((next, op) => enqueueTagOp(next, op), []);
 }
 
 /**
@@ -188,4 +194,40 @@ export function reconcileSyncedAdd(data: TagData, tagName: string, serverTag: Ta
   });
 
   return { ...data, tags, bookmarkTags };
+}
+
+/** Re-upload every carried association, including tags whose old upload completed. */
+export function carryOverTagOps(
+  ops: PendingTagOp[], data: TagData, idMap: Map<string, string>,
+  makeId: () => string, now: string,
+): PendingTagOp[] {
+  // Use original ids when deciding which associations belong to this migration.
+  let next = rekeyPendingTagOps(ops.map((op) => idMap.has(op.bookmark_id)
+    ? { ...op, confirmed: false, retry_count: 0, last_attempt_at: undefined,
+        last_error: undefined, last_error_kind: undefined, health_escalated_at: undefined }
+    : op), idMap);
+  for (const link of data.bookmarkTags) {
+    const newId = idMap.get(link.bookmark_id);
+    const tag = data.tags.find((candidate) => candidate.id === link.tag_id);
+    if (!newId || !tag || next.some((op) => op.bookmark_id === newId &&
+      tagSlug(op.tag_name) === tagSlug(tag.name))) continue;
+    next = enqueueTagOp(next, { id: makeId(), bookmark_id: newId,
+      tag_name: tag.name, op: 'add', source: link.source,
+      confidence: link.confidence, created_at: now });
+  }
+  return next;
+}
+
+/** Retire removal tombstones only after an actual remote snapshot confirms absence. */
+export function retireConfirmedTagRemovals(
+  ops: PendingTagOp[], remote: TagData, snapshotReplaced: boolean,
+): PendingTagOp[] {
+  if (!snapshotReplaced) return ops;
+  return ops.filter((op) => {
+    if (!op.confirmed || op.op !== 'remove') return true;
+    const matchingIds = new Set(remote.tags.filter((tag) =>
+      tagSlug(tag.name) === tagSlug(op.tag_name)).map((tag) => tag.id));
+    return remote.bookmarkTags.some((link) =>
+      link.bookmark_id === op.bookmark_id && matchingIds.has(link.tag_id));
+  });
 }

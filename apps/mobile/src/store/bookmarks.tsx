@@ -93,10 +93,12 @@ import {
 import {
   applyPendingTagOps,
   applyTagOp,
+  carryOverTagOps,
   dequeueTagOp,
   dropPendingTagOpsForBookmarks,
   enqueueTagOp,
   reconcileSyncedAdd,
+  retireConfirmedTagRemovals,
   rekeyPendingTagOps,
   type PendingTagOp,
 } from "@/domain/pending-tags";
@@ -184,6 +186,7 @@ import {
   syncCreateQueueEntryBatch,
   syncErrorKind,
   syncQueueEntry,
+  UPLOAD_RETRY_BACKOFF_MS,
 } from "@/sync/sync-bookmarks";
 import {
   recordBulkChunkStarted,
@@ -385,12 +388,12 @@ interface BookmarksContextValue {
   lastPulledAt: string | null;
   /** The user's cloud collections (assignable; refreshed by pull sync). */
   collections: Collection[];
-  /** Add tags to a synced bookmark. Resolves to an error message, or null. */
+  /** Add tags locally, including before the bookmark has synced. Resolves to an error message, or null. */
   addTagsToBookmark: (
     bookmarkId: string,
     names: string[],
   ) => Promise<string | null>;
-  /** Remove a tag from a synced bookmark. Resolves to an error message, or null. */
+  /** Remove a tag locally, retaining a durable removal intent. Resolves to an error message, or null. */
   removeTagFromBookmark: (
     bookmarkId: string,
     tagName: string,
@@ -934,7 +937,12 @@ function mergeById<T>(
 
 export function BookmarksProvider({ children }: { children: ReactNode }) {
   const auth = useSupabaseAuth();
-  const [reconciledCacheUserId, setReconciledCacheUserId] = useState<string | null>(null);
+  const [reconciledCacheUserId, setReconciledCacheUserIdState] = useState<string | null>(null);
+  const reconciledCacheUserIdRef = useRef<string | null>(null);
+  const setReconciledCacheUserId = useCallback((userId: string | null) => {
+    reconciledCacheUserIdRef.current = userId;
+    setReconciledCacheUserIdState(userId);
+  }, []);
   const hideAccountCache = auth.status === "loading" || auth.status === "error" ||
     auth.status === "session_expired" ||
     ((auth.status === "authenticated" || auth.status === "anonymous") &&
@@ -993,6 +1001,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // tagData is the server snapshot with these layered on top.
   const [pendingTagOps, setPendingTagOps] = useState<PendingTagOp[]>([]);
   const pendingTagOpsRef = useRef<PendingTagOp[]>([]);
+  const tagSyncInFlight = useRef(false);
+  const tagSyncPending = useRef(false);
+  const tagOpsWriteRef = useRef(Promise.resolve(true));
   const [pendingImportCollections, setPendingImportCollections] = useState<
     PendingImportCollection[]
   >([]);
@@ -1274,17 +1285,25 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // (shrinking) array, which was contending with the main sync queue's own
   // writes (Sentry: bli9833 import backlog, sqlite tail-wait depth 22).
   const applyTagOps = useCallback(
-    (next: PendingTagOp[], options?: { persist?: boolean }) => {
+    (next: PendingTagOp[], options?: { persist?: boolean }): Promise<boolean> => {
       pendingTagOpsRef.current = next;
       setPendingTagOps(next);
       if (options?.persist === false) {
-        return;
+        return Promise.resolve(true);
       }
-      ensureRepositoryReady()
-        .then(() =>
-          repository.setMeta(PENDING_TAG_OPS_KEY, JSON.stringify(next)),
-        )
-        .catch((error) => logStorageError("tag ops", error));
+      // Serialize journal writes so an older snapshot can never land last.
+      const write = tagOpsWriteRef.current.then(async () => {
+        try {
+          await ensureRepositoryReady();
+          await repository.setMeta(PENDING_TAG_OPS_KEY, JSON.stringify(next));
+          return true;
+        } catch (error) {
+          logStorageError("tag ops", error);
+          return false;
+        }
+      });
+      tagOpsWriteRef.current = write;
+      return write;
     },
     [],
   );
@@ -4262,7 +4281,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const resetLibrary = useCallback(async (): Promise<ResetLibraryResult> => {
     // If sync is paused, syncNow calls made while paused set syncInFlight
     // or syncPendingRef. Bypass syncInFlight so user can reset while paused.
-    if (syncInFlight.current && !syncPausedRef.current) {
+    if (tagSyncInFlight.current || (syncInFlight.current && !syncPausedRef.current)) {
       return { ok: false, reason: "busy" };
     }
     // An import's sequential durable-write loop (Sentry: user-reported "reset
@@ -4399,7 +4418,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // bookmark used to mean 3,000+ sequential round trips for 1,000 bookmarks
   // (Sentry STASH-5F/5G/5D). "remove" ops stay one-per-op, unchanged: imports
   // never enqueue removes, and removes are always low-volume interactive edits.
-  const syncTagOps = useCallback(async (): Promise<boolean> => {
+  const syncTagOps = useCallback(async (force = false): Promise<boolean> => {
     if (!auth.session) {
       return false;
     }
@@ -4411,135 +4430,197 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     if (syncPausedRef.current) {
       return false;
     }
-    const ops = pendingTagOpsRef.current;
-    if (ops.length === 0) {
+    if (tagSyncInFlight.current) {
+      tagSyncPending.current = true;
       return false;
     }
-    let mutationsPushed = false;
-    const api = createSyncApi(auth.session);
+    tagSyncInFlight.current = true;
+    try {
+      if (!(await tagOpsWriteRef.current)) {
+        return false;
+      }
+      const userId = auth.session.user.id;
+      const epoch = resetEpoch.current;
+      const isCurrentUser = () => authRef.current.session?.user.id === userId &&
+        reconciledCacheUserIdRef.current === userId && resetEpoch.current === epoch;
+      if (!isCurrentUser()) return false;
+      const ops = pendingTagOpsRef.current.filter((op) => {
+        if (op.confirmed) return false;
+        if (force || !op.last_attempt_at || !op.retry_count) return true;
+        const base = UPLOAD_RETRY_BACKOFF_MS[Math.min(op.retry_count - 1, UPLOAD_RETRY_BACKOFF_MS.length - 1)]!;
+        const multiplier = op.last_error_kind === "transient_network" || op.last_error_kind === "transient_dns" ? 3 : 1;
+        return Date.now() >= Date.parse(op.last_attempt_at) + base * multiplier;
+      });
 
-    // The bookmark must exist remotely before its tags can be linked. Group
-    // eligible "add" ops by bookmark — enqueueTagOp already guarantees at
-    // most one queued op per (bookmark_id, tag slug), so each bookmark's
-    // group has no duplicate tag names to worry about.
-    const addOpsByBookmark = new Map<string, PendingTagOp[]>();
-    for (const op of ops) {
-      if (op.op !== "add" || !hasSyncedOnce(op.bookmark_id)) {
-        continue;
+      if (ops.length === 0) {
+        return false;
       }
-      const list = addOpsByBookmark.get(op.bookmark_id);
-      if (list) {
-        list.push(op);
-      } else {
-        addOpsByBookmark.set(op.bookmark_id, [op]);
-      }
-    }
-    const addBookmarkIds = [...addOpsByBookmark.keys()];
+      let mutationsPushed = false;
+      const api = createSyncApi(auth.session);
 
-    for (let i = 0; i < addBookmarkIds.length; i += BULK_CREATE_SYNC_CHUNK_SIZE) {
-      if (syncPausedRef.current) {
-        break;
+      const recordFailure = async (failedOps: PendingTagOp[], error: unknown) => {
+        if (!isCurrentUser()) return;
+        const failedIds = new Set(failedOps.map((op) => op.id));
+        const now = new Date().toISOString();
+        const kind = syncErrorKind(error);
+        const escalated: PendingTagOp[] = [];
+        const next = pendingTagOpsRef.current.map((op) => {
+          if (!failedIds.has(op.id)) return op;
+          const retryCount = (op.retry_count ?? 0) + 1;
+          const threshold = kind === "other" ? 3 : 6;
+          const failed = { ...op, retry_count: retryCount, last_attempt_at: now,
+            last_error: String(error), last_error_kind: kind,
+            ...(retryCount >= threshold && !op.health_escalated_at ? { health_escalated_at: now } : {}),
+          };
+          if (!op.health_escalated_at && failed.health_escalated_at) escalated.push(failed);
+          return failed;
+        });
+        if (await applyTagOps(next)) {
+          for (const op of escalated) reportSyncQueueHealthEscalation({
+            operation: op.op === "add" ? "assign_tag" : "remove_tag", retryCount: op.retry_count!,
+            lastError: op.last_error!, errorKind: op.last_error_kind,
+          });
+        }
+      };
+
+      // The bookmark must exist remotely before its tags can be linked. Group
+      // eligible "add" ops by bookmark — enqueueTagOp already guarantees at
+      // most one queued op per (bookmark_id, tag slug), so each bookmark's
+      // group has no duplicate tag names to worry about.
+      const addOpsByBookmark = new Map<string, PendingTagOp[]>();
+      for (const op of ops) {
+        if (op.op !== "add" || !hasSyncedOnce(op.bookmark_id)) {
+          continue;
+        }
+        const list = addOpsByBookmark.get(op.bookmark_id);
+        if (list) {
+          list.push(op);
+        } else {
+          addOpsByBookmark.set(op.bookmark_id, [op]);
+        }
       }
-      const chunkIds = addBookmarkIds.slice(i, i + BULK_CREATE_SYNC_CHUNK_SIZE);
-      const chunkItems: BulkAttachItem[] = chunkIds.map((bookmarkId) => ({
-        bookmark_id: bookmarkId,
-        tags: addOpsByBookmark.get(bookmarkId)!.map((op) => ({
-          name: op.tag_name,
-          source: op.source,
-        })),
-        collection_name: null,
-      }));
-      try {
-        const results = await api.bulkAttachTagsAndCollections(chunkItems);
-        for (const result of results) {
-          const opsForBookmark = addOpsByBookmark.get(result.bookmark_id);
-          if (!opsForBookmark) {
-            continue;
-          }
-          for (const serverTag of result.tags) {
-            const matchingOp = opsForBookmark.find(
-              (op) => tagSlug(op.tag_name) === serverTag.slug,
-            );
-            if (!matchingOp) {
+      const addBookmarkIds = [...addOpsByBookmark.keys()];
+
+      for (let i = 0; i < addBookmarkIds.length; i += BULK_CREATE_SYNC_CHUNK_SIZE) {
+        if (syncPausedRef.current || !isCurrentUser()) {
+          break;
+        }
+        const chunkIds = addBookmarkIds.slice(i, i + BULK_CREATE_SYNC_CHUNK_SIZE);
+        const chunkItems: BulkAttachItem[] = chunkIds.map((bookmarkId) => ({
+          bookmark_id: bookmarkId,
+          tags: addOpsByBookmark.get(bookmarkId)!.map((op) => ({
+            name: op.tag_name,
+            source: op.source,
+          })),
+          collection_name: null,
+        }));
+        try {
+          const results = await api.bulkAttachTagsAndCollections(chunkItems);
+          if (!isCurrentUser()) return mutationsPushed;
+          for (const result of results) {
+            const opsForBookmark = addOpsByBookmark.get(result.bookmark_id);
+            if (!opsForBookmark) {
               continue;
             }
-            // persist: false — see the batch persist after this loop. A bulk
-            // import's ~300 sequential ops must not each re-serialize and
-            // write the whole tag catalog/queue to SQLite (that's what was
-            // contending with the main sync queue's own writes).
-            applyTagData(
-              reconcileSyncedAdd(tagDataRef.current, matchingOp.tag_name, serverTag),
-              { persist: false },
-            );
-            applyTagOps(
-              dequeueTagOp(
-                pendingTagOpsRef.current,
-                result.bookmark_id,
-                matchingOp.tag_name,
-              ),
-              { persist: false },
-            );
-            mutationsPushed = true;
+            for (const serverTag of result.tags) {
+              const matchingOp = opsForBookmark.find(
+                (op) => tagSlug(op.tag_name) === serverTag.slug,
+              );
+              if (!matchingOp) {
+                continue;
+              }
+              // persist: false — see the batch persist after this loop. A bulk
+              // import's ~300 sequential ops must not each re-serialize and
+              // write the whole tag catalog/queue to SQLite (that's what was
+              // contending with the main sync queue's own writes).
+              applyTagData(
+                applyPendingTagOps(
+                  reconcileSyncedAdd(tagDataRef.current, matchingOp.tag_name, serverTag),
+                  pendingTagOpsRef.current,
+                  auth.userId ?? mockUserId,
+                ),
+                { persist: false },
+              );
+              applyTagOps(
+                dequeueTagOp(
+                  pendingTagOpsRef.current,
+                  result.bookmark_id,
+                  matchingOp.tag_name,
+                  matchingOp.id,
+                ),
+                { persist: false },
+              );
+              mutationsPushed = true;
+            }
           }
+        } catch (error) {
+          await recordFailure(chunkIds.flatMap((id) => addOpsByBookmark.get(id)!), error);
+          // Keep the ops queued; the next sync retries the whole chunk.
+          recordLog(
+            "warn",
+            `tag sync failed (bulk add, ${chunkIds.length} bookmarks): ${String(error)}`,
+          );
         }
-      } catch (error) {
-        // Keep the ops queued; the next sync retries the whole chunk.
-        recordLog(
-          "warn",
-          `tag sync failed (bulk add, ${chunkIds.length} bookmarks): ${String(error)}`,
-        );
       }
-    }
 
-    for (const op of ops) {
-      if (syncPausedRef.current) {
-        break;
+      for (const op of ops) {
+        if (syncPausedRef.current || !isCurrentUser()) {
+          break;
+        }
+        if (op.op !== "remove" || !hasSyncedOnce(op.bookmark_id)) {
+          continue;
+        }
+        try {
+          await api.removeTags({
+            bookmark_id: op.bookmark_id,
+            tags: [op.tag_name],
+          });
+          if (!isCurrentUser()) return mutationsPushed;
+          // Keep an acknowledged removal until a remote snapshot confirms absence.
+          applyTagOps(
+            pendingTagOpsRef.current.map((current) => current.id === op.id
+              ? { ...current, confirmed: true } : current),
+            { persist: false },
+          );
+          mutationsPushed = true;
+        } catch (error) {
+          await recordFailure([op], error);
+          // Keep the op queued; the next sync retries it.
+          recordLog(
+            "warn",
+            `tag sync failed (${op.op} ${op.tag_name}): ${String(error)}`,
+          );
+        }
       }
-      if (op.op !== "remove" || !hasSyncedOnce(op.bookmark_id)) {
-        continue;
-      }
-      try {
-        await api.removeTags({
-          bookmark_id: op.bookmark_id,
-          tags: [op.tag_name],
-        });
-        applyTagOps(
-          dequeueTagOp(pendingTagOpsRef.current, op.bookmark_id, op.tag_name),
-          { persist: false },
-        );
-        mutationsPushed = true;
-      } catch (error) {
-        // Keep the op queued; the next sync retries it.
-        recordLog(
-          "warn",
-          `tag sync failed (${op.op} ${op.tag_name}): ${String(error)}`,
-        );
-      }
-    }
 
-    if (mutationsPushed) {
-      // One persist for the whole batch instead of one per op (see above).
-      try {
-        await ensureRepositoryReady();
-        await repository.replaceTagData(tagDataRef.current);
-        await repository.setMeta(
-          PENDING_TAG_OPS_KEY,
-          JSON.stringify(pendingTagOpsRef.current),
-        );
-      } catch (error) {
-        logStorageError("tag ops", error);
+      if (mutationsPushed) {
+        // One persist for the whole batch instead of one per op (see above).
+        try {
+          await ensureRepositoryReady();
+          await repository.replaceTagData(tagDataRef.current);
+          await applyTagOps(pendingTagOpsRef.current);
+        } catch (error) {
+          logStorageError("tag ops", error);
+        }
+        broadcastSyncNudgeRef.current?.();
       }
-      broadcastSyncNudgeRef.current?.();
+      return mutationsPushed;
+    } finally {
+      tagSyncInFlight.current = false;
+      if (tagSyncPending.current) {
+        tagSyncPending.current = false;
+        void syncNowRef.current?.();
+      }
     }
-    return mutationsPushed;
   }, [auth.session, applyTagData, applyTagOps, hasSyncedOnce]);
 
   // Local-first: apply the tag immediately and queue the upload. Works offline
-  // and the moment a bookmark has synced; the queued op uploads on the next sync.
+  // even before a bookmark has synced; uploads wait for confirmed creation.
   const addTagsToBookmark = useCallback(
     async (bookmarkId: string, names: string[]): Promise<string | null> => {
-      if (!hasSyncedOnce(bookmarkId)) {
-        return "Tags can be added once this bookmark has synced.";
+      bookmarkId = resolveAliasedId(bookmarkId, idAliases.current);
+      if (!hasRemoteIdentity(bookmarkId) || !bookmarksRef.current?.some((bookmark) => bookmark.id === bookmarkId)) {
+        return "This bookmark cannot be tagged.";
       }
       const cleaned = names
         .map((name) => name.trim())
@@ -4564,8 +4645,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         nextData = applyTagOp(nextData, op, userId);
         nextOps = enqueueTagOp(nextOps, op);
       }
+      const persisted = applyTagOps(nextOps);
       applyTagData(nextData);
-      applyTagOps(nextOps);
+      if (!(await persisted)) return "Could not save tags on this device. Please retry.";
       void syncTagOps();
       return null;
     },
@@ -4574,8 +4656,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
   const removeTagFromBookmark = useCallback(
     async (bookmarkId: string, tagName: string): Promise<string | null> => {
-      if (!hasSyncedOnce(bookmarkId)) {
-        return "Seeded sample tags cannot be edited.";
+      bookmarkId = resolveAliasedId(bookmarkId, idAliases.current);
+      if (!hasRemoteIdentity(bookmarkId) || !bookmarksRef.current?.some((bookmark) => bookmark.id === bookmarkId)) {
+        return "This bookmark cannot be tagged.";
       }
       const op: PendingTagOp = {
         id: makeUuid(),
@@ -4586,10 +4669,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         confidence: null,
         created_at: new Date().toISOString(),
       };
+      const persisted = applyTagOps(enqueueTagOp(pendingTagOpsRef.current, op));
       applyTagData(
         applyTagOp(tagDataRef.current, op, auth.userId ?? mockUserId),
       );
-      applyTagOps(enqueueTagOp(pendingTagOpsRef.current, op));
+      if (!(await persisted)) return "Could not save tags on this device. Please retry.";
       void syncTagOps();
       return null;
     },
@@ -5197,8 +5281,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       bookmarkId: string,
       suggestions: SuggestedTag[],
     ): Promise<string | null> => {
-      if (!hasSyncedOnce(bookmarkId)) {
-        return "Tags can be added once this bookmark has synced.";
+      if (!hasRemoteIdentity(bookmarkId) || !bookmarksRef.current?.some((bookmark) => bookmark.id === bookmarkId)) {
+        return "This bookmark cannot be tagged.";
       }
       const valid = suggestions.filter(
         (suggestion) => suggestion.name.trim().length > 0,
@@ -5686,12 +5770,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const rekeyBookmarkIdentity = useCallback(
     async (
       idMap: Map<string, string>,
-      options: { persist?: boolean } = {},
+      options: { persist?: boolean; carryTags?: boolean } = {},
     ): Promise<IdentityRekeyState> => {
+      await tagOpsWriteRef.current;
       for (const [oldId, newId] of idMap) {
         idAliases.current.set(oldId, newId);
       }
-      const rekeyedTagOps = rekeyPendingTagOps(pendingTagOpsRef.current, idMap);
+      const rekeyedTagOps = options.carryTags
+        ? carryOverTagOps(pendingTagOpsRef.current, tagDataRef.current, idMap, makeUuid, new Date().toISOString())
+        : rekeyPendingTagOps(pendingTagOpsRef.current, idMap);
       const rekeyedImportCollections = rekeyPendingImportCollections(
         pendingImportCollectionsRef.current,
         idMap,
@@ -5784,7 +5871,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           makeBookmarkId,
           ensureRepositoryReady,
           {
-            rehome: (idMap) => rekeyBookmarkIdentity(idMap, { persist: false }),
+            rehome: (idMap) => rekeyBookmarkIdentity(idMap, { persist: false, carryTags: true }),
             drop: (ids) => {
               // Real A→real B switch: purge A's pending tag ops + links so a
               // later syncTagOps call (now under B's auth) can't upload A's
@@ -6223,7 +6310,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 ensureRepositoryReady,
                 {
                   rehome: (idMap) =>
-                    rekeyBookmarkIdentity(idMap, { persist: false }),
+                    rekeyBookmarkIdentity(idMap, { persist: false, carryTags: true }),
                 },
               );
             } else {
@@ -7387,13 +7474,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
         // Upload any queued local-first tag ops before pulling, so the pull's
         // server snapshot already reflects them.
-        const tagsSynced = await syncTagOps();
+        const tagsSynced = await syncTagOps(force);
         if (tagsSynced) {
           mutationsPushed = true;
         }
         if (
           pendingTagOpsRef.current.some((op) =>
-            createdIdsSyncedThisRun.has(op.bookmark_id),
+            !op.confirmed && createdIdsSyncedThisRun.has(op.bookmark_id),
           )
         ) {
           // A fast repository can finish create persistence before the synced
@@ -7567,6 +7654,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             }
             // Re-layer any still-unsynced local tag ops over the fresh server
             // snapshot so optimistic tags aren't dropped by the wholesale replace.
+            const remainingTagOps = retireConfirmedTagRemovals(
+              pendingTagOpsRef.current, result.tagData, result.tagSnapshotReplaced,
+            );
+            if (remainingTagOps.length !== pendingTagOpsRef.current.length) {
+              await applyTagOps(remainingTagOps);
+            }
             const mergedTagData = applyPendingTagOps(
               result.tagData,
               pendingTagOpsRef.current,
@@ -8545,7 +8638,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // bookkeeping all stay pointed at the OLD (now-deleted) id,
             // stranding any pending work queued against this row. Same
             // helper the account-transition caller already uses below.
-            rehome: (idMap) => rekeyBookmarkIdentity(idMap, { persist: false }),
+            rehome: (idMap) => rekeyBookmarkIdentity(idMap, { persist: false, carryTags: true }),
             drop: (ids) => {
               // Purge the logged-out account's pending tag ops + links so they
               // can't leak into the next session's UI or upload under it.

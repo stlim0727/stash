@@ -50,6 +50,8 @@ export interface PullResult {
   enrichments: AIEnrichment[];
   /** Authoritative snapshot of tags/links/collections (already persisted). */
   tagData: TagData;
+  /** False when an anonymous empty pull preserved the local snapshot. */
+  tagSnapshotReplaced: boolean;
   /** The new watermark (already persisted). */
   pulledAt: string;
   /** True when the signed-in user differed from the last-synced one. */
@@ -312,7 +314,7 @@ export async function pullRemoteChanges(
       durationMs: Date.now() - attemptStartedAt,
     });
 
-    return { upserts, deletions, enrichments, tagData: effectiveTagData, pulledAt, userChanged };
+    return { upserts, deletions, enrichments, tagData: effectiveTagData, tagSnapshotReplaced: !skipTagReplace, pulledAt, userChanged };
   } catch (error) {
     recordPullAttempt({
       since,
