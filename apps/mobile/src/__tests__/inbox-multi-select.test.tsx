@@ -717,6 +717,7 @@ test('places selection mark at top-left of bookmark in card view', async () => {
     }),
   ]);
 
+  fakeRepo.__setMeta('pref.inbox.view', 'card');
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Top Left Selection Card')).toBeTruthy());
 

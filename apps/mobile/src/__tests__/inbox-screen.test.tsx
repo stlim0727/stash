@@ -134,7 +134,10 @@ function makeTag(id: string, name: string): Tag {
 
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
 
-function renderInbox() {
+function renderInbox({ layout = 'card' }: { layout?: 'card' | null } = {}) {
+  // Most existing cases exercise a returning user's saved Cards preference.
+  // Fresh-install tests opt out explicitly.
+  if (layout && fakeRepo.__meta(INBOX_VIEW_PREF_KEY) === null) fakeRepo.__setMeta(INBOX_VIEW_PREF_KEY, layout);
   return render(
     <BookmarksProvider>
       <CaptureToastProvider>
@@ -142,6 +145,17 @@ function renderInbox() {
       </CaptureToastProvider>
     </BookmarksProvider>,
   );
+}
+
+async function openViewOptions(screen: Awaited<ReturnType<typeof renderInbox>>) {
+  if (!screen.queryByTestId('inbox-view-card')) await fireEvent.press(screen.getByTestId('inbox-view-options'));
+}
+async function chooseLayout(screen: Awaited<ReturnType<typeof renderInbox>>, mode: string) {
+  await openViewOptions(screen);
+  await fireEvent.press(screen.getByTestId(`inbox-view-${mode}`));
+}
+async function openHomeMenu(screen: Awaited<ReturnType<typeof renderInbox>>) {
+  await fireEvent.press(screen.getByTestId('inbox-menu-open'));
 }
 
 beforeEach(() => {
@@ -554,7 +568,7 @@ test('search filters the list and shows the match count', async () => {
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Raindrop review')).toBeTruthy());
 
-  // Search is tap-to-open now: reveal the field before typing.
+  // Activate search before typing.
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
   await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), 'local-first');
 
@@ -594,7 +608,7 @@ test('slims the header while searching: the sort row and browse shelf fold away'
   await waitFor(() => expect(screen.getByText('Raindrop review')).toBeTruthy());
 
   // Before searching, the sort pill and browse shelf are present.
-  expect(screen.getByText('Newest')).toBeTruthy();
+  expect(screen.getByTestId('inbox-view-options')).toBeTruthy();
   expect(screen.getByTestId('browse-shelf')).toBeTruthy();
 
   // Open search (tap-to-open), type, then blur to reach the "results, keyboard
@@ -614,8 +628,8 @@ test('slims the header while searching: the sort row and browse shelf fold away'
 
   // Clearing the search restores the sort row and the browse shelf.
   await fireEvent.press(screen.getByTestId('inbox-filter-clear'));
-  await waitFor(() => expect(screen.getByText('Newest')).toBeTruthy());
-  expect(screen.getByTestId('browse-shelf')).toBeTruthy();
+  await waitFor(() => expect(screen.getByTestId('inbox-view-options')).toBeTruthy());
+  await waitFor(() => expect(screen.getByTestId('browse-shelf')).toBeTruthy());
 });
 
 test('highlights the matched span in a result title while searching', async () => {
@@ -680,7 +694,7 @@ test('a punctuation-only query is not a search (keeps the normal Inbox section)'
   expect(screen.getByText('Local-first software')).toBeTruthy();
 });
 
-test('search is tap-to-open: the field is hidden until the magnifier is pressed', async () => {
+test('search stays visible before, during and after an active search', async () => {
   fakeRepo.__reset(
     [
       makeStoredBookmark({
@@ -695,24 +709,22 @@ test('search is tap-to-open: the field is hidden until the magnifier is pressed'
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Work doc')).toBeTruthy());
 
-  // At rest the search field is NOT mounted — only the magnifier, alongside the
-  // sort row and the browse shelf (the thin resting top).
-  expect(screen.queryByTestId('inbox-search-input')).toBeNull();
+  // At rest the persistent search field and filter/options row are visible.
+  expect(screen.getByTestId('inbox-search-input')).toBeTruthy();
   expect(screen.getByTestId('inbox-search-open')).toBeTruthy();
-  expect(screen.getByText('Newest')).toBeTruthy();
+  expect(screen.getByTestId('inbox-view-options')).toBeTruthy();
   expect(screen.getByTestId('browse-shelf')).toBeTruthy();
 
-  // Tapping the magnifier reveals the field and folds the sort row + shelf away.
+  // Activating search focuses the field and folds the options and shelf away.
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
   await waitFor(() => expect(screen.getByTestId('inbox-search-input')).toBeTruthy());
   expect(screen.queryByText('Newest')).toBeNull();
   expect(screen.queryByTestId('browse-shelf')).toBeNull();
 
-  // Tapping it again (now the ✕) with an empty query closes search: the field
-  // unmounts and the sort row + browse shelf return.
+  // Closing the session keeps the field visible and restores the filter row.
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  await waitFor(() => expect(screen.queryByTestId('inbox-search-input')).toBeNull());
-  expect(screen.getByText('Newest')).toBeTruthy();
+  await waitFor(() => expect(screen.getByTestId('inbox-search-input')).toBeTruthy());
+  expect(screen.getByTestId('inbox-view-options')).toBeTruthy();
   expect(screen.getByTestId('browse-shelf')).toBeTruthy();
 });
 
@@ -864,7 +876,7 @@ test('opening search focuses the field immediately, with no fade-in animation on
   // Closing still gets the smoothing — no regression on the fold-away.
   configureNextSpy.mockClear();
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  await waitFor(() => expect(screen.queryByTestId('inbox-search-input')).toBeNull());
+  await waitFor(() => expect(screen.getByTestId('inbox-search-input')).toBeTruthy());
   expect(configureNextSpy).toHaveBeenCalledWith(LayoutAnimation.Presets.easeInEaseOut);
 });
 
@@ -907,7 +919,7 @@ test('centers the search suggestion shelf on the same rail as the search field o
   expect(shelfStyle.maxWidth).toBe(1116);
 });
 
-test('the card Open action opens the bookmark URL in the system browser', async () => {
+test('the card source quick-open action opens the bookmark URL in the system browser', async () => {
   const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
   fakeRepo.__reset([
     makeStoredBookmark({
@@ -1069,7 +1081,7 @@ test('a tag route param filters the Inbox to that tag on load', async () => {
 test('an empty library shows the onboarding card even with a legacy Tag-cloud preference', async () => {
   // The tag cloud is no longer a persisted layout: a legacy stored 'cloud'
   // degrades to Cards (parseViewMode), and the cloud is a transient toggle that
-  // never cold-starts. On an empty library the Browse-by-tag toggle is hidden
+  // never cold-starts. On an empty library the Home Tags menu action is hidden
   // and the cloud can't open, so the screen must show the onboarding card.
   fakeRepo.__reset([]);
   await fakeRepo.repository.setMeta(INBOX_VIEW_PREF_KEY, 'cloud');
@@ -1160,12 +1172,12 @@ test('the sort menu reorders the Inbox by date and name', async () => {
   expect(titles()).toEqual(['apple', 'Zebra']);
 
   // Open the sort menu (pill labeled "Newest") and pick "Oldest" → oldest-first.
-  await fireEvent.press(screen.getByText('Newest'));
+  await fireEvent.press(screen.getByTestId('inbox-view-options'));
   await fireEvent.press(screen.getByText('Oldest'));
   expect(titles()).toEqual(['Zebra', 'apple']);
 
   // Reopen (pill now labeled "Oldest") and pick "Name A–Z" → case-insensitive.
-  await fireEvent.press(screen.getByText('Oldest'));
+  await fireEvent.press(screen.getByTestId('inbox-view-options'));
   await fireEvent.press(screen.getByText('Name A–Z'));
   expect(titles()).toEqual(['apple', 'Zebra']);
 });
@@ -1194,7 +1206,7 @@ test('every image-less card shows a site wordmark', async () => {
   expect(screen.getByText('RAINDROP')).toBeTruthy();
 });
 
-test('the view segmented control switches between card and list layouts', async () => {
+test('View options switches between saved Card and List layouts', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({
       id: '7e64cf1e-0000-4000-8000-000000000041',
@@ -1207,11 +1219,11 @@ test('the view segmented control switches between card and list layouts', async 
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
 
-  // Cards are the default layout.
+  // The returning user has a saved Cards preference.
   expect(screen.getByTestId('inbox-card-title')).toBeTruthy();
   expect(screen.queryByTestId('inbox-list-title')).toBeNull();
 
-  await fireEvent.press(screen.getByTestId('inbox-view-list'));
+  await chooseLayout(screen, 'list');
 
   // Selecting List renders the same bookmark as a list row.
   await waitFor(() => expect(screen.getByTestId('inbox-list-title')).toBeTruthy());
@@ -1219,7 +1231,7 @@ test('the view segmented control switches between card and list layouts', async 
   expect(screen.getByText('Local-first software')).toBeTruthy();
 
   // Selecting Cards again returns to the card layout.
-  await fireEvent.press(screen.getByTestId('inbox-view-card'));
+  await chooseLayout(screen, 'card');
   await waitFor(() => expect(screen.getByTestId('inbox-card-title')).toBeTruthy());
   expect(screen.queryByTestId('inbox-list-title')).toBeNull();
 });
@@ -1232,7 +1244,9 @@ test('the folder view toggle is hidden until the library has a real collection',
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Loose link')).toBeTruthy());
 
+  await openViewOptions(screen);
   expect(screen.getByTestId('inbox-view-card')).toBeTruthy();
+  await openViewOptions(screen);
   expect(screen.getByTestId('inbox-view-list')).toBeTruthy();
   expect(screen.queryByTestId('inbox-view-folder')).toBeNull();
 });
@@ -1251,8 +1265,9 @@ test('folder view shows a tile per collection, the uncollected bucket, and a New
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Work doc')).toBeTruthy());
 
+  await openViewOptions(screen);
   expect(screen.getByTestId('inbox-view-folder')).toBeTruthy();
-  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await chooseLayout(screen, 'folder');
 
   // The tile grid replaces the flat bookmark list.
   await waitFor(() => expect(screen.getByTestId('folder-tile-__folder-uncollected')).toBeTruthy());
@@ -1310,7 +1325,7 @@ test('when search is active, folder view shows matching item counts instead of t
   await waitFor(() => expect(screen.getByText('React Native guide')).toBeTruthy());
 
   // Switch to folder view
-  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await chooseLayout(screen, 'folder');
   await waitFor(() => expect(screen.getByTestId('folder-tile-__folder-c:col-work')).toBeTruthy());
 
   // Initial counts without search:
@@ -1399,7 +1414,7 @@ test('the view-mode toggle stays reachable in Folder View even if the library em
   );
   await waitFor(() => expect(screen.getByText('Work doc')).toBeTruthy());
 
-  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await chooseLayout(screen, 'folder');
   await waitFor(() => expect(screen.getByTestId('folder-tile-__folder-c:col-work')).toBeTruthy());
 
   // Simulate a reset's effect on the underlying library (bookmarks wiped)
@@ -1411,10 +1426,12 @@ test('the view-mode toggle stays reachable in Folder View even if the library em
   // Folder View keeps rendering (the trailing tile), and — the actual fix —
   // the toggle back to Card/List is still there, not folded away with it.
   expect(screen.getByTestId('folder-tile-new')).toBeTruthy();
+  await openViewOptions(screen);
   expect(screen.getByTestId('inbox-view-card')).toBeTruthy();
+  await openViewOptions(screen);
   expect(screen.getByTestId('inbox-view-list')).toBeTruthy();
 
-  await fireEvent.press(screen.getByTestId('inbox-view-card'));
+  await chooseLayout(screen, 'card');
   await waitFor(() => expect(screen.queryByTestId('folder-tile-new')).toBeNull());
 });
 
@@ -1434,10 +1451,10 @@ test('tapping a folder tile filters the Inbox and returns to the layout used bef
 
   // Start from List (not the default Cards) so returning from Folder View is a
   // real assertion, not a coincidence of the default.
-  await fireEvent.press(screen.getByTestId('inbox-view-list'));
+  await chooseLayout(screen, 'list');
   await waitFor(() => expect(screen.getAllByTestId('inbox-list-title').length).toBe(2));
 
-  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await chooseLayout(screen, 'folder');
   await waitFor(() => expect(screen.getByTestId('folder-tile-__folder-c:col-work')).toBeTruthy());
 
   await fireEvent.press(screen.getByTestId('folder-tile-__folder-c:col-work'));
@@ -1458,10 +1475,11 @@ test('a tile-driven return to a prior layout is transient — only an explicit t
   );
 
   const screen = await renderInbox();
+  await openViewOptions(screen);
   await waitFor(() => expect(screen.getByTestId('inbox-view-folder')).toBeTruthy());
 
   // Explicitly toggling into Folder View persists, exactly like Card/List.
-  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await chooseLayout(screen, 'folder');
   await waitFor(() => expect(screen.getByTestId('folder-tile-__folder-c:col-work')).toBeTruthy());
   await waitFor(async () =>
     expect(await fakeRepo.repository.getMeta(INBOX_VIEW_PREF_KEY)).toBe('folder'),
@@ -1484,8 +1502,9 @@ test('the New Folder tile opens a create-collection dialog, and a successful sub
   );
 
   const screen = await renderInbox();
+  await openViewOptions(screen);
   await waitFor(() => expect(screen.getByTestId('inbox-view-folder')).toBeTruthy());
-  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await chooseLayout(screen, 'folder');
   await waitFor(() => expect(screen.getByTestId('folder-tile-new')).toBeTruthy());
 
   // Tapping New Folder opens the dialog in place — no navigation anywhere.
@@ -1514,16 +1533,18 @@ test('Folder View has its own sort menu (name/count), not the bookmark date/acce
   );
 
   const screen = await renderInbox();
+  await openViewOptions(screen);
   await waitFor(() => expect(screen.getByTestId('inbox-view-folder')).toBeTruthy());
-  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await chooseLayout(screen, 'folder');
   await waitFor(() => expect(screen.getByTestId('folder-tile-new')).toBeTruthy());
 
   // The pill itself reflects the folder-sort default (name-ascending), not the
   // bookmark default ("Newest").
+  await openViewOptions(screen);
   expect(screen.getByText('Name A–Z')).toBeTruthy();
   expect(screen.queryByText('Newest')).toBeNull();
 
-  await fireEvent.press(screen.getByText('Name A–Z'));
+  await openViewOptions(screen);
 
   // The 4 folder-scoped options are present...
   expect(screen.getByText('Name Z–A')).toBeTruthy();
@@ -1558,8 +1579,9 @@ test('picking "Most items" reorders the real-collection tiles; uncollected/new-f
   );
 
   const screen = await renderInbox();
+  await openViewOptions(screen);
   await waitFor(() => expect(screen.getByTestId('inbox-view-folder')).toBeTruthy());
-  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await chooseLayout(screen, 'folder');
   await waitFor(() => expect(screen.getByTestId('folder-tile-__folder-c:col-zeta')).toBeTruthy());
 
   const tileIds = () =>
@@ -1574,7 +1596,7 @@ test('picking "Most items" reorders the real-collection tiles; uncollected/new-f
     'folder-tile-new',
   ]);
 
-  await fireEvent.press(screen.getByText('Name A–Z'));
+  await openViewOptions(screen);
   await fireEvent.press(screen.getByText('Most items'));
 
   // Zeta (3) > Mango (2) > Alpha (1) — but the uncollected bucket stays first
@@ -1612,31 +1634,21 @@ test('Folder View and Card/List sorts are independent — switching layouts lose
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('apple')).toBeTruthy());
 
-  // Change the bookmark-level sort away from its default (Newest → Oldest).
-  expect(screen.getByText('Newest')).toBeTruthy();
-  await fireEvent.press(screen.getByText('Newest'));
+  await openViewOptions(screen);
   await fireEvent.press(screen.getByText('Oldest'));
-  expect(screen.getByText('Oldest')).toBeTruthy();
 
-  // Enter Folder View: its own sort control starts at its own default
-  // (Name A–Z), untouched by the bookmark-level change above.
-  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
-  await waitFor(() => expect(screen.getByText('Name A–Z')).toBeTruthy());
-
-  // Change the folder sort away from its default.
-  await fireEvent.press(screen.getByText('Name A–Z'));
+  await chooseLayout(screen, 'folder');
+  await openViewOptions(screen);
+  expect(screen.getByRole('button', { name: 'Name A–Z' }).props.accessibilityState.selected).toBe(true);
   await fireEvent.press(screen.getByText('Most items'));
-  await waitFor(() => expect(screen.getByText('Most items')).toBeTruthy());
 
-  // Back to List: the bookmark sort still reads "Oldest" — the folder-sort
-  // change didn't disturb it.
-  await fireEvent.press(screen.getByTestId('inbox-view-list'));
-  await waitFor(() => expect(screen.getByText('Oldest')).toBeTruthy());
+  await chooseLayout(screen, 'list');
+  await openViewOptions(screen);
+  expect(screen.getByRole('button', { name: 'Oldest' }).props.accessibilityState.selected).toBe(true);
 
-  // Back into Folder View: its sort still reads "Most items" — switching
-  // layouts twice didn't reset either control.
-  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
-  await waitFor(() => expect(screen.getByText('Most items')).toBeTruthy());
+  await chooseLayout(screen, 'folder');
+  await openViewOptions(screen);
+  expect(screen.getByRole('button', { name: 'Most items' }).props.accessibilityState.selected).toBe(true);
 });
 
 test('web opens bookmark detail inline instead of pushing the detail route', async () => {
@@ -1680,7 +1692,7 @@ test('web list inline detail keeps the detail preview hero', async () => {
 
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('List web detail')).toBeTruthy());
-  await fireEvent.press(screen.getByTestId('inbox-view-list'));
+  await chooseLayout(screen, 'list');
   await waitFor(() => expect(screen.getByTestId('inbox-list-title')).toBeTruthy());
 
   await fireEvent.press(screen.getByRole('button', { name: 'List web detail' }));
@@ -1722,7 +1734,7 @@ test('web inline detail keeps the wide card grid stable', async () => {
   expect(screen.getAllByTestId('inbox-grid-filler')).toHaveLength(2);
 });
 
-test('the Browse-by-tag toggle navigates to the dedicated tag-browse route', async () => {
+test('the Home Tags menu action navigates to the dedicated tag-browse route', async () => {
   // The transient in-Inbox cloud was replaced by a dedicated /browse/tags route;
   // the toggle now navigates there instead of flipping an in-screen surface.
   const cooked = '7e64cf1e-0000-4000-8000-000000000061';
@@ -1740,7 +1752,8 @@ test('the Browse-by-tag toggle navigates to the dedicated tag-browse route', asy
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
 
-  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
+  await openHomeMenu(screen);
+  await fireEvent.press(screen.getByRole('button', { name: 'Tags' }));
 
   // It pushes the route (no in-screen cloud surface exists anymore).
   expect(mockPush).toHaveBeenCalledWith('/browse/tags');
@@ -1748,7 +1761,7 @@ test('the Browse-by-tag toggle navigates to the dedicated tag-browse route', asy
   expect(screen.queryByTestId('inbox-cloud-tag')).toBeNull();
 });
 
-test('the Browse-by-tag toggle carries the active folder facet as the route scope', async () => {
+test('the Home Tags menu action carries the active folder facet as the route scope', async () => {
   const work = '7e64cf1e-0000-4000-8000-000000000071';
   fakeRepo.__reset(
     [makeStoredBookmark({ id: work, title: 'Local-first software', collection_id: 'col-work' })],
@@ -1767,7 +1780,8 @@ test('the Browse-by-tag toggle carries the active folder facet as the route scop
   // Narrow to the Work folder first, then open the tag-browse route: the active
   // facet rides along as the scope param.
   await fireEvent.press(screen.getByText('Work'));
-  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
+  await openHomeMenu(screen);
+  await fireEvent.press(screen.getByRole('button', { name: 'Tags' }));
 
   expect(mockPush).toHaveBeenCalledWith('/browse/tags?scope=collection:col-work');
 });
@@ -1851,7 +1865,7 @@ test('selecting the All chip also strips the URL facet params (STASH-T, all rese
   });
 });
 
-test('the layout segment offers Cards and List (no Tag-cloud option)', async () => {
+test('View options offers Cards and List (no Tag-cloud option)', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000a1', title: 'Kimchi jjigae' }),
   ]);
@@ -1860,15 +1874,19 @@ test('the layout segment offers Cards and List (no Tag-cloud option)', async () 
   await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
 
   // The segment renders exactly the two item layouts.
+  await openViewOptions(screen);
   expect(screen.getByTestId('inbox-view-card')).toBeTruthy();
+  await openViewOptions(screen);
   expect(screen.getByTestId('inbox-view-list')).toBeTruthy();
   expect(screen.queryByTestId('inbox-view-compact')).toBeNull();
   expect(screen.queryByTestId('inbox-view-cloud')).toBeNull();
-  const browseToggle = screen.getByTestId('inbox-browse-tags-toggle');
+  await fireEvent.press(screen.getByRole('button', { name: 'Cancel' }));
+  await openHomeMenu(screen);
+  const browseToggle = screen.getByRole('button', { name: 'Tags' });
   expect(browseToggle).toBeTruthy();
   // De-pilled to icon-only: the a11y label must be self-contained since there's
   // no visible text label anymore.
-  expect(screen.getByLabelText('Browse by tag')).toBe(browseToggle);
+  expect(browseToggle).toBeTruthy();
 });
 
 test('opening the Browse-by-tag route does not change the Inbox filter', async () => {
@@ -1902,7 +1920,8 @@ test('opening the Browse-by-tag route does not change the Inbox filter', async (
   // it was — there's no in-screen cloud to open/close. A tag facet has no
   // browse-tags scope (the route scopes by collection/uncollected only), so the
   // route opens unscoped while the Inbox keeps its #cooking facet underneath.
-  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
+  await openHomeMenu(screen);
+  await fireEvent.press(screen.getByRole('button', { name: 'Tags' }));
   expect(mockPush).toHaveBeenCalledWith('/browse/tags');
   expect(screen.queryByTestId('inbox-tag-cloud')).toBeNull();
   expect(screen.getByText('Kimchi jjigae')).toBeTruthy();
@@ -2175,7 +2194,7 @@ test('list view rows show the site label instead of the raw URL', async () => {
 
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('List row site label')).toBeTruthy());
-  await fireEvent.press(screen.getByTestId('inbox-view-list'));
+  await chooseLayout(screen, 'list');
   await waitFor(() => expect(screen.getByTestId('inbox-list-title')).toBeTruthy());
 
   expect(screen.getByText('example.com')).toBeTruthy();
@@ -2512,4 +2531,70 @@ test('card preview uses uploaded image after the local copy fails', async () => 
   await fireEvent(screen.getByTestId('inbox-card-preview-image'), 'error');
   await waitFor(() => expect(screen.getByTestId('inbox-card-preview-image').props.source.uri).toBe('https://example.com/uploaded-preview.jpg'));
   expect(screen.queryByTestId('inbox-card-preview-fallback')).toBeNull();
+});
+
+
+test('a fresh install defaults to List while keeping search visible without opening a menu', async () => {
+  fakeRepo.__reset([makeStoredBookmark({ title: 'Fresh library' })]);
+  const screen = await renderInbox({ layout: null });
+  await waitFor(() => expect(screen.getByTestId('inbox-list-title')).toBeTruthy());
+  expect(screen.getByTestId('inbox-search-input')).toBeTruthy();
+  expect(screen.queryByTestId('inbox-card-title')).toBeNull();
+  expect(screen.queryByTestId('inbox-view-card')).toBeNull();
+  expect(fakeRepo.__meta(INBOX_VIEW_PREF_KEY)).toBeNull();
+});
+
+test('typing directly into the persistent search field filters and clearing restores the library', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: 'fresh-1', title: 'Find this bookmark' }),
+    makeStoredBookmark({ id: 'fresh-2', title: 'Another bookmark' }),
+  ]);
+  const screen = await renderInbox({ layout: null });
+  await waitFor(() => expect(screen.getAllByTestId('inbox-list-title')).toHaveLength(2));
+  await fireEvent(screen.getByTestId('inbox-search-input'), 'focus');
+  await fireEvent.changeText(screen.getByTestId('inbox-search-input'), 'Find this');
+  await waitFor(() => expect(screen.queryByText('Another bookmark')).toBeNull());
+  await fireEvent.press(screen.getByTestId('inbox-search-open'));
+  await waitFor(() => expect(screen.getByText('Another bookmark')).toBeTruthy());
+  expect(screen.getByTestId('inbox-search-input')).toBeTruthy();
+});
+
+
+test('waits for storage startup before restoring a saved layout', async () => {
+  fakeRepo.__reset([makeStoredBookmark({ title: 'Saved layout after slow startup' })]);
+  fakeRepo.__setMeta(INBOX_VIEW_PREF_KEY, 'card');
+  let initialized = false;
+  let finishInit: () => void = () => {};
+  const ready = new Promise<void>((resolve) => { finishInit = () => { initialized = true; resolve(); }; });
+  const originalList = fakeRepo.repository.listBookmarks.bind(fakeRepo.repository);
+  const loadSpy = jest.spyOn(fakeRepo.repository, 'listBookmarks').mockImplementation(async () => { await ready; return originalList(); });
+  const originalGetMeta = fakeRepo.repository.getMeta.bind(fakeRepo.repository);
+  const metaSpy = jest.spyOn(fakeRepo.repository, 'getMeta').mockImplementation(async (key) => initialized ? originalGetMeta(key) : null);
+  try {
+    const screen = await renderInbox({ layout: null });
+    expect(metaSpy.mock.calls.filter(([key]) => key === INBOX_VIEW_PREF_KEY)).toHaveLength(0);
+    expect(screen.getByTestId('inbox-view-options').props.accessibilityState.disabled).toBe(true);
+    expect(screen.getByTestId('inbox-search-input').props.editable).toBe(false);
+    await act(async () => { finishInit(); });
+    await waitFor(() => expect(screen.getByTestId('inbox-card-title')).toBeTruthy());
+    expect(screen.queryByTestId('inbox-list-title')).toBeNull();
+    expect(fakeRepo.__meta(INBOX_VIEW_PREF_KEY)).toBe('card');
+    await waitFor(() => expect(screen.getByTestId('inbox-search-input').props.editable).toBe(true));
+  } finally {
+    finishInit();
+    loadSpy.mockRestore();
+    metaSpy.mockRestore();
+  }
+});
+
+
+test('List results retain the collection that matched a search', async () => {
+  fakeRepo.__reset([makeStoredBookmark({ title: 'An unrelated title', collection_id: 'col-work' })],
+    { tags: [], bookmarkTags: [], collections: [makeCollection('col-work', 'Work')] });
+  fakeRepo.__setMeta(INBOX_VIEW_PREF_KEY, 'list');
+  const screen = await renderInbox({ layout: null });
+  await waitFor(() => expect(screen.getByTestId('inbox-list-title')).toBeTruthy());
+  await fireEvent.changeText(screen.getByTestId('inbox-search-input'), 'Work');
+  await waitFor(() => expect(screen.getByText('in Work')).toBeTruthy());
+  expect(screen.getByTestId('inbox-list-title')).toBeTruthy();
 });

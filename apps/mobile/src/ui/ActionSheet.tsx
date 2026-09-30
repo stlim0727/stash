@@ -16,6 +16,7 @@ import { usePalette, uiMetrics } from '@/theme';
 
 export interface SheetAction {
   key: string;
+  testID?: string;
   label: string;
   /** A short secondary line under the label, for a menu whose options need more
    *  than a name to tell apart (e.g. export formats with different fidelity). */
@@ -111,7 +112,9 @@ export function ActionSheet({
             {actions.map((action) => (
               <Pressable
                 key={action.key}
+                testID={action.testID}
                 accessibilityRole="button"
+                accessibilityState={{ selected: action.selected }}
                 accessibilityLabel={
                   action.accessibilityLabel ??
                   (action.description ? `${action.label}. ${action.description}` : action.label)

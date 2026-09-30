@@ -11,8 +11,8 @@ import {
   type ViewMode,
 } from './view-mode.ts';
 
-test('default layout is cards', () => {
-  assert.equal(DEFAULT_VIEW_MODE, 'card');
+test('default layout is list', () => {
+  assert.equal(DEFAULT_VIEW_MODE, 'list');
 });
 
 test('VIEW_MODES lists the three layouts in control order (richest → densest, folder last)', () => {

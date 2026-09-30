@@ -5,15 +5,14 @@
  * Collection tiles instead of a flat bookmark list. All of these are purely a
  * presentation choice, so every mode composes with search, facet filtering, and
  * sort exactly the same way; `folder` adds no persisted state beyond the same
- * `INBOX_VIEW_PREF_KEY`. `compact` sits between the other two item layouts: it
- * keeps the card's thumbnail but at list-like density. The tag cloud is no
+ * `INBOX_VIEW_PREF_KEY`. Legacy compact preferences resolve to List. The tag cloud is no
  * longer a layout: it's a separate, transient "Browse by tag" toggle that is
  * never persisted, so it isn't part of this union.
  */
 export type ViewMode = 'card' | 'list' | 'folder';
 
-/** Cards are the historical default — richer, more visual. */
-export const DEFAULT_VIEW_MODE: ViewMode = 'card';
+/** Fresh installs start with readable rows; stored choices remain authoritative. */
+export const DEFAULT_VIEW_MODE: ViewMode = 'list';
 
 /**
  * The layouts in the order the segmented control presents them — richest to
@@ -48,7 +47,7 @@ export function serializeViewMode(mode: ViewMode): string {
 }
 
 export function parseViewMode(raw: string | null | undefined): ViewMode {
-  if (raw === 'card') return 'card';
+  if (raw === 'card' || raw === 'cloud') return 'card';
   if (raw === 'list' || raw === 'compact') return 'list';
   if (raw === 'folder') return 'folder';
   return DEFAULT_VIEW_MODE;
