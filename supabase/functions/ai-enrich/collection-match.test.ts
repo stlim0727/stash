@@ -42,3 +42,18 @@ test('collectionMatchKey folds to a stable comparison key', () => {
   assert.equal(collectionMatchKey('Read-it-Later!'), 'readitlater');
   assert.equal(collectionMatchKey('   '), '');
 });
+
+test('prefers incumbent collection when duplicate collections share the same match key', () => {
+  const duplicates = [
+    { id: 'c1', name: 'Food' },
+    { id: 'c2', name: 'Food' },
+  ];
+  // Without incumbent hint, matches the first matching element
+  assert.equal(matchSuggestedCollection(duplicates, 'Food')?.id, 'c1');
+  // With incumbent hint matching c2, returns c2 rather than c1
+  assert.equal(matchSuggestedCollection(duplicates, 'Food', 'c2')?.id, 'c2');
+  // With incumbent hint matching c1, returns c1
+  assert.equal(matchSuggestedCollection(duplicates, 'Food', 'c1')?.id, 'c1');
+  // With unrelated incumbent hint, falls back to first match
+  assert.equal(matchSuggestedCollection(duplicates, 'Food', 'other')?.id, 'c1');
+});

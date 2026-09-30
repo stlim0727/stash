@@ -18,6 +18,19 @@ import type { AIEnrichment, MetadataStatus, SuggestedTag } from './types';
 export const SUGGESTION_MIN_CONFIDENCE = 0.6;
 
 /**
+ * Minimum overall enrichment confidence (0..1) required before suggesting a folder
+ * for an unfiled bookmark. Below this, folder recommendations are treated as noise.
+ */
+export const FOLDER_SUGGESTION_MIN_CONFIDENCE = 0.6;
+
+/**
+ * Higher confidence hurdle required before suggesting to MOVE a bookmark that is
+ * already filed into an existing folder. Protects user-assigned collections against
+ * lateral moves, synonym churn, or low-conviction model reclassifications (STASH-74).
+ */
+export const FOLDER_MOVE_MIN_CONFIDENCE = 0.85;
+
+/**
  * Suggested tags worth showing for a bookmark: not already applied
  * (case-insensitive by name), not already reviewed by the user, AND at/above
  * {@link SUGGESTION_MIN_CONFIDENCE}.
@@ -96,7 +109,9 @@ export function resolveSuggestedFolder(
     ? collections.find((collection) => collection.id === enrichment.suggested_collection_id)
     : undefined;
   const byName = suggestedNameKey
-    ? collections.find((collection) => collectionMatchKey(collection.name) === suggestedNameKey)
+    ? (fromCollection && collectionMatchKey(fromCollection.name) === suggestedNameKey
+        ? fromCollection
+        : collections.find((collection) => collectionMatchKey(collection.name) === suggestedNameKey))
     : undefined;
   const existing = byId ?? byName;
   if (existing) {
@@ -197,6 +212,21 @@ export function pendingSuggestedFolder(
   const folder = resolveSuggestedFolder(enrichment, collections, currentCollectionId);
   if (!folder) {
     return null;
+  }
+  const confidence = enrichment?.confidence ?? null;
+  const isMove = Boolean(currentCollectionId);
+  if (isMove) {
+    // MOVE: Bookmark already has a collection assigned (even if absent from the current
+    // snapshot). Enforce the higher hurdle so we never suggest lateral moves or weak
+    // reclassifications over user-set info (STASH-74).
+    if (confidence === null || confidence < FOLDER_MOVE_MIN_CONFIDENCE) {
+      return null;
+    }
+  } else {
+    // ADD: Unfiled bookmark. Require standard minimum confidence if known.
+    if (confidence !== null && confidence < FOLDER_SUGGESTION_MIN_CONFIDENCE) {
+      return null;
+    }
   }
   if (dismissedTokens && dismissedTokens.size > 0) {
     const tokens = suggestedFolderTokens(folder, enrichment?.suggested_collection_name);

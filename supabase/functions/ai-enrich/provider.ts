@@ -22,6 +22,10 @@ export interface EnrichmentInput {
    *  inventing a new name. Optional: heuristic providers ignore it, and the
    *  caller still resolves `suggested_collection` to a real id (or null). */
   collections?: string[];
+  /** The name of the collection this bookmark is currently filed under, if any.
+   *  A provider should respect this incumbent collection and prefer keeping it
+   *  unless the bookmark is clearly a mismatch. */
+  current_collection?: string | null;
   /** The names of the user's existing tags (most-used first), when known. A
    *  provider should prefer reusing one of these verbatim over coining a
    *  near-duplicate, so a user's vocabulary stays consolidated instead of
