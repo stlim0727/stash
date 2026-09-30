@@ -19,7 +19,7 @@ import { SupabaseAuthProvider } from '@/supabase/auth-provider';
 import { useAppConfig } from '@/supabase/use-min-app-version';
 import { AiEnrichmentBurstToast } from '@/ui/AiEnrichmentBurstToast';
 import { CaptureToastProvider } from '@/ui/capture-toast';
-import { FloatingReportButton } from '@/feedback/FloatingReportButton';
+import { FeedbackCaptureProvider } from '@/feedback/open-report';
 import { UpdateRequired } from '@/ui/UpdateRequired';
 import { AnalyticsProvider } from '@/analytics/provider';
 import { PostHogFullProvider } from '@/analytics-full/posthog-full-runtime';
@@ -135,9 +135,9 @@ function RootLayout() {
                       <ShareIntentHandler />
                       <ShareConfirmHandler />
                       <AiEnrichmentBurstToast />
-                      <FloatingReportButton>
+                      <FeedbackCaptureProvider>
                         <RootStack />
-                      </FloatingReportButton>
+                      </FeedbackCaptureProvider>
                       <StatusBar style="auto" />
                     </CaptureToastProvider>
                   </PostHogFullProvider>

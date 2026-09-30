@@ -174,6 +174,7 @@ export const ko: Catalog = {
   'inbox.memoType': '메모',
   'inbox.photoType': '사진',
   'inbox.addBookmark': '북마크 추가',
+  'inbox.menuA11y': '더 보기',
   'inbox.settingsA11y': '설정',
   'inbox.scrollToTopA11y': '맨 위로 스크롤',
   'inbox.searchOpenA11y': '검색',
