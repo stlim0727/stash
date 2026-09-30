@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 
-import { usePalette } from '@/theme';
+import { usePalette, uiMetrics } from '@/theme';
 
 interface CardProps {
   children: ReactNode;
@@ -10,7 +10,7 @@ interface CardProps {
   testID?: string;
 }
 
-export function Card({ children, style, elevated = true, testID }: CardProps) {
+export function Card({ children, style, elevated = false, testID }: CardProps) {
   const palette = usePalette();
   return (
     <View
@@ -29,7 +29,7 @@ export function Card({ children, style, elevated = true, testID }: CardProps) {
 
 const styles = StyleSheet.create({
   card: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 24,
+    borderWidth: 1,
+    borderRadius: uiMetrics.radius,
   },
 });
