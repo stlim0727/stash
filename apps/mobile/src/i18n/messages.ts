@@ -766,7 +766,7 @@ export const en = {
   'detail.aiGenerating': 'Generating suggestions…',
   'detail.aiRefresh': 'Refresh AI suggestions',
   'detail.aiSuggest': 'Suggest with AI',
-  'detail.previewRefresh': 'Preview',
+  'detail.previewRefresh': 'Refresh preview',
   'detail.previewRefreshing': 'Refreshing…',
   // STASH-61: recovery action shown once a saved YouTube video is confirmed
   // unavailable — searches YouTube for the bookmark's title, which often

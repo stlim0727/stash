@@ -554,7 +554,7 @@ export const ko: Catalog = {
   'detail.aiGenerating': '제안 생성 중…',
   'detail.aiRefresh': 'AI 제안 새로고침',
   'detail.aiSuggest': 'AI로 제안받기',
-  'detail.previewRefresh': '프리뷰',
+  'detail.previewRefresh': '미리보기 새로고침',
   'detail.previewRefreshing': '새로고침 중…',
   'detail.searchYoutube': 'YouTube에서 검색',
   'detail.aiNeedsSync': '이 북마크가 동기화되면 AI 제안을 사용할 수 있습니다.',
