@@ -133,10 +133,11 @@ describe('AddBookmarkScreen duplicate UX', () => {
     const { findByText, findByLabelText, getByPlaceholderText, unmount } = await renderAddScreen();
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(0));
 
+    await fireEvent.press(await findByText('Add details'));
     await act(async () => {
       fireEvent.changeText(getByPlaceholderText('https://'), 'https://example.com/stored');
       fireEvent.changeText(await findByLabelText('Title (optional)'), 'Updated Title');
-      fireEvent.changeText(await findByLabelText('Memo'), 'Updated Notes');
+      fireEvent.changeText(await findByLabelText('Note'), 'Updated Notes');
     });
     await act(async () => {
       fireEvent.press(await findByText('Save bookmark'));
@@ -156,9 +157,10 @@ describe('AddBookmarkScreen memo formats', () => {
     const source = '  # literal heading\n*literal*\n';
     fakeRepo.__reset([]);
     const screen = await renderAddScreen();
-    await fireEvent.changeText(screen.getByLabelText('Memo'), source);
+    await fireEvent.press(screen.getByTestId('add-mode-note'));
+    await fireEvent.changeText(screen.getByLabelText('Note'), source);
     expect(screen.queryByText('Preview')).toBeNull();
-    await fireEvent.press(screen.getByText('Save memo'));
+    await fireEvent.press(screen.getByText('Save note'));
     await waitFor(() => expect(fakeRepo.__bookmarks()[0]).toMatchObject({
       description: source,
       description_format: 'plain',
@@ -170,8 +172,9 @@ describe('AddBookmarkScreen memo formats', () => {
     fakeRepo.__reset([]);
     const screen = await renderAddScreen();
     await fireEvent.changeText(screen.getByPlaceholderText('https://'), 'https://example.com/note-format');
-    await fireEvent.changeText(screen.getByLabelText('Memo'), source);
-    await fireEvent.press(screen.getByLabelText('Format for Memo'));
+    await fireEvent.press(screen.getByText('Add details'));
+    await fireEvent.changeText(screen.getByLabelText('Note'), source);
+    await fireEvent.press(screen.getByLabelText('Format for Note'));
     await fireEvent.press(screen.getByRole('radio', { name: 'Markdown' }));
     await fireEvent.press(screen.getByText('Save bookmark'));
     await waitFor(() => expect(fakeRepo.__bookmarks()[0]).toMatchObject({
@@ -187,13 +190,14 @@ describe('AddBookmarkScreen memo formats', () => {
     const { findByText, findByLabelText, unmount } = await renderAddScreen();
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(0));
 
+    await fireEvent.press(await findByText('Note'));
     fireEvent.changeText(await findByLabelText('Title (optional)'), 'Weekly plan');
-    await fireEvent.changeText(await findByLabelText('Memo'), markdown);
-    await fireEvent.press(await findByLabelText('Format for Memo'));
+    await fireEvent.changeText(await findByLabelText('Note'), markdown);
+    await fireEvent.press(await findByLabelText('Format for Note'));
     await fireEvent.press(await findByText('Markdown'));
     await fireEvent.press(await findByText('Preview'));
     await fireEvent.press(await findByText('Write'));
-    fireEvent.press(await findByText('Save memo'));
+    fireEvent.press(await findByText('Save note'));
 
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
     const saved = fakeRepo.__bookmarks()[0];
@@ -221,8 +225,9 @@ describe('AddBookmarkScreen memo formats', () => {
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(0));
 
     fireEvent.changeText(getByPlaceholderText('https://'), 'https://example.com/full');
-    fireEvent.changeText(await findByLabelText('Title (optional)'), 'Custom Title');
-    fireEvent.changeText(await findByLabelText('Memo'), 'My notes on this link');
+    await fireEvent.press(await findByText('Add details'));
+      fireEvent.changeText(await findByLabelText('Title (optional)'), 'Custom Title');
+    fireEvent.changeText(await findByLabelText('Note'), 'My notes on this link');
     fireEvent.press(await findByText('Save bookmark'));
 
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
@@ -243,7 +248,7 @@ describe('AddBookmarkScreen memo formats', () => {
 
     fireEvent.press(await findByText('Save bookmark'));
 
-    await findByText('Enter a web address or write a memo.');
+    expect(fakeRepo.__bookmarks()).toHaveLength(0);
     expect(fakeRepo.__queue()).toHaveLength(0);
     expect(mockBack).not.toHaveBeenCalled();
     unmount();
@@ -351,4 +356,38 @@ describe('AddBookmarkScreen sheet layout', () => {
     expect(flat.height).toBe(844);
     unmount();
   });
+});
+
+test('manual modes preserve drafts and save only the active Note payload once', async () => {
+  fakeRepo.__reset([]);
+  const screen = await renderAddScreen();
+  expect(screen.getByTestId('add-mode-link').props.accessibilityState.selected).toBe(true);
+  expect(screen.getByTestId('add-save').props.accessibilityState.disabled).toBe(true);
+  await fireEvent.changeText(screen.getByPlaceholderText('https://'), 'https://example.com/inactive');
+  await fireEvent.press(screen.getByTestId('add-mode-note'));
+  await fireEvent.changeText(screen.getByLabelText('Title (optional)'), 'Only a title');
+  expect(screen.getByTestId('add-save').props.accessibilityState.disabled).toBe(true);
+  await fireEvent.changeText(screen.getByLabelText('Note'), '  A note with https://example.com/body  ');
+  await fireEvent.press(screen.getByTestId('add-mode-link'));
+  expect(screen.getByPlaceholderText('https://').props.value).toBe('https://example.com/inactive');
+  await fireEvent.press(screen.getByTestId('add-mode-note'));
+  expect(screen.getByLabelText('Note').props.value).toBe('  A note with https://example.com/body  ');
+  await waitFor(() => expect(screen.getByTestId('add-save').props.accessibilityState.disabled).toBe(false));
+  const onPress = screen.getByTestId('add-save').props.onClick ?? screen.getByTestId('add-save').props.onPress;
+  await act(async () => { onPress(); onPress(); });
+  await waitFor(() => expect(fakeRepo.__bookmarks()).toHaveLength(1));
+  expect(fakeRepo.__bookmarks()[0]).toMatchObject({ url: null, content_type: 'text', description: '  A note with https://example.com/body  ' });
+  expect(mockBack).toHaveBeenCalledTimes(1);
+});
+
+test('manual Link mode rejects invalid and oversized URLs even with note content', async () => {
+  fakeRepo.__reset([]);
+  const screen = await renderAddScreen();
+  await fireEvent.press(screen.getByText('Add details'));
+  await fireEvent.changeText(screen.getByLabelText('Note'), 'A valid note draft');
+  for (const value of ['not a url', 'ftp://example.com', `https://example.com/${'a'.repeat(20000)}`]) {
+    await fireEvent.changeText(screen.getByPlaceholderText('https://'), value);
+    expect(screen.getByTestId('add-save').props.accessibilityState.disabled).toBe(true);
+  }
+  expect(fakeRepo.__bookmarks()).toHaveLength(0);
 });

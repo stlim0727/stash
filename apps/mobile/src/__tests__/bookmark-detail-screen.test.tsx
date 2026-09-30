@@ -352,7 +352,8 @@ test('copy link action copies the bookmark URL and confirms with a toast', async
   const screen = await renderDetail();
   await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
 
-  await fireEvent.press(screen.getByLabelText('Copy'));
+  await fireEvent.press(screen.getByText('More actions'));
+  await fireEvent.press(screen.getByText('Copy link'));
 
   expect(mockSetStringAsync).toHaveBeenCalledWith('https://www.inkandswitch.com/local-first/');
   expect(await waitFor(() => screen.getByText('Link copied'))).toBeTruthy();
@@ -375,19 +376,18 @@ test('a URL-less memo previews Markdown and copies the raw source', async () => 
   ]);
 
   const screen = await renderDetail();
-  await waitFor(() => expect(screen.getByText('Memo')).toBeTruthy());
+  await waitFor(() => expect(screen.getAllByText('Note').length).toBeGreaterThan(0));
   expect(screen.getByText(markdown)).toBeTruthy();
   // A screen-reader-only sibling label restores the real content over
   // PostHogMaskView's forced "ph-no-capture" sentinel, without wrapping (and
   // thereby collapsing) the rendered Markdown's own tappable links.
   expect(screen.getByLabelText('Weekly plan Ship memo support')).toBeTruthy();
 
-  await act(async () => {
-    fireEvent.press(screen.getByLabelText('Copy'));
-  });
+  await fireEvent.press(screen.getByText('More actions'));
+  await fireEvent.press(screen.getByText('Copy'));
 
   expect(mockSetStringAsync).toHaveBeenCalledWith(markdown);
-  expect(await waitFor(() => screen.getByText('Memo copied'))).toBeTruthy();
+  expect(await waitFor(() => screen.getByText('Note copied'))).toBeTruthy();
 });
 
 test('a text memo with authored notes shows both the memo body and selectable notes', async () => {
@@ -405,7 +405,7 @@ test('a text memo with authored notes shows both the memo body and selectable no
   ]);
 
   const screen = await renderDetail();
-  await waitFor(() => expect(screen.getByText('Memo')).toBeTruthy());
+  await waitFor(() => expect(screen.getAllByText('Note').length).toBeGreaterThan(0));
   expect(screen.getByText('# Weekly plan')).toBeTruthy();
   expect(screen.getByText('keep this note visible').props.selectable).toBe(true);
 });
@@ -428,14 +428,14 @@ test('editing a memo body persists raw Markdown and queues a synced-row update',
   await act(async () => {
     fireEvent.press(await waitFor(() => screen.getByLabelText('Edit Content')));
   });
-  const editor = await waitFor(() => screen.getByLabelText('Memo body'));
+  const editor = await waitFor(() => screen.getByLabelText('Note body'));
   await act(async () => {
     fireEvent.changeText(editor, editedMarkdown);
   });
   // Switching preview tabs must keep the current source and input node.
   await fireEvent.press(screen.getByText('Preview'));
   await fireEvent.press(screen.getByText('Write'));
-  expect(screen.getByLabelText('Memo body').props.value).toBe(editedMarkdown);
+  expect(screen.getByLabelText('Note body').props.value).toBe(editedMarkdown);
   await act(async () => {
     fireEvent(editor, 'blur');
   });
@@ -464,7 +464,7 @@ test('entering and leaving Edit without changes does not re-queue a whitespace-l
   await act(async () => {
     fireEvent.press(await waitFor(() => screen.getByLabelText('Edit Content')));
   });
-  const editor = await waitFor(() => screen.getByLabelText('Memo body'));
+  const editor = await waitFor(() => screen.getByLabelText('Note body'));
   await act(async () => {
     fireEvent(editor, 'blur');
   });
@@ -492,11 +492,11 @@ test('editing a captured memo longer than the creation cap preserves its full bo
   await act(async () => {
     fireEvent.press(await waitFor(() => screen.getByLabelText('Edit Content')));
   });
-  const editor = await waitFor(() => screen.getByLabelText('Memo body'));
+  const editor = await waitFor(() => screen.getByLabelText('Note body'));
   await act(async () => {
     fireEvent.changeText(editor, editedBody);
   });
-  await waitFor(() => expect(screen.getByLabelText('Memo body').props.value).toBe(editedBody));
+  await waitFor(() => expect(screen.getByLabelText('Note body').props.value).toBe(editedBody));
   await act(async () => {
     fireEvent(editor, 'blur');
   });
@@ -542,7 +542,7 @@ test('closing detail saves both latest drafts and formats without relying on blu
   await fireEvent.press(await screen.findByLabelText('Edit Content'));
   await fireEvent.press(screen.getByLabelText('Format for Content'));
   await fireEvent.press(screen.getByRole('radio', { name: 'Plain text' }));
-  await fireEvent.changeText(screen.getByLabelText('Memo body'), '  # Latest body\n');
+  await fireEvent.changeText(screen.getByLabelText('Note body'), '  # Latest body\n');
   await fireEvent.press(screen.getByLabelText('Edit Note'));
   await fireEvent.press(screen.getByLabelText('Format for Note'));
   await fireEvent.press(screen.getByRole('radio', { name: 'Markdown' }));
@@ -1611,4 +1611,33 @@ test('unmounts preview hero when the image fails to load so it does not occupy e
   await waitFor(() => {
     expect(screen.queryByTestId('bookmark-detail-preview')).toBeNull();
   });
+});
+
+test('Detail prioritizes website opening and moves reversible deletion to overflow', async () => {
+  mockRouteId = 'hierarchy-url';
+  fakeRepo.__reset([makeStoredBookmark({ id: mockRouteId, title: 'Read this first', url: 'https://example.com/read' })]);
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('Read this first')).toBeTruthy());
+  expect(screen.getByTestId('detail-open-website')).toBeTruthy();
+  expect(screen.queryByText('Move to Trash')).toBeNull();
+  expect(screen.queryByText('Copy link')).toBeNull();
+  await fireEvent.press(screen.getByText('More actions'));
+  expect(screen.getByText('Copy link')).toBeTruthy();
+  await fireEvent.press(screen.getByText('Move to Trash'));
+  await waitFor(() => expect(fakeRepo.__bookmarks()[0].deleted_at).toBeTruthy());
+  await fireEvent.press(screen.getByText('Undo'));
+  await waitFor(() => expect(fakeRepo.__bookmarks()[0].deleted_at).toBeNull());
+});
+
+test('URL-less Note has sharing and text copy without website-only actions', async () => {
+  mockRouteId = 'hierarchy-note';
+  fakeRepo.__reset([makeStoredBookmark({ id: mockRouteId, title: 'Read a note', url: null, content_type: 'text', description: 'The body' })]);
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('Read a note')).toBeTruthy());
+  expect(screen.queryByTestId('detail-open-website')).toBeNull();
+  expect(screen.getByText('Share')).toBeTruthy();
+  await fireEvent.press(screen.getByText('More actions'));
+  expect(screen.getByText('Copy')).toBeTruthy();
+  expect(screen.queryByText('Copy link')).toBeNull();
+  expect(screen.queryByText('Refresh preview')).toBeNull();
 });

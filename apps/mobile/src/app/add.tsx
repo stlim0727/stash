@@ -14,6 +14,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { parseCaptureParams } from '@/domain/web-capture';
+import { normalizeUrl, canonicalizeUrl, isUrlTooLong } from '@/domain/urls';
 import type { TextFormat } from '@/domain/types';
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
@@ -47,6 +48,13 @@ export default function AddBookmarkScreen() {
   const [format, setFormat] = useState<TextFormat>('plain');
   const [error, setError] = useState<string | null>(null);
   const titleInputRef = useRef<TextInput | null>(null);
+  const [mode, setMode] = useState<'link' | 'note'>('link');
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const normalizedUrl = normalizeUrl(url);
+  const validUrl = normalizedUrl && !isUrlTooLong(canonicalizeUrl(normalizedUrl));
+  const canSave = !isLoading && (mode === 'link' ? Boolean(validUrl) : Boolean(memo.trim()));
 
   // A capture intent passed via query params — the web counterpart of the
   // native share handler. The desktop bookmarklet, the PWA Web Share Target,
@@ -110,16 +118,13 @@ export default function AddBookmarkScreen() {
   }
 
   function handleSave() {
+    if (!canSave || savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
     const trimmedUrl = url.trim();
-    const trimmedMemo = memo.trim();
     const trimmedTitle = title.trim();
 
-    if (!trimmedUrl && !trimmedMemo) {
-      setError(t('add.urlOrMemoRequired'));
-      return;
-    }
-
-    const result = trimmedUrl
+    const result = mode === 'link'
       ? addBookmark({
           url: trimmedUrl,
           title: trimmedTitle || undefined,
@@ -134,6 +139,8 @@ export default function AddBookmarkScreen() {
         });
 
     if (result.status === 'invalid') {
+      savingRef.current = false;
+      setSaving(false);
       setError(result.error);
       return;
     }
@@ -145,78 +152,52 @@ export default function AddBookmarkScreen() {
     router.back();
   }
 
-  const isMemoOnly = !url.trim() && Boolean(memo.trim());
-
-  const content = (
-    <ScrollView
-      testID="add-scroll"
-      style={[styles.scroll, { backgroundColor: palette.background }]}
-      contentContainerStyle={styles.container}
-      keyboardShouldPersistTaps="handled"
-    >
+  const titleField = <>
+    <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.memoTitleLabel')}</Text>
+    <TextInput ref={titleInputRef} accessibilityLabel={t('add.memoTitleLabel')}
+      style={[styles.input, { backgroundColor: palette.card, color: palette.text, borderColor: palette.controlBorder }]}
+      placeholder={t('add.memoTitlePlaceholder')} placeholderTextColor={palette.textSecondary}
+      value={title} onChangeText={(value) => { setTitle(value); setError(null); }} />
+  </>;
+  const noteField = <MemoEditor label={t('add.memoBodyLabel')} accessibilityLabel={t('add.memoBodyLabel')}
+    placeholder={t('add.memoBodyPlaceholder')} alwaysEditing maxLength={MAX_MEMO_LENGTH}
+    value={memo} format={format} onChange={({ value, format: nextFormat }) => {
+      setMemo(value); setFormat(nextFormat); setError(null);
+    }} />;
+  const content = <>
+    <ScrollView testID="add-scroll" style={[styles.scroll, { backgroundColor: palette.background }]}
+      contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+      <View style={styles.modeRow}>
+        {(['link', 'note'] as const).map((value) => <Button key={value}
+          testID={`add-mode-${value}`} variant={mode === value ? 'primary' : 'ghost'}
+          accessibilityState={{ selected: mode === value }} style={{ flex: 1 }}
+          onPress={() => { setMode(value); setError(null); }}>
+          {t(value === 'link' ? 'add.modeLink' : 'add.modeMemo')}
+        </Button>)}
+      </View>
       <Card elevated={false} style={styles.captureCard}>
-        <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.urlLabel')}</Text>
-        <TextInput
-          accessibilityLabel={t('add.urlLabel')}
-          style={[styles.input, { backgroundColor: palette.card, color: palette.text }]}
-          placeholder={t('add.urlPlaceholder')}
-          placeholderTextColor={palette.textSecondary}
-          autoCapitalize="none"
-          autoCorrect={false}
-          autoFocus
-          keyboardType="url"
-          returnKeyType="next"
-          value={url}
-          onChangeText={(value) => {
-            setUrl(value);
-            if (error) {
-              setError(null);
-            }
-          }}
-          onSubmitEditing={() => titleInputRef.current?.focus()}
-        />
-        {error ? <Text style={[styles.error, { color: palette.danger }]}>{error}</Text> : null}
-        <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.memoTitleLabel')}</Text>
-        <TextInput
-          ref={titleInputRef}
-          accessibilityLabel={t('add.memoTitleLabel')}
-          style={[styles.input, { backgroundColor: palette.card, color: palette.text }]}
-          placeholder={t('add.memoTitlePlaceholder')}
-          placeholderTextColor={palette.textSecondary}
-          returnKeyType="next"
-          value={title}
-          onChangeText={(value) => {
-            setTitle(value);
-            if (error) {
-              setError(null);
-            }
-          }}
-        />
-        <MemoEditor
-          label={t('add.memoBodyLabel')}
-          accessibilityLabel={t('add.memoBodyLabel')}
-          placeholder={t('add.memoBodyPlaceholder')}
-          alwaysEditing
-          maxLength={MAX_MEMO_LENGTH}
-          value={memo}
-          format={format}
-          onChange={({ value, format: nextFormat }) => {
-            setMemo(value);
-            setFormat(nextFormat);
-            if (error) {
-              setError(null);
-            }
-          }}
-        />
+        {mode === 'link' ? <>
+          <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.urlLabel')}</Text>
+          <TextInput accessibilityLabel={t('add.urlLabel')}
+            style={[styles.input, { backgroundColor: palette.card, color: palette.text, borderColor: palette.controlBorder }]}
+            placeholder={t('add.urlPlaceholder')} placeholderTextColor={palette.textSecondary}
+            autoCapitalize="none" autoCorrect={false} autoFocus keyboardType="url" returnKeyType="next"
+            value={url} onChangeText={(value) => { setUrl(value); setError(null); }}
+            onSubmitEditing={() => { setDetailsOpen(true); titleInputRef.current?.focus(); }} />
+          <Button variant="ghost" accessibilityState={{ expanded: detailsOpen }}
+            onPress={() => setDetailsOpen((value) => !value)}>{t('add.details')}</Button>
+          {detailsOpen ? <>{titleField}{noteField}</> : null}
+        </> : <>{noteField}{titleField}</>}
+        {error ? <Text accessibilityRole="alert" style={[styles.error, { color: palette.danger }]}>{error}</Text> : null}
       </Card>
-      <Button size="lg" onPress={handleSave}>
-        {t(isMemoOnly ? 'add.saveMemo' : 'add.save')}
-      </Button>
-      <Text style={[styles.hint, { color: palette.textSecondary }]}>
-        {t(isMemoOnly ? 'add.memoHint' : 'add.hint')}
-      </Text>
+      <Text style={[styles.hint, { color: palette.textSecondary }]}>{t(mode === 'note' ? 'add.memoHint' : 'add.hint')}</Text>
     </ScrollView>
-  );
+    <View style={[styles.saveFooter, { backgroundColor: palette.background, paddingBottom: Math.max(16, insets.bottom) }]}>
+      <Button testID="add-save" size="lg" disabled={!canSave || saving} onPress={handleSave}>
+        {t(saving ? 'add.saving' : mode === 'note' ? 'add.saveMemo' : 'add.save')}
+      </Button>
+    </View>
+  </>;
 
   // The Stack header is hidden for this screen, so Add supplies its own header
   // row (title + close) for both layouts — matching Settings/Report/Review.
@@ -264,6 +245,8 @@ export default function AddBookmarkScreen() {
 }
 
 const styles = StyleSheet.create({
+  modeRow: { flexDirection: 'row', gap: 8 },
+  saveFooter: { paddingHorizontal: 16, paddingTop: 12 },
   fullScreen: {
     flex: 1,
   },
@@ -319,8 +302,8 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   captureCard: {
-    borderRadius: 24,
-    padding: 18,
+    borderRadius: 16,
+    padding: 16,
     gap: 10,
   },
   label: {
@@ -331,7 +314,9 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   input: {
-    borderRadius: 18,
+    borderRadius: 16,
+    borderWidth: 1,
+    minHeight: 48,
     padding: 14,
     fontSize: 16,
   },
