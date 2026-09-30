@@ -8470,7 +8470,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // Logout cache-clear: with lazy anonymous creation, logout mints no new user
   // and runs no sync, so the just-logged-out real account's bookmarks would
   // linger in the local cache — stale, and visible to the next anonymous user
-  // on the device (a privacy leak). On the `signed_out` transition we drop all of
+  // on the device (a privacy leak). On sign-out or session expiry we drop all of
   // that account's cloud-identity rows (safe: they live in the real account's
   // cloud) AND their queued update/delete ops, then reset the synced-user meta +
   // pull watermark so the next session re-syncs cleanly from scratch.
@@ -8484,8 +8484,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // bookmark is safe in the departing account's cloud, and keeping the op would
   // strand it under the next (different) identity — RLS/404 → silent loss.
   useEffect(() => {
-    if (auth.status !== "signed_out") {
-      // Left the signed_out state (a new session was minted): re-arm so the
+    if (auth.status !== "signed_out" && auth.status !== "session_expired") {
+      // Left the logged-out state (a new session was minted): re-arm so the
       // next logout clears again.
       loggedOutCleared.current = false;
       return;

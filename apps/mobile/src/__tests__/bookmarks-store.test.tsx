@@ -11,9 +11,11 @@ const SYNCED_ID = "7e64cf1e-0000-4000-8000-000000000001";
 jest.mock("@/storage/repository", () =>
   require("./helpers/fake-repository").createFakeRepositoryModule(),
 );
+let mockAuthStatus = "not_configured";
+
 jest.mock("@/supabase/auth-provider", () => ({
   useSupabaseAuth: () => ({
-    status: "not_configured",
+    status: mockAuthStatus,
     session: null,
     userId: null,
     message: "not configured",
@@ -58,6 +60,7 @@ async function renderStore() {
 }
 
 beforeEach(() => {
+  mockAuthStatus = "not_configured";
   fakeRepo.__reset();
   mockEnrichBookmark.mockReset();
   mockEnrichBookmark.mockResolvedValue({
@@ -1728,3 +1731,21 @@ test("duplicate manual content edits invalidate completed enrichment", async () 
   expect(result.current.getEnrichment(SYNCED_ID)?.status).toBe("stale");
   expect(await fakeRepo.repository.listEnrichments()).toEqual([expect.objectContaining({ status: "stale" })]);
 });
+
+test.each(["signed_out", "session_expired"])(
+  "%s clears cached cloud bookmarks and preserves unsynced captures",
+  async (status) => {
+    const synced = makeStoredBookmark({ id: SYNCED_ID, sync_status: "synced", ever_synced: true });
+    const local = makeStoredBookmark({ id: "local-unsynced", sync_status: "pending" });
+    await fakeRepo.repository.insertBookmark(synced);
+    await fakeRepo.repository.insertBookmark(local);
+    const { result, rerender } = await renderStore();
+    expect(result.current.inbox).toHaveLength(2);
+
+    mockAuthStatus = status;
+    await rerender({});
+
+    await waitFor(() => expect(result.current.inbox.map((row) => row.id)).toEqual([local.id]));
+    await waitFor(() => expect(fakeRepo.__bookmarks().map((row) => row.id)).toEqual([local.id]));
+  },
+);
