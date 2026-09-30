@@ -166,7 +166,7 @@ test('hardware back closes a live search before exiting', async () => {
   // consumes the press.
   expect(await pressBack()).toBe(true);
   await waitFor(() => expect(screen.getByText('Raindrop review')).toBeTruthy());
-  expect(screen.queryByPlaceholderText('Search titles, tags, collections')).toBeNull();
+  expect(screen.getByPlaceholderText('Search titles, tags, collections').props.value).toBe('');
 });
 
 test('hardware back exits selection mode before clearing search or exiting', async () => {

@@ -40,7 +40,7 @@ import {
 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { usePalette } from '@/theme';
+import { usePalette, uiMetrics } from '@/theme';
 import { useOpenReport } from '@/feedback/open-report';
 import { AnonymousNudgeBanner } from '@/ui/AnonymousNudgeBanner';
 import { Button } from '@/ui/Button';
@@ -409,7 +409,7 @@ const WEB_BOLD_WEIGHT = Platform.select({ web: '700', default: '800' }) as '700'
 const WEB_CARD_GRID_TOP_GAP = Platform.OS === 'web' ? 12 : 4;
 const WEB_CARD_GRID_COLUMN_GAP = 16;
 const LIST_PADDING = 16;
-const CARD_PREVIEW_HEIGHT = Platform.select({ web: 124, default: 132 });
+const CARD_PREVIEW_HEIGHT = 140;
 // Root cause of the reported "desktop browser: tap ✕, the field doesn't
 // close" bug: a mousedown on this button blurs the still-focused search
 // input *before* the click fires. That blur's own deferred empty-query
@@ -680,11 +680,8 @@ export default function InboxScreen() {
   // away without re-registering the listener every keystroke).
   const queryRef = useRef(query);
   queryRef.current = query;
-  // Telegram-style tap-to-open: the search field is NOT persistently shown — it
-  // mounts only when the user taps the hero magnifier, so the resting top stays
-  // thin. A live query (`searching`) can only become true WHILE this is open
-  // (query is settable only via the mounted field or a suggestion tap), so
-  // searchOpen is the single source of truth for "the search UI is up".
+  // The field remains visible; this state tracks an active search session
+  // so the existing focus, keyboard and header restoration behavior survives.
   const [searchOpen, setSearchOpen] = useState(false);
   // Whether the search field holds focus — drives the suggestion shelf (shown
   // only while focused with an empty query).
@@ -755,30 +752,11 @@ export default function InboxScreen() {
       scrollY: Math.round(lastScrollYRef.current),
       collapsedBefore: headerCollapseRef.current.collapsed,
     });
-    // Flush synchronously and call .focus() right after — inside the tap's
-    // own call stack rather than a later effect. Some mobile browsers only
-    // reliably honor a focus call made synchronously within the originating
-    // gesture; this isn't what fixed STASH-33/34/35/36/37 (that was the
-    // on-drag suppression below), but removing it has never been verified
-    // safe on its own, so it stays as a defensive measure. Harmless on
-    // native (`syncFlush` is a plain passthrough there — see
-    // `ui/sync-flush.native.ts`).
+    // Keep the gesture-synchronous focus path for mobile browsers. Search
+    // activation expands a collapsed header and snapshots its prior state.
     syncFlush(() => {
       setSearchOpen(true);
       setSuppressOnDragDismiss(true);
-      // The search field itself mounts inside the web collapsible wrapper — if
-      // that's currently collapsed, the field would mount off-screen: the hero
-      // icon flips to "close" but there's nothing visible to type into (caught
-      // in PR review). Force it expanded whenever search opens; harmless to
-      // call on native, which doesn't read this state for anything visual.
-      // Snapshot the real state first — restoreHeaderCollapseOnSearchClose
-      // resumes the hysteresis from here instead of from scratch. The
-      // collapsible wrapper's measured height comes along too: it re-measures
-      // to the search-open layout's height (search input, no sort/browse row)
-      // once search mounts, which can be shorter or taller than the normal
-      // layout it reverts to on close — using the CURRENT (search-open)
-      // height against the PRE-search anchor at close time compares against
-      // the wrong threshold (caught in PR review, Codex).
       preSearchHeaderCollapseRef.current = headerCollapseRef.current;
       preSearchCollapsibleHeightRef.current = collapsibleHeightRef.current;
       const expanded = { collapsed: false, anchorScrollY: lastScrollYRef.current };
@@ -835,12 +813,8 @@ export default function InboxScreen() {
       setHeaderCollapse(restored);
     }
   }, []);
-  // Fold the whole search UI away: blur, drop focus, and CLEAR the query
-  // (Telegram-faithful — opening search always starts fresh). This is the
-  // EXPLICIT close (the ✕ tap); the empty-blur and native keyboardDidHide
-  // auto-closes below run their own version of the blur/clear steps (they
-  // don't share this function), but both also call
-  // restoreHeaderCollapseOnSearchClose.
+  // Explicit close clears the query and restores the pre-search scroll state.
+  // The field stays mounted so the next search can start directly from it.
   const closeSearch = useCallback(() => {
     trackBreadcrumb('search', 'close', { scrollY: Math.round(lastScrollYRef.current) });
     clearBlurHide();
@@ -850,10 +824,7 @@ export default function InboxScreen() {
     setSearchOpen(false);
     restoreHeaderCollapseOnSearchClose();
   }, [clearBlurHide, restoreHeaderCollapseOnSearchClose]);
-  // Move focus into the field once it has actually mounted (it only mounts while
-  // searchOpen), raising the keyboard + carrying screen-reader focus — the same
-  // thing `autoFocus` does, but driven by our open state. Runs after the mount
-  // commit (the effect fires once the field is in the tree), so the ref is set.
+  // Keep the focus fallback for activation from the search icon.
   useEffect(() => {
     if (searchOpen) {
       // hasRef=false here would mean the field hadn't mounted yet when this
@@ -925,7 +896,7 @@ export default function InboxScreen() {
   // phones the width is below one column's worth (~380dp), so columns collapses
   // to 1 and the content cap falls back to the fixed 720px column — the current
   // phone behavior is preserved exactly with no Platform.OS branch.
-  const { width: winWidth } = useWindowDimensions();
+  const { width: winWidth, fontScale } = useWindowDimensions();
   const columns = viewMode === 'card'
     ? Math.min(3, Math.max(1, Math.floor(winWidth / 380)))
     // Folder View is always a fixed 2-column grid of tiles (phone and web
@@ -1270,6 +1241,7 @@ export default function InboxScreen() {
   // async write commits — so it skips while this is set.
   const recentsDirty = useRef(false);
   useEffect(() => {
+    if (isLoading) return;
     let active = true;
     getPreference(RECENT_SEARCHES_PREF_KEY)
       .then((raw) => {
@@ -1306,9 +1278,7 @@ export default function InboxScreen() {
         if (!active) {
           return;
         }
-        // parseViewMode degrades any legacy stored 'cloud' to Cards — the cloud
-        // is a transient toggle now, never a persisted/cold-start layout, so the
-        // stored pref is always a real item layout (card/list).
+        // Restore explicit choices, including legacy compact/cloud mappings.
         setViewMode(parseViewMode(raw));
       })
       .catch(() => {})
@@ -1318,7 +1288,7 @@ export default function InboxScreen() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [isLoading]);
   useEffect(() => {
     if (!sortLoaded.current) {
       return;
@@ -1957,18 +1927,8 @@ export default function InboxScreen() {
     !slimSearchHeader &&
     !searchOpen &&
     !selectionMode;
-  // On a brand-new (empty) library the search/sort/view controls are just cold
-  // chrome over a "nothing here yet" screen — fold them away so the first run
-  // is all about the first save. Keyed on the unfiltered library, not the
-  // current view, so a search/filter that yields zero rows still keeps the
-  // controls (the user needs them to clear the query or facet).
-  //
-  // Folder View is an exception (Sentry STASH-4T): it always renders at least
-  // the trailing "New folder" tile (see `folderTiles`), so it never falls
-  // into the empty-library state above and never gets its own escape hatch —
-  // a reset (or any other event that empties `inbox`) while sitting in
-  // Folder View would otherwise hide this entire row, including the view-mode
-  // toggle, leaving no way back to Card/List short of restarting the app.
+  // Keep the active scope bar available when a search/filter yields no rows,
+  // or when Folder view still has its New Folder tile after a library reset.
   const showControls = inbox.length > 0 || searching || viewMode === 'folder';
 
   // The sort pill/menu shows one of two independent controls depending on the
@@ -1976,11 +1936,6 @@ export default function InboxScreen() {
   // date/accessed/name order everywhere else. Switching layouts never
   // disturbs the other control's state (see the two separate pref keys).
   const isFolderSort = viewMode === 'folder';
-  const activeSortLabelKey = isFolderSort
-    ? FOLDER_SORT_LABEL_KEY[serializeFolderSort(folderSort)]
-    : SORT_LABEL_KEY[serializeSort(sort)];
-  const activeSortIcon = isFolderSort ? FOLDER_SORT_ICON[folderSort.field] : SORT_ICON[sort.field];
-
   // Record a submitted query into recents (trim + case-insensitive dedupe-to-
   // front + cap). The ONLY write path for recents — never on every keystroke.
   const recordRecent = useCallback((raw: string) => {
@@ -2412,11 +2367,6 @@ export default function InboxScreen() {
     router.push(scopeParam ? `/browse/tags?scope=${scopeParam}` : '/browse/tags');
   }, [router, filter]);
 
-  // Wide-web-only: the Tags/Graph pills gain a visible label (like Sort already
-  // has) once there's room, reusing the same breakpoint the wide-screen Settings
-  // sheet gates on rather than inventing a new one.
-  const showPillLabels = isWeb && winWidth >= SETTINGS_SHEET_MIN_WIDTH;
-
   return (
     <InboxRootSurface
       backgroundColor={palette.background}
@@ -2476,7 +2426,8 @@ export default function InboxScreen() {
             styles.hero,
             {
               maxWidth: Math.min(winWidth, contentMaxWidth),
-              paddingTop: insets.top + 6,
+              paddingTop: insets.top,
+              minHeight: 56 + insets.top,
               position: 'relative',
               zIndex: 2,
             },
@@ -2616,21 +2567,6 @@ export default function InboxScreen() {
           {/* Search and secondary navigation. Reporting captures the screen
               after this menu has been dismissed. */}
           <View style={styles.heroActions}>
-            {inbox.length > 0 ? (
-              <Pressable
-                testID="inbox-search-open"
-                accessibilityRole="button"
-                accessibilityLabel={searchOpen ? t('inbox.searchCloseA11y') : t('inbox.searchOpenA11y')}
-                accessibilityState={{ expanded: searchOpen }}
-                hitSlop={8}
-                onPress={() => (searchOpen ? closeSearch() : openSearch())}
-                {...preventMouseDownFocusSteal}
-              >
-                <View style={[styles.avatar, { backgroundColor: palette.surface, borderColor: palette.border }]}>
-                  <Ionicons name={searchOpen ? 'close' : 'search'} size={20} color={palette.text} />
-                </View>
-              </Pressable>
-            ) : null}
             <Pressable
               testID="inbox-menu-open"
               accessibilityRole="button"
@@ -2734,11 +2670,23 @@ export default function InboxScreen() {
             </View>
           </Pressable>
         ) : null}
-        {searchOpen ? (
           <View style={[styles.searchWrap, { maxWidth: contentMaxWidth }]}>
+            <View style={[styles.searchField, { backgroundColor: palette.card, borderColor: palette.controlBorder }]}>
+            <Pressable
+              testID="inbox-search-open"
+              accessibilityRole="button"
+              accessibilityLabel={searchOpen ? t('inbox.searchCloseA11y') : t('inbox.searchOpenA11y')}
+              disabled={selectionMode}
+              onPress={() => (searchOpen ? closeSearch() : openSearch())}
+              style={styles.searchAction}
+              {...preventMouseDownFocusSteal}
+            >
+              <Ionicons name={searchOpen ? 'close' : 'search'} size={20} color={palette.textSecondary} />
+            </Pressable>
             <TextInput
               ref={searchRef}
               testID="inbox-search-input"
+              accessibilityLabel={searchPlaceholder}
               editable={!selectionMode}
               style={[styles.searchInput, { backgroundColor: palette.card, color: palette.text }]}
               placeholder={searchPlaceholder}
@@ -2751,6 +2699,7 @@ export default function InboxScreen() {
                 // A re-focus cancels any pending deferred hide from a prior blur.
                 trackBreadcrumb('search', 'field focus');
                 clearBlurHide();
+                if (!searchOpen) openSearch();
                 setSearchFocused(true);
               }}
               onBlur={() => {
@@ -2790,8 +2739,8 @@ export default function InboxScreen() {
               onSubmitEditing={(event) => recordRecent(event.nativeEvent.text)}
               clearButtonMode="while-editing"
             />
+            </View>
           </View>
-        ) : null}
         {showSuggestions ? (
           <SearchSuggestionShelf
             suggestions={suggestions}
@@ -2801,97 +2750,21 @@ export default function InboxScreen() {
             query={debouncedQuery}
           />
         ) : null}
-        {showControls && !showSuggestions && !slimSearchHeader && !searchOpen && !selectionMode ? (
-        <View style={[styles.sortRow, { maxWidth: contentMaxWidth }]}>
-          {/* No "Browse" caption: the Sort pill, Tags pill, and view segment are
-              self-evident controls, and the caption's width was forcing the
-              view segment to wrap onto its own near-empty second row. Dropping
-              it lets all three sit on one line, reclaiming that row. */}
+        {!selectionMode && !searchFocused && !searchOpen ? (
+        <View testID="inbox-filter-options-row" style={[styles.filterOptionsRow, { maxWidth: contentMaxWidth }]}>
           <Pressable
+            testID="inbox-view-options"
             accessibilityRole="button"
-            accessibilityLabel={t('inbox.sortA11y', { label: t(activeSortLabelKey) })}
+            accessibilityLabel={t('inbox.viewOptions')}
+            accessibilityState={{ disabled: isLoading }}
+            disabled={isLoading}
             onPress={() => setSortMenuOpen(true)}
-            style={[styles.sortPill, styles.sortPillFlexible, { backgroundColor: palette.surface, borderColor: palette.border }]}
+            style={[styles.viewOptions, { borderColor: palette.controlBorder }]}
           >
-            <Ionicons name={activeSortIcon} size={15} color={palette.textSecondary} />
-            <Text style={[styles.sortPillLabel, { color: palette.text }]} numberOfLines={1}>
-              {t(activeSortLabelKey)}
-            </Text>
-            <Ionicons name="chevron-down" size={14} color={palette.textSecondary} />
+            <Ionicons name="options-outline" size={18} color={palette.textSecondary} />
+            <Text style={[styles.viewOptionsLabel, { color: palette.text }]}>{t('inbox.viewOptions')}</Text>
           </Pressable>
-          {inbox.length > 0 ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={t('inbox.browseTagsA11y')}
-              testID="inbox-browse-tags-toggle"
-              onPress={openBrowseTags}
-              style={[
-                styles.sortPill,
-                { backgroundColor: palette.surface, borderColor: palette.border },
-              ]}
-            >
-              <Ionicons name="pricetags-outline" size={15} color={palette.textSecondary} />
-              {showPillLabels ? (
-                <Text style={[styles.sortPillLabel, { color: palette.text }]} numberOfLines={1}>
-                  {t('nav.browseTags')}
-                </Text>
-              ) : null}
-            </Pressable>
-          ) : null}
-          {inbox.length > 0 ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={t('graph.openA11y')}
-              testID="inbox-graph-open"
-              onPress={() => router.push('/graph')}
-              style={[
-                styles.sortPill,
-                { backgroundColor: palette.surface, borderColor: palette.border },
-              ]}
-            >
-              <Ionicons name="git-network-outline" size={15} color={palette.textSecondary} />
-              {showPillLabels ? (
-                <Text style={[styles.sortPillLabel, { color: palette.text }]} numberOfLines={1}>
-                  {t('nav.graph')}
-                </Text>
-              ) : null}
-            </Pressable>
-          ) : null}
-          <View style={[styles.viewSegment, { backgroundColor: palette.surface, borderColor: palette.border }]}>
-            {VIEW_MODES.map((mode) => {
-              // Folder View has nothing to show without a real Collection to
-              // tile — hide the toggle entirely rather than offering a mode
-              // that always renders just the uncollected bucket + "New
-              // folder". Mirrors the `inbox.length > 0` gate on the Tags/
-              // Graph pills above, keyed on collection count instead.
-              if (mode === 'folder' && collections.length === 0) {
-                return null;
-              }
-              const active = viewMode === mode;
-              return (
-                <Pressable
-                  key={mode}
-                  accessibilityRole="button"
-                  accessibilityLabel={t('inbox.viewAsA11y', { mode: t(VIEW_MODE_LABEL_KEY[mode]) })}
-                  accessibilityState={{ selected: active }}
-                  testID={`inbox-view-${mode}`}
-                  onPress={() => {
-                    setViewMode(mode);
-                    void setPreference(INBOX_VIEW_PREF_KEY, serializeViewMode(mode)).catch(() => {});
-                  }}
-                  style={[styles.viewSegmentButton, active ? { backgroundColor: palette.accentSoft } : null]}
-                >
-                  <Ionicons
-                    name={VIEW_MODE_ICON[mode]}
-                    size={18}
-                    color={active ? palette.accentText : palette.textSecondary}
-                  />
-                </Pressable>
-              );
-            })}
-          </View>
-        </View>
-        ) : null}
+          <View style={{ flex: 1, minWidth: 0 }}>
         {showShelf ? (
           <ShelfContainer web={isWeb} maxWidth={contentMaxWidth}>
             <ScrollView
@@ -2976,6 +2849,9 @@ export default function InboxScreen() {
               />
             ) : null}
           </ShelfContainer>
+        ) : null}
+          </View>
+        </View>
         ) : null}
         </View>
       </WebCrispAnimatedSurface>
@@ -3108,7 +2984,7 @@ export default function InboxScreen() {
           viewMode !== 'card' ? styles.listModeList : null,
           // Start the list below the floating header (and the pinned filter bar
           // when active), and clear the Add button so it never covers the last row.
-          { paddingTop: listPaddingTop, paddingBottom: insets.bottom + (selectionMode ? 120 : 96) },
+          { paddingTop: listPaddingTop, paddingBottom: insets.bottom + (selectionMode ? 120 : 88) },
         ]}
         ListHeaderComponent={
           <>
@@ -3423,13 +3299,13 @@ export default function InboxScreen() {
                 return am - bm;
               })
             : cardTags;
-          const metaParts = [
+          const visibleMetaParts = [
             ...(item.content_type === 'text' ? [t('inbox.memoType')] : []),
             ...(item.content_type === 'image' ? [t('inbox.photoType')] : []),
             ...(collectionName ? [t('inbox.inCollection', { name: collectionName })] : []),
-            ...orderedTags.slice(0, 3).map((tag) => `#${tag.name}`),
+            ...orderedTags.slice(0, 2).map((tag) => `#${tag.name}`),
+            ...(orderedTags.length > 2 ? [`+${orderedTags.length - 2}`] : []),
           ];
-          const visibleMetaParts = metaParts.slice(0, Platform.OS === 'web' && !searching ? 2 : 3);
           const siteLabelText = siteLabel(item);
           const memoPreview =
             item.content_type === 'text' && item.title?.trim() && item.description?.trim()
@@ -3453,13 +3329,12 @@ export default function InboxScreen() {
           const isSelected = selectedIds.has(item.id);
           const handleItemPress = selectionMode ? () => toggleSelect(item.id) : openDetail;
           const handleItemLongPress = selectionMode ? () => toggleSelect(item.id) : () => enterSelectionMode(item.id);
-          const handleLinkPress = selectionMode ? () => toggleSelect(item.id) : openLink;
 
           // List density view mode: compact row layout featuring thumbnail image
           // with quick-open badge, title/url/tags in middle, and overflow menu.
           if (viewMode === 'list') {
             const thumbUri = selectPreviewImageUri(item.local_image_uri, item.preview_image_url);
-            const compactMeta = metaParts.join('  ·  ');
+            const compactMeta = orderedTags.map((tag) => `#${tag.name}`).join('  ·  ');
             return (
               <Pressable
                 testID={`inbox-list-row-${item.id}`}
@@ -3507,7 +3382,6 @@ export default function InboxScreen() {
                   style={({ pressed }) => [
                     styles.compactThumbWrap,
                     {
-                      borderColor: item.url ? palette.accent : palette.border,
                       opacity: pressed ? 0.75 : 1,
                     },
                   ]}
@@ -3529,11 +3403,6 @@ export default function InboxScreen() {
                   ) : (
                     <ItemIcon item={item} testID="inbox-list-monogram" />
                   )}
-                  {item.url ? (
-                    <View style={[styles.thumbMiniBadge, { backgroundColor: palette.accent, borderColor: palette.surfaceElevated }]}>
-                      <Ionicons name="open-outline" size={11} color="#ffffff" />
-                    </View>
-                  ) : null}
                 </Pressable>
                 <Pressable
                   style={styles.listText}
@@ -3549,18 +3418,19 @@ export default function InboxScreen() {
                     style={[
                       styles.listTitle,
                       {
-                        color: isTitleDerived(item) ? palette.textSecondary : palette.text,
+                        lineHeight: Math.round(22 * fontScale),
+                          color: isTitleDerived(item) ? palette.textSecondary : palette.text,
                         fontWeight: isTitleDerived(item) ? WEB_MEDIUM_WEIGHT : WEB_SEMIBOLD_WEIGHT,
                       },
                     ]}
-                    numberOfLines={1}
+                    numberOfLines={2}
                     text={displayTitle(item) ?? t('common.untitled')}
                     query={highlightQuery}
                     highlightStyle={highlightStyle}
                   />
                   {memoPreview ? (
                     <HighlightedText
-                      style={[styles.listUrl, { color: palette.textSecondary }]}
+                      style={[styles.listUrl, { color: palette.textSecondary, lineHeight: Math.round(20 * fontScale) }]}
                       numberOfLines={1}
                       text={memoPreview}
                       query={highlightQuery}
@@ -3569,7 +3439,7 @@ export default function InboxScreen() {
                   ) : null}
                   {item.url ? (
                     <HighlightedText
-                      style={[styles.listUrl, { color: palette.textSecondary }]}
+                      style={[styles.listUrl, { color: palette.textSecondary, lineHeight: Math.round(20 * fontScale) }]}
                       numberOfLines={1}
                       text={siteLabelText}
                       query={highlightQuery}
@@ -3578,7 +3448,7 @@ export default function InboxScreen() {
                   ) : null}
                   {showUrlMatchLine && item.url ? (
                     <HighlightedText
-                      style={[styles.listUrl, { color: palette.textSecondary }]}
+                      style={[styles.listUrl, { color: palette.textSecondary, lineHeight: Math.round(20 * fontScale) }]}
                       numberOfLines={1}
                       text={item.url}
                       query={highlightQuery}
@@ -3587,7 +3457,7 @@ export default function InboxScreen() {
                   ) : null}
                   {compactMeta ? (
                     <PostHogMaskView>
-                      <Text style={[styles.compactMeta, { color: palette.accentText }]} numberOfLines={1}>
+                      <Text style={[styles.compactMeta, { color: palette.textSecondary, lineHeight: Math.round(20 * fontScale) }]} numberOfLines={1}>
                         {compactMeta}
                       </Text>
                     </PostHogMaskView>
@@ -3707,28 +3577,6 @@ export default function InboxScreen() {
                       />
                     )}
                   </Pressable>
-                  {item.url ? (
-                    <Pressable
-                      accessibilityRole={selectionMode ? 'button' : 'link'}
-                      accessibilityLabel={selectionMode ? (isSelected ? t('inbox.deselectItemA11y', { title: displayTitle(item) ?? t('common.untitled') }) : t('inbox.selectItemA11y', { title: displayTitle(item) ?? t('common.untitled') })) : t('common.openLink')}
-                      onPress={handleLinkPress}
-                      onLongPress={handleItemLongPress}
-                      hitSlop={6}
-                      style={({ pressed }) => [
-                        styles.previewRibbon,
-                        { opacity: pressed ? 0.75 : 1 },
-                      ]}
-                    >
-                      <HighlightedText
-                        style={styles.previewRibbonText}
-                        numberOfLines={1}
-                        text={siteLabelText}
-                        query={highlightQuery}
-                        highlightStyle={highlightStyle}
-                      />
-                      <Ionicons name="open-outline" size={12} color="#ffffff" />
-                    </Pressable>
-                  ) : null}
                 </View>
                 <View style={styles.cardBody}>
                   <View style={styles.cardTitleRow}>
@@ -3765,11 +3613,12 @@ export default function InboxScreen() {
                       style={[
                         styles.cardTitle,
                         {
+                          lineHeight: Math.round(22 * fontScale),
                           color: isTitleDerived(item) ? palette.textSecondary : palette.text,
-                          fontWeight: isTitleDerived(item) ? WEB_MEDIUM_WEIGHT : WEB_BOLD_WEIGHT,
+                          fontWeight: isTitleDerived(item) ? WEB_MEDIUM_WEIGHT : WEB_SEMIBOLD_WEIGHT,
                         },
                       ]}
-                      numberOfLines={1}
+                      numberOfLines={2}
                       text={displayTitle(item) ?? t('common.untitled')}
                       query={highlightQuery}
                       highlightStyle={highlightStyle}
@@ -3799,6 +3648,17 @@ export default function InboxScreen() {
                     </Pressable>
                   ) : null}
                 </View>
+                {item.url ? (
+                  <View accessible accessibilityLabel={siteLabelText}>
+                    <HighlightedText
+                      style={[styles.cardUrl, { color: palette.textSecondary }]}
+                      numberOfLines={1}
+                      text={siteLabelText}
+                      query={highlightQuery}
+                      highlightStyle={highlightStyle}
+                    />
+                  </View>
+                ) : null}
                 {memoPreview ? (
                   <HighlightedText
                     style={[styles.memoPreviewText, { color: palette.textSecondary }]}
@@ -3886,7 +3746,7 @@ export default function InboxScreen() {
           onPress={() => router.push('/add')}
           style={({ pressed }) => [
             styles.fab,
-            { backgroundColor: palette.accent, bottom: insets.bottom + 20, opacity: pressed ? 0.9 : 1 },
+            { backgroundColor: palette.accent, bottom: insets.bottom + 16, opacity: pressed ? 0.9 : 1 },
           ]}
         >
           <Ionicons name="add" size={34} color="#ffffff" />
@@ -3907,6 +3767,14 @@ export default function InboxScreen() {
         title={t('inbox.menuA11y')}
         onClose={() => setHomeMenuOpen(false)}
         actions={[
+          { key: 'tags', label: t('nav.browseTags'), icon: 'pricetags-outline', onPress: () => {
+            setHomeMenuOpen(false);
+            openBrowseTags();
+          } },
+          { key: 'graph', label: t('nav.graph'), icon: 'git-network-outline', onPress: () => {
+            setHomeMenuOpen(false);
+            router.push('/graph');
+          } },
           { key: 'settings', label: t('nav.settings'), icon: 'settings-outline', onPress: () => {
             setHomeMenuOpen(false);
             router.push('/settings');
@@ -3961,9 +3829,21 @@ export default function InboxScreen() {
       />
       <ActionSheet
         visible={sortMenuOpen}
-        title={t('inbox.sortMenuTitle')}
-        actions={
-          isFolderSort
+        title={t('inbox.viewOptions')}
+        actions={[
+          ...VIEW_MODES.filter((mode) => mode !== 'folder' || collections.length > 0 || viewMode === 'folder').map((mode) => ({
+            key: `layout-${mode}`,
+            testID: `inbox-view-${mode}`,
+            label: t(VIEW_MODE_LABEL_KEY[mode]),
+            icon: VIEW_MODE_ICON[mode],
+            selected: viewMode === mode,
+            onPress: () => {
+              setViewMode(mode);
+              void setPreference(INBOX_VIEW_PREF_KEY, serializeViewMode(mode)).catch(() => {});
+              setSortMenuOpen(false);
+            },
+          })),
+          ...(isFolderSort
             ? FOLDER_SORT_PRESETS.map((option) => ({
                 key: serializeFolderSort(option),
                 label: t(FOLDER_SORT_LABEL_KEY[serializeFolderSort(option)]),
@@ -3983,8 +3863,8 @@ export default function InboxScreen() {
                   setSort(option);
                   setSortMenuOpen(false);
                 },
-              }))
-        }
+              }))),
+        ]}
         onClose={() => setSortMenuOpen(false)}
       />
       <CreateCollectionDialog
@@ -4041,9 +3921,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 8,
+    paddingHorizontal: uiMetrics.screenGutter,
+    paddingTop: 0,
+    paddingBottom: 0,
     width: '100%',
     maxWidth: '100%',
     alignSelf: 'center',
@@ -4272,75 +4152,56 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
   },
   searchWrap: {
-    paddingHorizontal: 16,
-    // Packed almost flush under the title (Telegram-style), so the top reads as
-    // one tight title→search unit rather than two spaced bands.
-    paddingTop: 2,
+    paddingHorizontal: uiMetrics.screenGutter,
     width: '100%',
     alignSelf: 'center',
+  },
+  searchField: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: uiMetrics.radius,
+    minHeight: 48,
+  },
+  searchAction: {
+    minWidth: 48,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   searchInput: {
-    borderRadius: 18,
-    paddingVertical: 9,
-    paddingHorizontal: 16,
+    flex: 1,
+    minWidth: 0,
+    minHeight: 48,
+    borderRadius: uiMetrics.radius,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
     fontSize: 16,
   },
-  sortRow: {
+  filterOptionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    // Single row, never wrapped: the Sort pill, Tags pill, and view segment all
-    // share one line. The Sort pill (sortPillFlexible: flexShrink 1 + minWidth 0,
-    // label numberOfLines={1}) is the only flexible item, so on a narrow width
-    // it truncates its label — "Recently opened" → "Recently op…", its leading
-    // icon still naming the field — instead of shoving the rightmost view
-    // segment onto a wasteful second line. An earlier `flexWrap: 'wrap'` did
-    // exactly that, so we drop it; the view segment (marginLeft: 'auto') stays
-    // pinned right and is never clipped because the Sort pill yields the space.
+    paddingHorizontal: uiMetrics.screenGutter,
+    paddingVertical: 8,
     gap: 8,
-    paddingHorizontal: 16,
-    paddingTop: 4,
     width: '100%',
     alignSelf: 'center',
   },
-  sortPill: {
+  viewOptions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 999,
-    // Match the view-mode segment's outer height at the default font scale,
-    // while still allowing labeled pills to grow with accessibility text.
-    minHeight: 36,
+    minHeight: 48,
+    gap: 8,
+    borderWidth: 1,
+    borderRadius: uiMetrics.radius,
+    paddingHorizontal: 12,
     paddingVertical: 8,
-    paddingHorizontal: 14,
+    maxWidth: '50%',
   },
-  sortPillFlexible: {
-    // The Sort pill carries the only long label in the controls row; let it
-    // shrink and truncate (numberOfLines={1}) so adding the Tags toggle can't
-    // shove the view segment off the right edge on a narrow device.
-    flexShrink: 1,
-    minWidth: 0,
-  },
-  sortPillLabel: {
+  viewOptionsLabel: {
     fontSize: 14,
     fontWeight: '600',
     flexShrink: 1,
-  },
-  viewSegment: {
-    marginLeft: 'auto',
-    flexDirection: 'row',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 999,
-    overflow: 'hidden',
-    height: 36,
-  },
-  viewSegmentButton: {
-    width: 36,
-    // The parent's hairline border is part of the 36px outer control. Let the
-    // children fill the remaining inner box instead of making it 2px taller.
-    height: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   shelf: {
     flexGrow: 0,
@@ -4352,13 +4213,13 @@ const styles = StyleSheet.create({
     // are vertically centred via shelfContent.alignItems. Spacing is margin
     // (outside the scroll box, so it can't clip).
     minHeight: 38,
-    marginTop: 2,
+    marginTop: 0,
     marginBottom: 0,
     width: '100%',
     alignSelf: 'center',
   },
   shelfContent: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 0,
     alignItems: 'center',
     // Match the shelf floor so the pill is centred in the row (and the row grows
     // to fit a taller pill rather than cropping it). No vertical padding here —
@@ -4379,7 +4240,7 @@ const styles = StyleSheet.create({
   },
   card: {
     position: 'relative',
-    borderRadius: 28,
+    borderRadius: uiMetrics.radius,
     overflow: 'hidden',
   },
   bookmarkOpeningOverlay: {
@@ -4397,8 +4258,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    borderRadius: 22,
-    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: uiMetrics.radius,
+    minHeight: 88,
+    borderWidth: 1,
     paddingVertical: 13,
     paddingHorizontal: 16,
   },
@@ -4423,44 +4285,27 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 12,
-    borderWidth: 1.5,
-    overflow: 'visible',
+    overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
   },
   compactThumb: {
-    width: 44,
-    height: 44,
-    borderRadius: 10,
-  },
-  thumbMiniBadge: {
-    position: 'absolute',
-    bottom: -3,
-    right: -3,
-    borderRadius: 999,
-    width: 20,
-    height: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 3,
+    width: 48,
+    height: 48,
+    borderRadius: 12,
   },
   compactMeta: {
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: WEB_MEDIUM_WEIGHT,
     marginTop: 1,
   },
   listTitle: {
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: WEB_SEMIBOLD_WEIGHT,
     letterSpacing: -0.2,
   },
   listUrl: {
-    fontSize: 12,
+    fontSize: 14,
   },
   listOpen: {
     borderRadius: 999,
@@ -4545,26 +4390,6 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: -1.2,
   },
-  previewRibbon: {
-    position: 'absolute',
-    top: 10,
-    right: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(15, 23, 42, 0.75)',
-    borderRadius: 999,
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
-  },
-  previewRibbonText: {
-    color: '#ffffff',
-    fontSize: 11,
-    fontWeight: WEB_SEMIBOLD_WEIGHT,
-    maxWidth: 140,
-  },
   cardBody: {
     padding: 16,
     gap: 9,
@@ -4613,8 +4438,8 @@ const styles = StyleSheet.create({
   },
   cardTitle: {
     flex: 1,
-    fontSize: 19,
-    fontWeight: WEB_BOLD_WEIGHT,
+    fontSize: 16,
+    fontWeight: WEB_SEMIBOLD_WEIGHT,
     letterSpacing: -0.2,
   },
   memoPreviewText: {
@@ -4703,10 +4528,10 @@ const styles = StyleSheet.create({
   },
   fab: {
     position: 'absolute',
-    right: 20,
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    right: 16,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     alignItems: 'center',
     justifyContent: 'center',
     // Float above the list with a soft shadow so it reads as the primary action.
