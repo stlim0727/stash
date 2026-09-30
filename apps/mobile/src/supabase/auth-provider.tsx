@@ -157,9 +157,9 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
           // or rotated while the app sat idle). Do NOT mint a fresh anonymous
           // user: that silently logs the user out AND makes the sync
           // account-transition treat it as an account switch and drop their
-          // local bookmark cache — the empty "logged out" Inbox this fixes.
-          // Keep the local data and surface a re-sign-in prompt; signing back
-          // into the same account restores cloud sync.
+          // local bookmark cache under an unrelated anonymous identity.
+          // Surface a re-sign-in prompt; the store hides account content
+          // while preserving cached rows and pending edits for recovery.
           setSession(null);
           setStatus('session_expired');
           setMessage('Session expired. Sign back in to resume syncing.');

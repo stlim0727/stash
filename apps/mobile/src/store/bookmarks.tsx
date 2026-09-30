@@ -934,6 +934,10 @@ function mergeById<T>(
 
 export function BookmarksProvider({ children }: { children: ReactNode }) {
   const auth = useSupabaseAuth();
+  const [reconciledCacheUserId, setReconciledCacheUserId] = useState<string | null>(null);
+  const hideAccountCache = auth.status === "session_expired" ||
+    ((auth.status === "authenticated" || auth.status === "anonymous") &&
+      auth.userId !== reconciledCacheUserId);
   // Mirror of `auth` so an ALREADY-RUNNING async closure (syncNow and
   // everything it calls, e.g. syncQueueEntry's injected getLiveUserId) can
   // read the LATEST signed-in identity instead of the one captured when
@@ -2724,8 +2728,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       shared_text?: string;
       image?: SharedImage;
     }): AddBookmarkResult => {
+      const captureBookmarks = hideAccountCache
+        ? loadedBookmarks.filter((row) => !hasSyncedOnce(row.id))
+        : loadedBookmarks;
       const replayedCapture = capture_client_id
-        ? loadedBookmarks.find(
+        ? captureBookmarks.find(
             // Capture ids are idempotency keys, unlike content URLs: a replay
             // must find its original row even if the user trashed it after an
             // acknowledgement failure. Creating another row would later
@@ -3016,7 +3023,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         };
       }
 
-      const existing = loadedBookmarks.find(
+      const existing = captureBookmarks.find(
         (bookmark) =>
           isActiveBookmark(bookmark) &&
           currentDedupeKey(bookmark) === dedupeKey,
@@ -3191,7 +3198,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
       return { status: "created", bookmark, persisted };
     },
-    [loadedBookmarks, enrichInBackground, hasSyncedOnce, enqueueMutation, markEnrichmentStale],
+    [loadedBookmarks, hideAccountCache, enrichInBackground, hasSyncedOnce, enqueueMutation, markEnrichmentStale],
   );
 
   // Bulk re-ingest of imported items. Mirrors addBookmark's local-first create
@@ -5826,6 +5833,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             },
           },
         );
+        // Publish the reconciled snapshot before allowing account-owned rows
+        // through the UI. A failed or stale reconciliation never reveals them.
+        const reconciledRows = await repository.listBookmarks();
+        if (authRef.current.userId === currentUser.id) {
+          const changed = !sameRecordSnapshot(bookmarksRef.current ?? [], reconciledRows);
+          bookmarksRef.current = reconciledRows;
+          if (changed) setBookmarks(reconciledRows);
+          setReconciledCacheUserId(currentUser.id);
+        }
         return true;
       } catch (error) {
         logStorageError("account transition", error);
@@ -5921,6 +5937,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           } finally {
             syncInFlight.current = false;
           }
+        } else if (authRef.current.userId === sessionUser.id) {
+          // Matching durable ownership needs no destructive transition, even
+          // when remote sync is paused.
+          setReconciledCacheUserId(sessionUser.id);
         }
         syncPendingRef.current = true;
         return false;
@@ -8779,8 +8799,27 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     ],
   );
 
+  // Keep account data hidden through expiry and an unresolved account switch.
+  // Fresh local captures remain usable, including duplicate capture lookups.
+  const visibleValue = useMemo<BookmarksContextValue>(() => {
+    if (!hideAccountCache) return value;
+    const visibleRows = loadedBookmarks.filter((row) => !hasSyncedOnce(row.id));
+    const ids = new Set(visibleRows.map((row) => row.id));
+    const collectionIds = new Set(visibleRows.map((row) => row.collection_id));
+    return {
+      ...value,
+      inbox: value.inbox.filter((row) => ids.has(row.id)),
+      trash: value.trash.filter((row) => ids.has(row.id)),
+      collections: value.collections.filter((row) => collectionIds.has(row.id)),
+      getBookmark: (id) => { const row = value.getBookmark(id); return row && ids.has(row.id) ? row : undefined; },
+      getTagsForBookmark: (id) => ids.has(id) ? value.getTagsForBookmark(id) : [],
+      getCollection: (id) => collectionIds.has(id) ? value.getCollection(id) : undefined,
+      getEnrichment: (id) => ids.has(id) ? value.getEnrichment(id) : undefined,
+    };
+  }, [hideAccountCache, loadedBookmarks, hasSyncedOnce, value]);
+
   return (
-    <BookmarksContext.Provider value={value}>
+    <BookmarksContext.Provider value={visibleValue}>
       {children}
     </BookmarksContext.Provider>
   );

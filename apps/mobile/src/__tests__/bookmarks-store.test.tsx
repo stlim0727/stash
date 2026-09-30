@@ -11,11 +11,14 @@ const SYNCED_ID = "7e64cf1e-0000-4000-8000-000000000001";
 jest.mock("@/storage/repository", () =>
   require("./helpers/fake-repository").createFakeRepositoryModule(),
 );
+let mockAuthStatus = "not_configured";
+let mockAuthUserId: string | null = null;
+
 jest.mock("@/supabase/auth-provider", () => ({
   useSupabaseAuth: () => ({
-    status: "not_configured",
+    status: mockAuthStatus,
     session: null,
-    userId: null,
+    userId: mockAuthUserId,
     message: "not configured",
     ensureAnonymousSession: async () => null,
   }),
@@ -58,6 +61,8 @@ async function renderStore() {
 }
 
 beforeEach(() => {
+  mockAuthStatus = "not_configured";
+  mockAuthUserId = null;
   fakeRepo.__reset();
   mockEnrichBookmark.mockReset();
   mockEnrichBookmark.mockResolvedValue({
@@ -1727,4 +1732,78 @@ test("duplicate manual content edits invalidate completed enrichment", async () 
   await act(async () => { result.current.addBookmark({ url: original.url!, title: "New title" }); });
   expect(result.current.getEnrichment(SYNCED_ID)?.status).toBe("stale");
   expect(await fakeRepo.repository.listEnrichments()).toEqual([expect.objectContaining({ status: "stale" })]);
+});
+
+test.each(["signed_out"])(
+  "%s clears cached cloud bookmarks and preserves unsynced captures",
+  async (status) => {
+    const synced = makeStoredBookmark({ id: SYNCED_ID, sync_status: "synced", ever_synced: true });
+    const local = makeStoredBookmark({ id: "local-unsynced", sync_status: "pending" });
+    await fakeRepo.repository.insertBookmark(synced);
+    await fakeRepo.repository.insertBookmark(local);
+    const { result, rerender } = await renderStore();
+    expect(result.current.inbox).toHaveLength(2);
+
+    mockAuthStatus = status;
+    await rerender({});
+
+    await waitFor(() => expect(result.current.inbox.map((row) => row.id)).toEqual([local.id]));
+    await waitFor(() => expect(fakeRepo.__bookmarks().map((row) => row.id)).toEqual([local.id]));
+  },
+);
+
+
+test("session expiry hides cached content without deleting it and recovery reveals it", async () => {
+  const row = makeStoredBookmark({ id: SYNCED_ID, sync_status: "pending", ever_synced: true, notes: "Unsynced edit" });
+  fakeRepo.__reset([row]);
+  const { result, rerender } = await renderStore();
+  await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+  const storedBefore = fakeRepo.__bookmarks();
+  const queueBefore = fakeRepo.__queue();
+  mockAuthStatus = "session_expired";
+  await rerender({});
+  expect(result.current.inbox).toEqual([]);
+  expect(result.current.trash).toEqual([]);
+  expect(result.current.getBookmark(row.id)).toBeUndefined();
+  expect(fakeRepo.__bookmarks()).toEqual(storedBefore);
+  expect(fakeRepo.__queue()).toEqual(queueBefore);
+  mockAuthStatus = "not_configured";
+  await rerender({});
+  expect(result.current.getBookmark(row.id)?.notes).toBe("Unsynced edit");
+  expect(result.current.inbox).toHaveLength(1);
+});
+
+
+test("a new account cannot see expired account rows before reconciliation succeeds", async () => {
+  const row = makeStoredBookmark({ id: SYNCED_ID, sync_status: "synced", ever_synced: true });
+  fakeRepo.__reset([row]);
+  const { result, rerender } = await renderStore();
+  mockAuthStatus = "session_expired";
+  await rerender({});
+  mockAuthUserId = "different-account";
+  mockAuthStatus = "authenticated";
+  await rerender({});
+  expect(result.current.inbox).toEqual([]);
+  expect(result.current.getBookmark(row.id)).toBeUndefined();
+  expect(fakeRepo.__bookmarks()).toEqual([row]);
+});
+
+test("captures stay accessible during expiry and do not dedupe against hidden account rows", async () => {
+  const row = makeStoredBookmark({ id: SYNCED_ID, url: "https://example.com/private", sync_status: "synced", ever_synced: true });
+  fakeRepo.__reset([row]);
+  const { result, rerender } = await renderStore();
+  mockAuthStatus = "session_expired";
+  await rerender({});
+  let capturedId = "";
+  await act(async () => {
+    const outcome = result.current.addBookmark({ url: row.url! });
+    expect(outcome.status).toBe("created");
+    if (outcome.status === "created") capturedId = outcome.bookmark.id;
+  });
+  expect(result.current.inbox.map((bookmark) => bookmark.id)).toEqual([capturedId]);
+  expect(result.current.getBookmark(capturedId)).toBeDefined();
+  expect(result.current.getBookmark(row.id)).toBeUndefined();
+  await act(async () => {
+    expect(result.current.addBookmark({ url: row.url! }).status).toBe("duplicate");
+  });
 });

@@ -442,3 +442,37 @@ test('import while the startup cloud pull is still in flight is refused (Sentry 
   releasePull();
   await waitFor(() => expect(result.current.isSyncing).toBe(false));
 });
+
+
+test.each([false, true])('account cache stays hidden through delayed reconciliation (failure=%s)', async (fails) => {
+  const id = '7e64cf1e-0000-4000-8000-00000000a001';
+  fakeRepo.__reset([makeStoredBookmark({ id, url: 'https://example.com/account-a' })]);
+  apiMock.__setRemoteIds([id]);
+  const { result, rerender } = await renderReadyStore();
+  await act(async () => result.current.setSyncPaused(true));
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const originalDelete = fakeRepo.repository.deleteBookmark.bind(fakeRepo.repository);
+  const deleteSpy = jest.spyOn(fakeRepo.repository, 'deleteBookmark').mockImplementation(async (bookmarkId) => {
+    await gate;
+    if (fails) throw new Error('storage unavailable');
+    return originalDelete(bookmarkId);
+  });
+  try {
+    authMock.__setAuth({ status: 'session_expired', session: null, userId: null });
+    await rerender(undefined);
+    authMock.__setAuth({ status: 'authenticated', session: mockOtherRealSession, userId: 'other-real-user' });
+    await rerender(undefined);
+    await waitFor(() => expect(deleteSpy).toHaveBeenCalled());
+    expect(fakeRepo.__bookmarks().map((row) => row.id)).toContain(id);
+    expect(result.current.inbox).toEqual([]);
+    expect(result.current.getBookmark(id)).toBeUndefined();
+    await act(async () => { release(); });
+    if (!fails) await waitFor(() => expect(fakeRepo.__bookmarks()).toEqual([]));
+    expect(result.current.inbox).toEqual([]);
+    expect(result.current.getBookmark(id)).toBeUndefined();
+  } finally {
+    release();
+    deleteSpy.mockRestore();
+  }
+});
