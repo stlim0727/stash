@@ -3,7 +3,7 @@ import { PixelRatio, Platform, Pressable, StyleSheet, Text, type PressableProps,
 import { Ionicons } from '@expo/vector-icons';
 import { PostHogMaskView } from 'posthog-react-native';
 
-import { usePalette } from '@/theme';
+import { usePalette, uiMetrics } from '@/theme';
 
 type ChipVariant = 'default' | 'selected' | 'accent' | 'danger' | 'highlight';
 
@@ -54,7 +54,7 @@ export function Chip({
   const colors = {
     default: {
       backgroundColor: quietDefault ? 'transparent' : palette.surface,
-      borderColor: palette.border,
+      borderColor: props.onPress ? palette.controlBorder : palette.border,
       color: quietDefault ? palette.textSecondary : palette.text,
     },
     selected: { backgroundColor: palette.accentSoft, borderColor: palette.accentSoft, color: palette.accentText },
@@ -95,6 +95,7 @@ export function Chip({
       accessibilityLabel={fallbackAccessibilityLabel}
       style={({ pressed }) => [
         styles.base,
+        props.onPress ? { minHeight: uiMetrics.touchTarget, minWidth: uiMetrics.touchTarget } : null,
         { backgroundColor: colors.backgroundColor, borderColor: colors.borderColor, opacity: disabled ? 0.5 : pressed ? 0.78 : 1 },
         style,
       ]}
@@ -115,7 +116,7 @@ export function Chip({
         </Text>
       )}
       {typeof count === 'number' ? (
-        <Text style={[styles.count, quietDefault ? styles.countQuiet : null, { color: colors.color, lineHeight }]}>
+        <Text style={[styles.count, quietDefault ? styles.countQuiet : null, { color: palette.textSecondary, lineHeight }]}>
           {`· ${count}`}
         </Text>
       ) : null}
@@ -158,11 +159,9 @@ const styles = StyleSheet.create({
   count: {
     fontSize: LABEL_FONT_SIZE,
     fontWeight: COUNT_WEIGHT,
-    opacity: 0.55,
     marginLeft: 5,
   },
   countQuiet: {
     fontWeight: Platform.select({ web: '400', default: COUNT_WEIGHT }) as '400' | '600',
-    opacity: 0.42,
   },
 });

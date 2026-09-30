@@ -1,5 +1,11 @@
 import { useColorScheme } from 'react-native';
 
+export const uiMetrics = {
+  touchTarget: 48,
+  screenGutter: 16,
+  radius: 16,
+} as const;
+
 const shared = {
   radius: {
     sm: 10,
@@ -45,7 +51,8 @@ export const palettes = {
     mutedSurface: '#eeede8',
     card: '#ffffff',
     border: '#d8d7d0',
-    accent: '#2878d4',
+    controlBorder: '#85857e',
+    accent: '#2473cc',
     accentForeground: '#ffffff',
     accentSoft: '#e6f0fc',
     accentText: '#1a5ca8',
@@ -70,6 +77,7 @@ export const palettes = {
     mutedSurface: '#2a3443',
     card: '#202733',
     border: '#3a4454',
+    controlBorder: '#8290a3',
     accent: '#4a98e8',
     accentForeground: '#151b26',
     accentSoft: '#253b50',

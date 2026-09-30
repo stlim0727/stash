@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { forwardRef, type ComponentProps, type ElementRef, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
 
-import { usePalette } from '@/theme';
+import { usePalette, uiMetrics } from '@/theme';
 
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 type ButtonSize = 'sm' | 'md' | 'lg';
@@ -26,7 +26,7 @@ export const Button = forwardRef<ElementRef<typeof Pressable>, ButtonProps>(func
   const colors = {
     primary: { backgroundColor: palette.accent, borderColor: palette.accent, color: palette.accentForeground },
     secondary: { backgroundColor: palette.accentSoft, borderColor: palette.accentSoft, color: palette.accentText },
-    ghost: { backgroundColor: 'transparent', borderColor: palette.border, color: palette.text },
+    ghost: { backgroundColor: 'transparent', borderColor: palette.controlBorder, color: palette.text },
     danger: { backgroundColor: palette.dangerSoft, borderColor: palette.dangerSoft, color: palette.danger },
   }[variant];
 
@@ -63,13 +63,16 @@ const styles = StyleSheet.create({
   base: {
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 999,
+    minWidth: uiMetrics.touchTarget,
+    minHeight: uiMetrics.touchTarget,
+    borderWidth: 1,
+    borderRadius: uiMetrics.radius,
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
+    maxWidth: '100%',
   },
   sm: {
     paddingVertical: 8,
@@ -84,13 +87,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 22,
   },
   label: {
-    fontWeight: '700',
+    fontWeight: '600',
+    flexShrink: 1,
+    textAlign: 'center',
   },
   smLabel: {
-    fontSize: 13,
+    fontSize: 14,
   },
   mdLabel: {
-    fontSize: 15,
+    fontSize: 16,
   },
   lgLabel: {
     fontSize: 16,

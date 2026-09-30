@@ -12,7 +12,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PostHogMaskView } from 'posthog-react-native';
 
 import { useT } from '@/i18n';
-import { usePalette } from '@/theme';
+import { usePalette, uiMetrics } from '@/theme';
 
 export interface SheetAction {
   key: string;
@@ -141,7 +141,7 @@ export function ActionSheet({
             accessibilityRole="button"
             accessibilityLabel={t('common.cancel')}
             onPress={onClose}
-            style={[styles.cancel, { borderColor: palette.border }]}
+            style={[styles.cancel, { borderColor: palette.controlBorder }]}
           >
             <Text style={[styles.cancelLabel, { color: palette.textSecondary }]}>{t('common.cancel')}</Text>
           </Pressable>
@@ -157,12 +157,11 @@ function ActionTextGroup({ action, mask }: { action: SheetAction; mask?: boolean
     <View style={styles.actionTextGroup}>
       <Text
         style={[styles.actionLabel, { color: action.destructive ? palette.danger : palette.text }]}
-        numberOfLines={1}
       >
         {action.label}
       </Text>
       {action.description ? (
-        <Text style={[styles.actionDescription, { color: palette.textSecondary }]} numberOfLines={2}>
+        <Text style={[styles.actionDescription, { color: palette.textSecondary }]} >
           {action.description}
         </Text>
       ) : null}
@@ -185,7 +184,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingTop: 8,
-    paddingHorizontal: 12,
+    paddingHorizontal: uiMetrics.screenGutter,
   },
   grabber: {
     alignSelf: 'center',
@@ -201,6 +200,7 @@ const styles = StyleSheet.create({
     paddingBottom: 6,
   },
   action: {
+    minHeight: uiMetrics.touchTarget,
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 13,
@@ -218,10 +218,11 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   actionDescription: {
-    fontSize: 12,
+    fontSize: 14,
     marginTop: 1,
   },
   cancel: {
+    minHeight: uiMetrics.touchTarget,
     marginTop: 8,
     paddingVertical: 13,
     borderRadius: 12,
