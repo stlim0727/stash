@@ -114,12 +114,14 @@ function seedLibrary() {
   );
 }
 
-test('renders the cloud (default surface) and toggling to All lists every tag with count badges', async () => {
+test('renders List by default and Cloud on request and toggling to All lists every tag with count badges', async () => {
   seedLibrary();
 
   const screen = await renderScreen();
 
-  // Cloud is the default surface: each tag is a pressable.
+  expect(screen.getByTestId('browse-tags-list')).toBeTruthy();
+  // Cloud remains available: each tag is a pressable.
+  await fireEvent.press(screen.getByTestId('browse-tags-view-cloud'));
   await waitFor(() => expect(screen.getByTestId('browse-tags-cloud')).toBeTruthy());
   expect(await screen.findByLabelText('#cooking, 2 bookmarks')).toBeTruthy();
   expect(screen.getByLabelText('#reading, 1 bookmark')).toBeTruthy();
@@ -162,6 +164,7 @@ test('the cloud caps how many tags it renders at the conservative floor before m
 
   const screen = await renderScreen();
 
+  await fireEvent.press(screen.getByTestId('browse-tags-view-cloud'));
   await waitFor(() => expect(screen.getByTestId('browse-tags-cloud')).toBeTruthy());
   // The cloud renders only the conservative floor (24) of the busiest tags …
   expect(screen.getAllByTestId('browse-tags-cloud-tag')).toHaveLength(24);
@@ -182,6 +185,7 @@ test('no "Show all" footer when the whole ranked set fits in the cloud', async (
   seedLibrary();
 
   const screen = await renderScreen();
+  await fireEvent.press(screen.getByTestId('browse-tags-view-cloud'));
   await waitFor(() => expect(screen.getByTestId('browse-tags-cloud')).toBeTruthy());
   expect(screen.getAllByTestId('browse-tags-cloud-tag')).toHaveLength(3);
   expect(screen.queryByTestId('browse-tags-show-all')).toBeNull();
@@ -213,6 +217,7 @@ test('the "Show all" footer renders with the TOTAL tag count when the cloud is t
   });
 
   const screen = await renderScreen();
+  await fireEvent.press(screen.getByTestId('browse-tags-view-cloud'));
   await waitFor(() => expect(screen.getByTestId('browse-tags-cloud')).toBeTruthy());
   expect(screen.getAllByTestId('browse-tags-cloud-tag')).toHaveLength(24);
 
@@ -232,6 +237,7 @@ test('the co-occurrence search narrows to the tags on matching bookmarks', async
   seedLibrary();
 
   const screen = await renderScreen();
+  await fireEvent.press(screen.getByTestId('browse-tags-view-cloud'));
   await waitFor(() => expect(screen.getByTestId('browse-tags-cloud')).toBeTruthy());
 
   // Searching "kimchi" matches only the cooked bookmark, so the cloud collapses
@@ -246,6 +252,7 @@ test('a search that matches nothing shows the search-zero copy', async () => {
   seedLibrary();
 
   const screen = await renderScreen();
+  await fireEvent.press(screen.getByTestId('browse-tags-view-cloud'));
   await waitFor(() => expect(screen.getByTestId('browse-tags-cloud')).toBeTruthy());
 
   await fireEvent.changeText(screen.getByTestId('browse-tags-search'), 'zzzznope');
@@ -288,6 +295,7 @@ test('tapping a cloud tag navigates to the root Inbox with that tag facet', asyn
   seedLibrary();
 
   const screen = await renderScreen();
+  await fireEvent.press(screen.getByTestId('browse-tags-view-cloud'));
   await waitFor(() => expect(screen.getByTestId('browse-tags-cloud')).toBeTruthy());
 
   await fireEvent.press(await screen.findByLabelText('#cooking, 2 bookmarks'));
@@ -304,6 +312,7 @@ test('re-tapping the SAME tag fires a fresh navigate (with a new nonce) each tim
   seedLibrary();
 
   const screen = await renderScreen();
+  await fireEvent.press(screen.getByTestId('browse-tags-view-cloud'));
   await waitFor(() => expect(screen.getByTestId('browse-tags-cloud')).toBeTruthy());
 
   const tag = await screen.findByLabelText('#cooking, 2 bookmarks');
@@ -329,6 +338,7 @@ test('re-tapping the same tag across separate browse visits ships a fresh nonce'
   seedLibrary();
 
   const first = await renderScreen();
+  await fireEvent.press(first.getByTestId('browse-tags-view-cloud'));
   await waitFor(() => expect(first.getByTestId('browse-tags-cloud')).toBeTruthy());
   await fireEvent.press(await first.findByLabelText('#cooking, 2 bookmarks'));
   // Tear the screen down, exactly as dismissTo does on the device.
@@ -337,6 +347,7 @@ test('re-tapping the same tag across separate browse visits ships a fresh nonce'
   });
 
   const second = await renderScreen();
+  await fireEvent.press(second.getByTestId('browse-tags-view-cloud'));
   await waitFor(() => expect(second.getByTestId('browse-tags-cloud')).toBeTruthy());
   await fireEvent.press(await second.findByLabelText('#cooking, 2 bookmarks'));
   await act(async () => {
@@ -369,6 +380,7 @@ test('drilling in from a folder-scoped route still applies the all-library tag f
   );
 
   const screen = await renderScreen();
+  await fireEvent.press(screen.getByTestId('browse-tags-view-cloud'));
   await waitFor(() => expect(screen.getByTestId('browse-tags-cloud')).toBeTruthy());
 
   await fireEvent.press(await screen.findByLabelText('#cooking, 1 bookmark'));

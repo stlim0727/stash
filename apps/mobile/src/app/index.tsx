@@ -43,6 +43,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { usePalette, uiMetrics } from '@/theme';
 import { useOpenReport } from '@/feedback/open-report';
 import { AnonymousNudgeBanner } from '@/ui/AnonymousNudgeBanner';
+import { LibraryStatus } from '@/ui/LibraryStatus';
 import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
 import { Chip } from '@/ui/Chip';
@@ -112,7 +113,7 @@ import { syncFlush } from '@/ui/sync-flush';
 import { useT } from '@/i18n';
 import type { MessageKey } from '@/i18n/messages';
 import type { TFunction } from '@/i18n/translate';
-import { metadataStatusLabel, syncStatusLabel, videoUnavailableLabel } from '@/i18n/status';
+import { metadataStatusLabel, videoUnavailableLabel } from '@/i18n/status';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { ActionSheet, type SheetAction } from '@/ui/ActionSheet';
@@ -122,8 +123,7 @@ import { TutorialModal } from '@/ui/TutorialModal';
 import { HighlightedText } from '@/ui/HighlightedText';
 import { overlayLayer } from '@/ui/layering';
 import { useCaptureToast } from '@/ui/capture-toast';
-import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
-import { hasRepeatedDnsFailures } from '@/domain/network-errors';
+import type { Bookmark } from '@/domain/types';
 import { isYoutubeAvailabilityCandidate } from '@/domain/page-metadata';
 import BookmarkDetailScreen from '@/app/bookmark/[id]';
 import {
@@ -144,13 +144,8 @@ import { setHeroDiagnosticsSnapshot } from '@/feedback/hero-diagnostics-session'
 function statusLabel(
   bookmark: Bookmark,
   t: TFunction,
-  queueEntry?: LocalPendingBookmark | null,
-  repeatedDnsFailure?: boolean,
 ): string | null {
   const parts: string[] = [];
-  if (bookmark.sync_status !== 'synced') {
-    parts.push(syncStatusLabel(t, bookmark.sync_status, queueEntry, repeatedDnsFailure));
-  }
   if (bookmark.metadata_status === 'pending') {
     parts.push(metadataStatusLabel(t, 'pending'));
   }
@@ -613,6 +608,8 @@ export default function InboxScreen() {
     queue,
     isLoading,
     isSyncing,
+    syncNow,
+    syncPaused,
     loadError,
     getBookmark,
     getTagsForBookmark,
@@ -632,11 +629,6 @@ export default function InboxScreen() {
     createCollection,
     refreshBookmarkPreview,
   } = useBookmarks();
-  const syncQueueEntryByBookmarkId = useMemo(
-    () => new Map(queue.map((entry) => [entry.local_id, entry] as const)),
-    [queue],
-  );
-  const repeatedDnsFailure = useMemo(() => hasRepeatedDnsFailures(queue), [queue]);
   const { show: showToast } = useCaptureToast();
   const [openingBookmarkId, setOpeningBookmarkId] = useState<string | null>(null);
   const openBookmarkFrame = useRef<number | null>(null);
@@ -2642,37 +2634,6 @@ export default function InboxScreen() {
             </Text>
           </Pressable>
         ) : null}
-        {auth.status === 'session_expired' ? (
-          // A signed-in account's session expired on launch. The local bookmarks
-          // are preserved (not dropped), but cloud sync is paused until the user
-          // signs back in. Route to Settings, where the sign-in buttons live.
-          <Pressable
-            testID="session-expired-banner"
-            accessibilityRole="button"
-            accessibilityLabel={t('inbox.sessionExpiredA11y')}
-            onPress={() => router.push('/settings')}
-            style={({ pressed }) => [
-              styles.suggestBanner,
-              { alignSelf: 'center', width: bannerWidth },
-              {
-                backgroundColor: palette.card,
-                borderWidth: StyleSheet.hairlineWidth,
-                borderColor: palette.border,
-                paddingRight: 14,
-                opacity: pressed ? 0.7 : 1,
-              },
-            ]}
-          >
-            <View style={styles.suggestBannerMain}>
-              <Text style={[styles.suggestBannerText, { color: palette.text }]} numberOfLines={1}>
-                {t('inbox.sessionExpired')}
-              </Text>
-              <Text style={[styles.suggestBannerCta, { color: palette.accent }]}>
-                {t('inbox.sessionExpiredCta')}
-              </Text>
-            </View>
-          </Pressable>
-        ) : null}
           <View style={[styles.searchWrap, { maxWidth: contentMaxWidth }]}>
             <View style={[styles.searchField, { backgroundColor: palette.card, borderColor: palette.controlBorder }]}>
             <Pressable
@@ -2991,14 +2952,10 @@ export default function InboxScreen() {
         ]}
         ListHeaderComponent={
           <>
-            {/* Anonymous-account nudge: inline, above the list content, below the
-                search/filter shelf (which lives outside the list). Renders nothing
-                until the user is anonymous with a real (2+) library and hasn't
-                dismissed it durably. */}
-            <AnonymousNudgeBanner
-              isAnonymous={auth.status === 'anonymous'}
-              bookmarkCount={inbox.length}
-            />
+            <LibraryStatus bookmarks={inbox} queue={queue} authStatus={auth.status}
+              loading={isLoading} loadError={loadError} syncing={isSyncing} paused={syncPaused}
+              retry={() => { void syncNow({ force: true }); }} signIn={() => router.push('/settings')}
+              guestActions={<AnonymousNudgeBanner embedded isAnonymous={auth.status === 'anonymous'} bookmarkCount={inbox.length} />} />
             {/* The section label only earns its vertical space while searching,
                 where the match COUNT is real information. In the default/faceted
                 state it's redundant chrome: a newest-first list obviously leads
@@ -3232,12 +3189,7 @@ export default function InboxScreen() {
               </Pressable>
             );
           }
-          const status = statusLabel(
-            item,
-            t,
-            syncQueueEntryByBookmarkId.get(item.id),
-            repeatedDnsFailure,
-          );
+          const status = statusLabel(item, t);
           const collectionName = getCollection(item.collection_id)?.name ?? null;
           const cardTags = getTagsForBookmark(item.id);
           // Pending AI suggestions = high-confidence suggested tags not yet

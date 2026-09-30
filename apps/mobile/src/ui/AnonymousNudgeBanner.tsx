@@ -24,6 +24,7 @@ interface AnonymousNudgeBannerProps {
   /** True for an anonymous (device-only) session; false once signed in with a
    * real account, or when there is no cloud session at all. */
   isAnonymous: boolean;
+  embedded?: boolean;
   /** Count of active (non-trashed) bookmarks, used for the "2nd save" trigger. */
   bookmarkCount: number;
 }
@@ -40,7 +41,7 @@ interface AnonymousNudgeBannerProps {
  * mirrors the existing `session_expired` banner in the Inbox header, which
  * routes to Settings for the same reason.
  */
-export function AnonymousNudgeBanner({ isAnonymous, bookmarkCount }: AnonymousNudgeBannerProps) {
+export function AnonymousNudgeBanner({ isAnonymous, bookmarkCount, embedded = false }: AnonymousNudgeBannerProps) {
   const palette = usePalette();
   const t = useT();
   const router = useRouter();
@@ -78,7 +79,7 @@ export function AnonymousNudgeBanner({ isAnonymous, bookmarkCount }: AnonymousNu
   }
 
   return (
-    <Card testID="anonymous-nudge-banner" elevated={false} style={styles.card}>
+    <Card testID="anonymous-nudge-banner" elevated={false} style={[styles.card, embedded ? { padding: 0, borderWidth: 0, marginBottom: 0 } : null]}>
       <View style={styles.row}>
         <Ionicons
           name="cloud-upload-outline"

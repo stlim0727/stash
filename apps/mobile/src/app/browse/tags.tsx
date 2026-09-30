@@ -88,7 +88,7 @@ export default function BrowseTagsScreen() {
   const navigation = useNavigation();
   // Wide viewports present Browse Tags as a left-side sheet over a dimmed
   // Inbox; phones keep the full-screen layout (mirrors Settings' sheet).
-  const { width, height } = useWindowDimensions();
+  const { width, height, fontScale } = useWindowDimensions();
   const asSheet = width >= 760;
   const { inbox, isLoading, getTagsForBookmark, getCollection } = useBookmarks();
 
@@ -96,7 +96,7 @@ export default function BrowseTagsScreen() {
   const scopeParam = Array.isArray(params.scope) ? params.scope[0] : params.scope;
   const scope = useMemo(() => parseScope(scopeParam), [scopeParam]);
 
-  const [view, setView] = useState<TagView>('cloud');
+  const [view, setView] = useState<TagView>('all');
   const [query, setQuery] = useState('');
   // Debounce the query on the same ~140ms cadence as the Inbox so the per-
   // keystroke rebuild settles once per typing pause, not once per keystroke.
@@ -354,7 +354,7 @@ export default function BrowseTagsScreen() {
         />
       </View>
       <View style={[styles.segment, { backgroundColor: palette.surface, borderColor: palette.border }]}>
-        {(['cloud', 'all'] as const).map((mode) => {
+        {(['all', 'cloud'] as const).map((mode) => {
           const active = view === mode;
           return (
             <Pressable
@@ -394,7 +394,6 @@ export default function BrowseTagsScreen() {
           <View style={styles.cloudWrap}>
             {cloudEntries.map((entry) => {
               const size = tagCloudFontSize(entry.weight);
-              const color = MONOGRAM_COLORS[monogramColorIndex(entry.name)];
               return (
                 <Pressable
                   key={entry.id}
@@ -410,12 +409,11 @@ export default function BrowseTagsScreen() {
                   <PostHogMaskView>
                     <Text
                       style={{
-                        color,
+                        color: palette.accentText,
                         fontSize: size,
                         lineHeight: Math.round(size * 1.12),
                         letterSpacing: -0.3,
                         fontWeight: entry.weight > 0.66 ? '800' : entry.weight > 0.33 ? '700' : '600',
-                        opacity: 0.55 + 0.45 * entry.weight,
                       }}
                     >
                       {`#${entry.name}`}
@@ -454,9 +452,8 @@ export default function BrowseTagsScreen() {
           style={webOverscrollContain}
           data={ranked}
           keyExtractor={(item) => item.id}
-          // Fixed row height → getItemLayout, so hundreds of tags scroll without
-          // measuring each row.
-          getItemLayout={(_data, index) => ({
+// Normal-size rows use known geometry; enlarged text needs measured, growing rows.
+          getItemLayout={fontScale > 1 ? undefined : (_data, index) => ({
             length: LIST_ROW_HEIGHT,
             offset: LIST_ROW_HEIGHT * index,
             index,
@@ -474,7 +471,7 @@ export default function BrowseTagsScreen() {
                   count: item.count,
                 })}
                 onPress={() => onTagPress(item)}
-                style={({ pressed }) => [styles.listRow, { opacity: pressed ? 0.6 : 1 }]}
+                style={({ pressed }) => [styles.listRow, { height: fontScale > 1 ? undefined : LIST_ROW_HEIGHT, opacity: pressed ? 0.6 : 1 }]}
               >
                 <View style={[styles.listDot, { backgroundColor: color }]} />
                 <PostHogMaskView style={styles.maskFlex}>
@@ -640,6 +637,8 @@ const styles = StyleSheet.create({
     padding: 3,
   },
   segmentButton: {
+    minHeight: 48,
+    justifyContent: 'center',
     paddingHorizontal: 22,
     paddingVertical: 7,
     borderRadius: 999,
@@ -672,7 +671,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    height: LIST_ROW_HEIGHT,
+    minHeight: LIST_ROW_HEIGHT,
+    paddingVertical: 10,
   },
   listDot: {
     width: 12,

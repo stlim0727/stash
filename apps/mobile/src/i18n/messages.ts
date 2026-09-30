@@ -20,6 +20,13 @@ export type Message = string | PluralMessage;
 
 export const en = {
   // App identity (brand name is intentionally never translated).
+  'library.paused': 'Sync paused',
+  'library.retry': 'Retry',
+  'library.resume': 'Sign in to resume sync',
+  'library.saved': 'Saved on this device',
+  'library.guest': 'Device-only library',
+  'library.failed': 'Sync failed',
+  'library.waiting': 'Waiting to sync',
   'app.name': 'Keepory',
   // Locale-native wordmark shown beside the brand name. Defaults to the brand
   // name itself, which the hero reads as "no native wordmark" and renders just
@@ -186,8 +193,7 @@ export const en = {
   'inbox.emptyTutorialA11y': 'Open introductory feature tutorial',
   // Anonymous-account nudge banner (shown after the 2nd save, dismissible
   // forever) — see AnonymousNudgeBanner.
-  'inbox.anonymousNudgeBody':
-    'Your bookmarks are saved on this device. Sign in to back them up and access them elsewhere.',
+  'inbox.anonymousNudgeBody': 'Sign in to back up your library and access it across devices.',
   'inbox.anonymousNudgeDismissA11y': 'Dismiss',
   'inbox.moreActions': 'More actions',
   'inbox.selectAction': 'Select items…',
@@ -281,7 +287,7 @@ export const en = {
   // the full virtualized list. Header title names the active facet scope.
   'inbox.tagSearchPlaceholder': 'Search tags',
   'inbox.tagViewCloud': 'Cloud',
-  'inbox.tagViewAll': 'All',
+  'inbox.tagViewAll': 'List',
   'inbox.tagViewCloudA11y': 'Show the tag cloud',
   'inbox.tagViewAllA11y': 'Show all tags as a list',
   // Header titles, by scope: whole library / a collection / the uncollected set.
@@ -583,7 +589,7 @@ export const en = {
     'Your bookmarks are yours. Export a standard HTML file any browser or bookmark app can import, a CSV for spreadsheets, or a full JSON backup — anytime, even offline.',
   'settings.share.label': 'Open Inbox after sharing',
   'settings.share.inbox': 'Shared links open the Inbox',
-  'settings.share.toast': 'Shared links just show a toast',
+  'settings.share.toast': 'Show a confirmation after saving shared links',
   'settings.analytics.label': 'Share privacy-safe usage analytics',
   'settings.analytics.enabled':
     'Shares app opens, screen categories, platform/sign-in state, share performance/latency, time, and a random analytics ID',
@@ -866,21 +872,19 @@ export const en = {
   'report.categoryIdea': 'Idea',
   'report.categoryOther': 'Other',
   'report.cloudUnavailableTitle': 'Cloud reporting unavailable',
-  'report.cloudUnavailableBody':
-    'Submitting to the cloud isn’t configured on this build, but you can still share a diagnostics report (including recent logs) to send manually.',
+  'report.cloudUnavailableBody': 'Direct reporting is unavailable. You can share your report through another app.',
   'report.signInRequiredTitle': 'Sign in to submit a report',
-  'report.signInRequiredBody':
-    'Reports need a signed-in account so we can follow up. You can still share a diagnostics report to send manually.',
+  'report.signInRequiredBody': 'Share your report, or sign in to send it directly. Sharing opens another app; delivery depends on where you send it.',
   'report.categoryLabel': 'Category',
   'report.whatHappened': 'What happened?',
   'report.descriptionA11y': 'Problem description',
   'report.descriptionPlaceholder': 'Describe the problem or idea',
   'report.diagnosticContext': 'Diagnostic context',
   'report.privacyNote':
-    'Includes app diagnostics and {count} recent log line(s) to aid debugging — not your bookmark list.',
+    { one: 'Includes app diagnostics and 1 recent log line — not your bookmark list.', other: 'Includes app diagnostics and {count} recent log lines — not your bookmark list.' },
   'report.screenshotTitle': 'Include screenshot',
   'report.screenshotNote':
-    'Captured from the screen where you opened this report. It may show bookmark or account details.',
+    'Captured from the screen where you opened this report. It may show bookmark or account details. Sharing with a screenshot creates a report file.',
   'report.screenshotToggleA11y': 'Include screenshot in report',
   'report.screenshotPreviewA11y': 'Screenshot preview',
   'report.contextPreviewA11y': 'Diagnostic context preview',
@@ -889,6 +893,7 @@ export const en = {
   'report.hideDiagnostics': 'Hide diagnostic context',
   'report.shareDiagnosticsA11y': 'Share diagnostics',
   'report.shareWithCount': 'Share diagnostics & logs ({count})',
+  'report.shareReport': 'Share report',
   'report.share': 'Share diagnostics & logs',
   'report.success': 'Thanks — your report was sent.',
   'report.submitA11y': 'Submit report',
