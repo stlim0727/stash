@@ -370,6 +370,33 @@ test('pendingSuggestedFolder enforces confidence hurdles for moves and adds (STA
   });
 });
 
+test('pendingSuggestedFolder suppresses lateral moves from substantive collections even with high confidence (STASH-78)', () => {
+  const moreCollections = [
+    { id: 'col-cooking', name: '요리 레시피' },
+    { id: 'col-food', name: '음식 및 요리' },
+    { id: 'col-swim', name: '수영' },
+    { id: 'col-sports', name: '스포츠 및 건강' },
+    { id: 'col-watch', name: '나중에 보기' },
+  ];
+
+  // Moving from substantive '요리 레시피' -> '음식 및 요리' with high confidence (0.95) must be suppressed as lateral churn
+  const pastaEnrichment = makeFolderEnrichment({ suggested_collection_id: 'col-food', confidence: 0.95 });
+  assert.equal(pendingSuggestedFolder(pastaEnrichment, moreCollections, 'col-cooking'), null);
+
+  // Moving from substantive '수영' -> '스포츠 및 건강' with high confidence (0.95) must be suppressed
+  const swimEnrichment = makeFolderEnrichment({ suggested_collection_id: 'col-sports', confidence: 0.95 });
+  assert.equal(pendingSuggestedFolder(swimEnrichment, moreCollections, 'col-swim'), null);
+
+  // Moving OUT of generic bucket '나중에 보기' -> '수영' with high confidence is allowed (triage move)
+  const triageEnrichment = makeFolderEnrichment({ suggested_collection_id: 'col-swim', confidence: 0.95 });
+  assert.deepEqual(pendingSuggestedFolder(triageEnrichment, moreCollections, 'col-watch'), {
+    kind: 'existing',
+    id: 'col-swim',
+    name: '수영',
+    from: { id: 'col-watch', name: '나중에 보기' },
+  });
+});
+
 test('summaryToken is stable across whitespace/case-only differences', () => {
   const a = summaryToken('A concise overview of the article.');
   const b = summaryToken('  a   concise overview   of the article.  ');

@@ -25,7 +25,7 @@
 import { DummyProvider } from './dummy-provider.ts';
 import { GeminiContentError, GeminiProvider } from './gemini-provider.ts';
 import type { EnrichmentInput, EnrichmentOutput, EnrichmentProvider } from './provider.ts';
-import { matchSuggestedCollection } from './collection-match.ts';
+import { isGenericCollection, matchSuggestedCollection } from './collection-match.ts';
 import { resolveCallerAuth, shouldFailClosedOnRateLimit } from './request-auth.ts';
 import { isUuid } from './validation.ts';
 import {
@@ -613,11 +613,17 @@ async function processEnrichmentRow(
         (!matched && output.suggested_collection?.trim())),
   );
   // Hurdle: if the bookmark already lives in a collection, changing it requires
-  // convincing confidence (>= 0.85). If the model's confidence does not clear this
-  // hurdle, reject the move suggestion (null) rather than encoding the incumbent as one (STASH-74).
+  // convincing confidence (>= 0.85), AND the incumbent collection must be a generic
+  // holding bucket (like "Watch Later" or "Saved"). Lateral moves out of substantive
+  // user collections (e.g. "Food" -> "음식 및 요리" or "요리 레시피" -> "음식 및 요리")
+  // are rejected (null) so they never persist as unconvincing suggestions (STASH-74, STASH-78).
   // Likewise, if the model echoed the incumbent collection, persist no suggestion (null)
   // so status-quo preservation never persists a phantom recommendation.
-  const clearsMoveHurdle = output.confidence !== null && output.confidence >= FOLDER_MOVE_MIN_CONFIDENCE;
+  const isIncumbentGeneric = isGenericCollection(currentCollectionName);
+  const clearsMoveHurdle =
+    isIncumbentGeneric &&
+    output.confidence !== null &&
+    output.confidence >= FOLDER_MOVE_MIN_CONFIDENCE;
   const effectiveMatchedId =
     isIncumbentEcho || (isMove && !clearsMoveHurdle) ? null : (matched?.id ?? null);
   const effectiveSuggestedName =
@@ -1297,11 +1303,17 @@ Deno.serve(async (req) => {
           (!matchedCollection && output.suggested_collection?.trim())),
     );
     // Hurdle: if the bookmark already lives in a collection, changing it requires
-    // convincing confidence (>= 0.85). If the model's confidence does not clear this
-    // hurdle, reject the move suggestion (null) rather than encoding the incumbent as one (STASH-74).
+    // convincing confidence (>= 0.85), AND the incumbent collection must be a generic
+    // holding bucket (like "Watch Later" or "Saved"). Lateral moves out of substantive
+    // user collections (e.g. "Food" -> "음식 및 요리" or "요리 레시피" -> "음식 및 요리")
+    // are rejected (null) so they never persist as unconvincing suggestions (STASH-74, STASH-78).
     // Likewise, if the model echoed the incumbent collection, persist no suggestion (null)
     // so status-quo preservation never persists a phantom recommendation.
-    const clearsMoveHurdle = output.confidence !== null && output.confidence >= FOLDER_MOVE_MIN_CONFIDENCE;
+    const isIncumbentGeneric = isGenericCollection(currentCollectionName);
+    const clearsMoveHurdle =
+      isIncumbentGeneric &&
+      output.confidence !== null &&
+      output.confidence >= FOLDER_MOVE_MIN_CONFIDENCE;
     const suggestedCollectionId =
       isIncumbentEcho || (isMove && !clearsMoveHurdle)
         ? null
