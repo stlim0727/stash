@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 
+import { ko } from '@/i18n/ko';
 import { palettes } from '@/theme';
 
 function luminance(hex: string): number {
@@ -14,6 +15,9 @@ function contrast(a: string, b: string): number {
 }
 
 for (const [theme, palette] of Object.entries(palettes)) {
+  test(`${theme} tag cloud text meets 4.5:1 against its background`, () => {
+    assert.ok(contrast(palette.accentText, palette.background) >= 4.5);
+  });
   test(`${theme} primary button text meets 4.5:1 contrast`, () => {
     assert.ok(contrast(palette.accentForeground, palette.accent) >= 4.5);
   });
@@ -25,3 +29,9 @@ for (const [theme, palette] of Object.entries(palettes)) {
     });
   }
 }
+
+test('new library and reporting copy has Korean translations', () => {
+  for (const key of ['library.paused', 'library.retry', 'library.resume', 'library.saved', 'library.guest', 'library.failed', 'library.waiting', 'report.shareReport'] as const) {
+    assert.ok(ko[key]);
+  }
+});

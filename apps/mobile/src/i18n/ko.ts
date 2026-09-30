@@ -8,6 +8,14 @@ import type { Catalog } from '@/i18n/messages';
  * The brand name "Keepory" is intentionally left untranslated.
  */
 export const ko: Catalog = {
+  'library.paused': '동기화 일시 중지됨',
+  'library.retry': '다시 시도',
+  'library.resume': '동기화를 계속하려면 로그인하세요',
+  'library.saved': '이 기기에 저장됨',
+  'library.guest': '이 기기의 라이브러리',
+  'library.failed': '동기화 실패',
+  'library.waiting': '동기화 대기 중',
+
   // Brand name is not localized; Korean reuses the same "Keepory" wordmark.
   'app.nameLocal': 'Keepory',
   'app.tagline': '지금 저장하고, 정리는 나중에.',
@@ -124,8 +132,7 @@ export const ko: Catalog = {
   'inbox.emptyHintWebGetAndroid': '안드로이드 앱 받기',
   'inbox.emptyTutorialButton': 'Keepory 사용법 알아보기',
   'inbox.emptyTutorialA11y': 'Keepory 기능 가이드 튜토리얼 열기',
-  'inbox.anonymousNudgeBody':
-    '북마크는 이 기기에만 저장되어 있어요. 로그인하면 백업하고 다른 기기에서도 볼 수 있어요.',
+  'inbox.anonymousNudgeBody': '로그인하여 라이브러리를 백업하고 여러 기기에서 이용하세요.',
   'inbox.anonymousNudgeDismissA11y': '닫기',
   'inbox.moreActions': '더보기',
   'inbox.selectAction': '여러 항목 선택…',
@@ -187,7 +194,7 @@ export const ko: Catalog = {
   // 태그 둘러보기 화면 (/browse/tags).
   'inbox.tagSearchPlaceholder': '태그 검색',
   'inbox.tagViewCloud': '클라우드',
-  'inbox.tagViewAll': '전체',
+  'inbox.tagViewAll': '목록',
   'inbox.tagViewCloudA11y': '태그 클라우드 보기',
   'inbox.tagViewAllA11y': '모든 태그를 목록으로 보기',
   'inbox.tagsTitle': '태그',
@@ -394,7 +401,7 @@ export const ko: Catalog = {
     '북마크는 당신의 것입니다. 어떤 브라우저나 북마크 앱에서도 가져올 수 있는 표준 HTML 파일, 스프레드시트용 CSV, 또는 전체 JSON 백업으로 — 오프라인에서도 언제든 내보낼 수 있습니다.',
   'settings.share.label': '공유 후 인박스 열기',
   'settings.share.inbox': '공유한 링크가 인박스를 엽니다',
-  'settings.share.toast': '공유한 링크는 토스트만 표시합니다',
+  'settings.share.toast': '공유한 링크를 저장한 후 확인 메시지 표시',
   'settings.analytics.label': '개인정보 보호 사용 분석 공유',
   'settings.analytics.enabled':
     '앱 실행, 화면 범주, 플랫폼/로그인 상태, 공유 성능/지연 시간, 시각, 무작위 분석 ID를 공유합니다',
@@ -621,11 +628,9 @@ export const ko: Catalog = {
   'report.categoryIdea': '아이디어',
   'report.categoryOther': '기타',
   'report.cloudUnavailableTitle': '클라우드 신고 사용 불가',
-  'report.cloudUnavailableBody':
-    '이 빌드에서는 클라우드 제출이 구성되어 있지 않지만, 진단 보고서(최근 로그 포함)를 공유하여 직접 보낼 수 있습니다.',
+  'report.cloudUnavailableBody': '직접 보고 기능을 사용할 수 없습니다. 다른 앱으로 보고서를 공유할 수 있습니다.',
   'report.signInRequiredTitle': '신고를 제출하려면 로그인하세요',
-  'report.signInRequiredBody':
-    '후속 조치를 위해 로그인한 계정이 필요합니다. 진단 보고서는 로그인 없이도 직접 공유할 수 있습니다.',
+  'report.signInRequiredBody': '보고서를 공유하거나 로그인하여 직접 보내세요. 공유하면 다른 앱이 열리며, 전송 여부는 선택한 앱에 따라 달라집니다.',
   'report.categoryLabel': '카테고리',
   'report.whatHappened': '무슨 일이 있었나요?',
   'report.descriptionA11y': '문제 설명',
@@ -635,7 +640,7 @@ export const ko: Catalog = {
     '디버깅을 돕기 위해 앱 진단과 최근 로그 {count}줄을 포함합니다 — 북마크 목록은 포함되지 않습니다.',
   'report.screenshotTitle': '스크린샷 포함',
   'report.screenshotNote':
-    '이 신고를 연 화면에서 캡처됩니다. 북마크나 계정 정보가 보일 수 있습니다.',
+    '이 신고를 연 화면에서 캡처됩니다. 북마크나 계정 정보가 보일 수 있습니다. 스크린샷을 포함하여 공유하면 보고서 파일을 만듭니다.',
   'report.screenshotToggleA11y': '신고에 스크린샷 포함',
   'report.screenshotPreviewA11y': '스크린샷 미리보기',
   'report.contextPreviewA11y': '진단 컨텍스트 미리보기',
@@ -644,6 +649,7 @@ export const ko: Catalog = {
   'report.hideDiagnostics': '진단 컨텍스트 숨기기',
   'report.shareDiagnosticsA11y': '진단 공유',
   'report.shareWithCount': '진단 및 로그 공유 ({count})',
+  'report.shareReport': '보고서 공유',
   'report.share': '진단 및 로그 공유',
   'report.success': '감사합니다 — 신고가 전송되었습니다.',
   'report.submitA11y': '신고 제출',

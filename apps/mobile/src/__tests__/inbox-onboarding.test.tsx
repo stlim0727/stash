@@ -172,7 +172,7 @@ test('the anonymous nudge shows once an anonymous user has 2+ bookmarks, with a 
   await waitFor(() => expect(screen.getByTestId('anonymous-nudge-banner')).toBeTruthy());
   expect(
     screen.getByText(
-      'Your bookmarks are saved on this device. Sign in to back them up and access them elsewhere.',
+      'Sign in to back up your library and access it across devices.',
     ),
   ).toBeTruthy();
 

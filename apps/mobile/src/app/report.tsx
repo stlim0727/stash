@@ -37,6 +37,7 @@ import {
   getShareDiagnosticsHistory,
   hydrateNativeShareDebugLog,
 } from '@/share/share-diagnostics';
+import { deliverExport } from '@/share/export-data';
 import { getStorageDiagnostics } from '@/storage/diagnostics';
 import { getPullDiagnostics } from '@/sync/pull-diagnostics';
 import { getReconcileDiagnostics } from '@/sync/reconcile-diagnostics';
@@ -301,7 +302,12 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       // effect's timing, so a share triggered right after a failed capture
       // still carries it (Sentry STASH-2Q).
       await hydrateNativeShareDebugLog();
-      await Share.share({ message: formatDiagnosticsReport(collectContext()) });
+      if (includeScreenshot && screenshot) {
+        await deliverExport({ filename: 'keepory-report.json', mimeType: 'application/json',
+          contents: JSON.stringify({ category, message: message.trim(), context: collectContext() }, null, 2) });
+        return;
+      }
+      await Share.share({ message: `${t(CATEGORIES.find((item) => item.value === category)!.labelKey)}\n\n${message.trim()}\n\n${formatDiagnosticsReport(collectContext())}` });
     } catch {
       // User dismissed the share sheet, or it is unavailable — nothing to do.
     }
@@ -361,98 +367,13 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
     }
   };
 
-  const content =
-    auth.status === 'not_configured' ? (
-      <ScrollView
-        style={webOverscrollContain}
-        contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 16 }]}
-      >
-        <View style={[styles.field, { backgroundColor: palette.card }]}>
-          <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
-            {t('report.cloudUnavailableTitle')}
-          </Text>
-          <Text style={[styles.fieldValue, { color: palette.text }]}>
-            {t('report.cloudUnavailableBody')}
-          </Text>
-        </View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={t('report.shareDiagnosticsA11y')}
-          style={[styles.secondaryButton, { borderColor: palette.border }]}
-          onPress={() => void handleShare()}
-        >
-          <View style={styles.buttonRow}>
-            <Ionicons
-              testID="share-diagnostics-icon"
-              name="share-social-outline"
-              size={18}
-              color={palette.text}
-            />
-            <Text style={[styles.secondaryButtonLabel, { color: palette.text }]}>
-              {t('report.shareWithCount', { count: logCount })}
-            </Text>
-          </View>
-        </Pressable>
-        <Text
-          accessibilityLabel={t('report.contextPreviewA11y')}
-          style={[styles.code, { color: palette.text, borderColor: palette.border }]}
-        >
-          {contextPreview}
-        </Text>
-      </ScrollView>
-    ) : auth.status === 'anonymous' ? (
-      <ScrollView
-        style={webOverscrollContain}
-        contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 16 }]}
-      >
-        <View style={[styles.field, { backgroundColor: palette.card }]}>
-          <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
-            {t('report.signInRequiredTitle')}
-          </Text>
-          <Text style={[styles.fieldValue, { color: palette.text }]}>
-            {t('report.signInRequiredBody')}
-          </Text>
-          <Button
-            variant="secondary"
-            size="sm"
-            style={styles.signInButton}
-            onPress={() => router.push('/settings')}
-          >
-            {t('settings.account.signIn')}
-          </Button>
-        </View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={t('report.shareDiagnosticsA11y')}
-          style={[styles.secondaryButton, { borderColor: palette.border }]}
-          onPress={() => void handleShare()}
-        >
-          <View style={styles.buttonRow}>
-            <Ionicons
-              testID="share-diagnostics-icon"
-              name="share-social-outline"
-              size={18}
-              color={palette.text}
-            />
-            <Text style={[styles.secondaryButtonLabel, { color: palette.text }]}>
-              {t('report.shareWithCount', { count: logCount })}
-            </Text>
-          </View>
-        </Pressable>
-        <Text
-          accessibilityLabel={t('report.contextPreviewA11y')}
-          style={[styles.code, { color: palette.text, borderColor: palette.border }]}
-        >
-          {contextPreview}
-        </Text>
-      </ScrollView>
-    ) : (
+  const content = (
       <ScrollView
         style={webOverscrollContain}
         contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 16 }]}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={[styles.field, { backgroundColor: palette.card }]}>
+      <View style={[styles.field, { backgroundColor: palette.card }]}>
           <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>{t('report.categoryLabel')}</Text>
           <View style={styles.chipRow}>
             {CATEGORIES.map((item) => {
@@ -464,7 +385,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
                   accessibilityState={{ selected }}
                   style={[
                     styles.chip,
-                    { borderColor: palette.border },
+                    { borderColor: palette.controlBorder },
                     selected && { backgroundColor: palette.accent, borderColor: palette.accent },
                   ]}
                   onPress={() => {
@@ -488,7 +409,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
             style={[
               styles.input,
               styles.multiline,
-              { color: palette.text, borderColor: palette.border },
+              { color: palette.text, borderColor: palette.controlBorder },
             ]}
             placeholder={t('report.descriptionPlaceholder')}
             placeholderTextColor={palette.textSecondary}
@@ -497,6 +418,19 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
             onChangeText={handleMessageChange}
           />
         </View>
+
+          {auth.status !== 'authenticated' ? (
+          <View style={[styles.field, { backgroundColor: palette.card }]}>
+            <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
+              {t(auth.status === 'not_configured' ? 'report.cloudUnavailableTitle' : 'report.signInRequiredTitle')}
+            </Text>
+            <Text style={[styles.fieldValue, { color: palette.text }]}>
+              {t(auth.status === 'not_configured' ? 'report.cloudUnavailableBody' : 'report.signInRequiredBody')}
+            </Text>
+            {auth.status !== 'not_configured' ? <Button variant="secondary" onPress={() => router.push('/settings')}>
+              {t('settings.account.signIn')}</Button> : null}
+          </View>
+        ) : null}
 
       <View style={[styles.field, { backgroundColor: palette.card }]}>
         <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
@@ -565,7 +499,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         ) : null}
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={t('report.shareDiagnosticsA11y')}
+          accessibilityLabel={t('report.shareReport')}
           style={[styles.secondaryButton, { borderColor: palette.border }]}
           onPress={() => void handleShare()}
         >
@@ -577,7 +511,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
               color={palette.text}
             />
             <Text style={[styles.secondaryButtonLabel, { color: palette.text }]}>
-              {t('report.share')}
+              {t('report.shareReport')}
             </Text>
           </View>
         </Pressable>
@@ -590,6 +524,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         <Text style={[styles.error, { color: palette.danger }]}>{submit.message}</Text>
       ) : null}
 
+      {auth.status === 'authenticated' ? (
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={t('report.submitA11y')}
@@ -609,6 +544,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
           </Text>
         </View>
       </Pressable>
+      ) : null}
       </ScrollView>
     );
 
@@ -724,6 +660,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   chip: {
+    minHeight: 48,
+    justifyContent: 'center',
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 16,
     paddingVertical: 6,
@@ -752,6 +690,8 @@ const styles = StyleSheet.create({
     fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
   },
   contextToggle: {
+    minHeight: 48,
+    justifyContent: 'center',
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 10,
     paddingVertical: 10,
@@ -807,6 +747,8 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   secondaryButton: {
+    minHeight: 48,
+    justifyContent: 'center',
     borderRadius: 12,
     borderWidth: StyleSheet.hairlineWidth,
     paddingVertical: 13,

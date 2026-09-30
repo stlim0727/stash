@@ -1,3 +1,6 @@
+import { Share } from 'react-native';
+import { deliverExport } from '@/share/export-data';
+jest.mock('@/share/export-data', () => ({ deliverExport: jest.fn(async () => {}) }));
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { type ReactNode, useEffect } from 'react';
 
@@ -123,7 +126,7 @@ test('renders the form and shows the privacy note', async () => {
   expect(screen.getByText(/not your bookmark list/)).toBeTruthy();
   expect(screen.getByLabelText('Toggle diagnostic context preview')).toBeTruthy();
   expect(screen.queryByLabelText('Diagnostic context preview')).toBeNull();
-  expect(screen.getByLabelText('Share diagnostics')).toBeTruthy();
+  expect(screen.getByLabelText('Share report')).toBeTruthy();
   expect(screen.getByTestId('share-diagnostics-icon')).toBeTruthy();
   expect(screen.getByTestId('submit-report-icon')).toBeTruthy();
 });
@@ -572,7 +575,7 @@ test('shows a friendly message when Supabase is not configured', async () => {
   await waitFor(() => expect(screen.getByText('Cloud reporting unavailable')).toBeTruthy());
   expect(screen.queryByLabelText('Submit report')).toBeNull();
   // Even without the cloud, diagnostics can still be shared.
-  expect(screen.getByLabelText('Share diagnostics')).toBeTruthy();
+  expect(screen.getByLabelText('Share report')).toBeTruthy();
 });
 
 test('prompts an anonymous session to sign in instead of showing the form', async () => {
@@ -585,9 +588,10 @@ test('prompts an anonymous session to sign in instead of showing the form', asyn
 
   await waitFor(() => expect(screen.getByText('Sign in to submit a report')).toBeTruthy());
   expect(screen.queryByLabelText('Submit report')).toBeNull();
-  expect(screen.queryByLabelText('Problem description')).toBeNull();
+  expect(screen.getByLabelText('Problem description')).toBeTruthy();
+  expect(screen.queryByLabelText('Diagnostic context preview')).toBeNull();
   // Diagnostics can still be shared without an account.
-  expect(screen.getByLabelText('Share diagnostics')).toBeTruthy();
+  expect(screen.getByLabelText('Share report')).toBeTruthy();
 
   await fireEvent.press(screen.getByText('Sign In'));
   expect(mockPush).toHaveBeenCalledWith('/settings');
@@ -617,4 +621,34 @@ test('navigates back after a successful submission after the timeout', async () 
 
   expect(mockBack).toHaveBeenCalledTimes(1);
   jest.useRealTimers();
+});
+
+
+test('guest report sharing includes the description and preserves the draft on cancellation', async () => {
+  mockAuth = { ...mockAuth, status: 'anonymous' };
+  const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: Share.dismissedAction });
+  const screen = await renderReport();
+  await fireEvent.changeText(screen.getByLabelText('Problem description'), 'The search field behaved unexpectedly');
+  await fireEvent.press(screen.getByLabelText('Share report'));
+  await waitFor(() => expect(share).toHaveBeenCalled());
+  expect(share.mock.calls[0][0].message).toContain('The search field behaved unexpectedly');
+  expect(share.mock.calls[0][0].message).toContain('Keepory diagnostics');
+  expect(screen.getByLabelText('Problem description').props.value).toBe('The search field behaved unexpectedly');
+  expect(screen.queryByLabelText('Diagnostic context preview')).toBeNull();
+  share.mockRestore();
+});
+
+test('sharing an explicitly included screenshot exports the complete report file', async () => {
+  mockAuth = { ...mockAuth, status: 'anonymous' };
+  setPendingFeedbackScreenshot({ dataUrl: 'data:image/png;base64,example', mimeType: 'image/png', width: 390, height: 844, capturedAt: '2026-09-30T00:00:00Z' } as never);
+  const screen = await renderReport();
+  await fireEvent.changeText(screen.getByLabelText('Problem description'), 'Screenshot attached');
+  await fireEvent(screen.getByLabelText('Include screenshot in report'), 'valueChange', true);
+  await fireEvent.press(screen.getByLabelText('Share report'));
+  await waitFor(() => expect(deliverExport).toHaveBeenCalled());
+  const file = (deliverExport as jest.Mock).mock.calls.at(-1)[0];
+  const report = JSON.parse(file.contents);
+  expect(report.message).toBe('Screenshot attached');
+  expect(report.context.screenshot.dataUrl).toBe('data:image/png;base64,example');
+  expect(screen.getByLabelText('Problem description').props.value).toBe('Screenshot attached');
 });
