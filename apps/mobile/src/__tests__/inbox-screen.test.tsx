@@ -316,26 +316,17 @@ test('web keeps the pinned hero outside a transformed compositing layer', async 
   expect(StyleSheet.flatten(header.props.style).transform).toBeUndefined();
 });
 
-test('web falls back to the text wordmark when the image "loads" with no pixels (STASH-5J)', async () => {
-  Object.defineProperty(Platform, 'OS', { configurable: true, get: () => 'web' });
+async function selectScope(screen: Awaited<ReturnType<typeof renderInbox>>, label: string) {
+  await fireEvent.press(screen.getByTestId('inbox-scope-picker'));
+  await fireEvent.press(screen.getByRole('button', { name: label }));
+}
+
+test('the shared brand uses a decorative bundled vector and one accessible label', async () => {
   fakeRepo.__reset([]);
-
   const screen = await renderInbox();
-
-  const image = await waitFor(() => screen.getByTestId('inbox-wordmark-image'));
-
-  await act(async () => {
-    fireEvent(image, 'load', { nativeEvent: { source: { width: 120, height: 28 } } });
-  });
-  expect(screen.queryByTestId('inbox-wordmark-fallback')).toBeNull();
-
-  // A later "load" that reports a 0x0 image (an aborted fetch that still
-  // fires `load` instead of `error`) must not stay treated as a success.
-  await act(async () => {
-    fireEvent(image, 'load', { nativeEvent: { source: { width: 0, height: 0 } } });
-  });
-
-  expect(screen.getByTestId('inbox-wordmark-fallback')).toBeTruthy();
+  expect(screen.getByTestId('keepory-yellow-duck').props.accessible).toBe(false);
+  expect(screen.getByTestId('inbox-hero-wordmark').props.accessibilityLabel).toBe('Keepory');
+  expect(screen.queryByTestId('inbox-wordmark-image')).toBeNull();
 });
 
 test('exposes each bookmark row as a button labelled by its title', async () => {
@@ -429,8 +420,10 @@ test('announces unseen arrivals as a "new" review chip, with no acknowledge ✕'
 
   // The Review entry point is the first chip on the browse shelf (it used to be
   // a full-width banner); unseen arrivals put it in its accent "new" state.
-  await waitFor(() => screen.getByTestId('review-chip'));
-  expect(screen.getByText('✨ 1 new AI suggestion')).toBeTruthy();
+  await waitFor(() => screen.getByTestId('inbox-menu-notification'));
+  await fireEvent.press(screen.getByTestId('inbox-menu-open'));
+  expect(screen.getByText('AI suggestions · 1 unread')).toBeTruthy();
+  await fireEvent.press(screen.getByText('Cancel'));
   // The review chip gives an aggregate count; the per-card badge stays visible
   // so users can see exactly which inbox item needs review.
   expect(screen.getByLabelText('1 AI suggestion')).toBeTruthy();
@@ -453,8 +446,10 @@ test('shows a persistent review banner for pending suggestions even with nothing
   const screen = await renderInbox();
 
   await waitFor(() => expect(screen.getByText('Foreground save')).toBeTruthy());
-  expect(screen.getByTestId('review-chip')).toBeTruthy();
-  expect(screen.getByText('✨ 1 suggestion to review')).toBeTruthy();
+  expect(screen.queryByTestId('inbox-menu-notification')).toBeNull();
+  await fireEvent.press(screen.getByTestId('inbox-menu-open'));
+  expect(screen.getByText('AI suggestions · 0 unread')).toBeTruthy();
+  await fireEvent.press(screen.getByText('Cancel'));
   // Not the "new" alert, and no acknowledge ✕ in the calm state.
   expect(screen.queryByText('✨ 1 new AI suggestion')).toBeNull();
   expect(screen.queryByLabelText('Dismiss new AI suggestions')).toBeNull();
@@ -473,8 +468,10 @@ test('the unseen banner counts a folder-only recommendation (no tags)', async ()
 
   const screen = await renderInbox();
 
-  await waitFor(() => expect(screen.getByTestId('review-chip')).toBeTruthy());
-  expect(screen.getByText('✨ 1 new AI suggestion')).toBeTruthy();
+  await waitFor(() => expect(screen.getByTestId('inbox-menu-notification')).toBeTruthy());
+  await fireEvent.press(screen.getByTestId('inbox-menu-open'));
+  expect(screen.getByText('AI suggestions · 1 unread')).toBeTruthy();
+  await fireEvent.press(screen.getByText('Cancel'));
 });
 
 test('the per-card ✨ badge counts a folder-only recommendation (no tags)', async () => {
@@ -494,8 +491,10 @@ test('the per-card ✨ badge counts a folder-only recommendation (no tags)', asy
   // banner/Review inclusion rule (regression: the badge ignored folders).
   expect(screen.getByLabelText('1 AI suggestion')).toBeTruthy();
   // ...and the same folder-only item counts toward the persistent review banner.
-  expect(screen.getByTestId('review-chip')).toBeTruthy();
-  expect(screen.getByText('✨ 1 suggestion to review')).toBeTruthy();
+  expect(screen.queryByTestId('inbox-menu-notification')).toBeNull();
+  await fireEvent.press(screen.getByTestId('inbox-menu-open'));
+  expect(screen.getByText('AI suggestions · 0 unread')).toBeTruthy();
+  await fireEvent.press(screen.getByText('Cancel'));
 });
 
 test('the per-card ✨ badge and the review banner count a summary-only bookmark (no tags, no folder)', async () => {
@@ -521,8 +520,10 @@ test('the per-card ✨ badge and the review banner count a summary-only bookmark
   // recommendation does — otherwise it would be reviewable on /review but
   // invisible from the Inbox.
   expect(screen.getByLabelText('1 AI suggestion')).toBeTruthy();
-  expect(screen.getByTestId('review-chip')).toBeTruthy();
-  expect(screen.getByText('✨ 1 suggestion to review')).toBeTruthy();
+  expect(screen.queryByTestId('inbox-menu-notification')).toBeNull();
+  await fireEvent.press(screen.getByTestId('inbox-menu-open'));
+  expect(screen.getByText('AI suggestions · 0 unread')).toBeTruthy();
+  await fireEvent.press(screen.getByText('Cancel'));
 });
 
 test('a durably-dismissed folder drops the per-card ✨ badge', async () => {
@@ -541,7 +542,7 @@ test('a durably-dismissed folder drops the per-card ✨ badge', async () => {
   // No pending tag and the folder is dismissed → nothing to badge, and the
   // persistent review banner honors that durable dismissal (stays down).
   expect(screen.queryByLabelText('1 AI suggestion')).toBeNull();
-  expect(screen.queryByTestId('review-chip')).toBeNull();
+  expect(screen.queryByTestId('inbox-menu-notification')).toBeNull();
 });
 
 test('the unseen banner ignores a folder-only item whose folder was dismissed', async () => {
@@ -559,7 +560,7 @@ test('the unseen banner ignores a folder-only item whose folder was dismissed', 
 
   await waitFor(() => expect(screen.getByText('Folder only')).toBeTruthy());
   // Nothing live remains to review, so the banner stays down despite the marker.
-  expect(screen.queryByTestId('review-chip')).toBeNull();
+  expect(screen.queryByTestId('inbox-menu-notification')).toBeNull();
 });
 
 test('the unseen banner ignores items whose suggestions were already applied', async () => {
@@ -588,7 +589,7 @@ test('the unseen banner ignores items whose suggestions were already applied', a
 
   await waitFor(() => expect(screen.getByText('Already handled')).toBeTruthy());
   // No live pending suggestion remains, so the banner never shows.
-  expect(screen.queryByTestId('review-chip')).toBeNull();
+  expect(screen.queryByTestId('inbox-menu-notification')).toBeNull();
 });
 
 test('search filters the list and shows the match count', async () => {
@@ -651,7 +652,7 @@ test('slims the header while searching: the sort row and browse shelf fold away'
 
   // Before searching, the sort pill and browse shelf are present.
   expect(screen.getByTestId('inbox-view-options')).toBeTruthy();
-  expect(screen.getByTestId('browse-shelf')).toBeTruthy();
+  expect(screen.getByTestId('inbox-scope-picker')).toBeTruthy();
 
   // Open search (tap-to-open), type, then blur to reach the "results, keyboard
   // down" slim state (searching + field blurred).
@@ -664,14 +665,14 @@ test('slims the header while searching: the sort row and browse shelf fold away'
   // Slimmed: the sort row and the browse shelf are gone — but the input stays and
   // the persistent results ribbon (with its clear ✕) remains under it.
   expect(screen.queryByText('Newest')).toBeNull();
-  expect(screen.queryByTestId('browse-shelf')).toBeNull();
+  expect(screen.queryByTestId('inbox-scope-picker')).toBeNull();
   expect(screen.getByTestId('inbox-search-input')).toBeTruthy();
   expect(screen.getByTestId('inbox-filter-bar')).toBeTruthy();
 
   // Clearing the search restores the sort row and the browse shelf.
   await fireEvent.press(screen.getByTestId('inbox-filter-clear'));
   await waitFor(() => expect(screen.getByTestId('inbox-view-options')).toBeTruthy());
-  await waitFor(() => expect(screen.getByTestId('browse-shelf')).toBeTruthy());
+  await waitFor(() => expect(screen.getByTestId('inbox-scope-picker')).toBeTruthy());
 });
 
 test('highlights the matched span in a result title while searching', async () => {
@@ -755,19 +756,19 @@ test('search stays visible before, during and after an active search', async () 
   expect(screen.getByTestId('inbox-search-input')).toBeTruthy();
   expect(screen.getByTestId('inbox-search-open')).toBeTruthy();
   expect(screen.getByTestId('inbox-view-options')).toBeTruthy();
-  expect(screen.getByTestId('browse-shelf')).toBeTruthy();
+  expect(screen.getByTestId('inbox-scope-picker')).toBeTruthy();
 
   // Activating search focuses the field and folds the options and shelf away.
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
   await waitFor(() => expect(screen.getByTestId('inbox-search-input')).toBeTruthy());
   expect(screen.queryByText('Newest')).toBeNull();
-  expect(screen.queryByTestId('browse-shelf')).toBeNull();
+  expect(screen.queryByTestId('inbox-scope-picker')).toBeNull();
 
   // Closing the session keeps the field visible and restores the filter row.
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
   await waitFor(() => expect(screen.getByTestId('inbox-search-input')).toBeTruthy());
   expect(screen.getByTestId('inbox-view-options')).toBeTruthy();
-  expect(screen.getByTestId('browse-shelf')).toBeTruthy();
+  expect(screen.getByTestId('inbox-scope-picker')).toBeTruthy();
 });
 
 test('suppresses on-drag keyboard dismissal for a moment after opening search', async () => {
@@ -1001,12 +1002,12 @@ test('the collection chip filters the Inbox to that collection', async () => {
   await waitFor(() => expect(screen.getByText('Work doc')).toBeTruthy());
   expect(screen.getByText('Loose link')).toBeTruthy();
 
-  await fireEvent.press(screen.getByText('Work'));
+  await selectScope(screen, 'Work');
 
   expect(screen.getByText('Work doc')).toBeTruthy();
   expect(screen.queryByText('Loose link')).toBeNull();
 
-  await fireEvent.press(screen.getByText('Inbox'));
+  await selectScope(screen, 'Inbox');
   expect(screen.getByText('Loose link')).toBeTruthy();
   expect(screen.queryByText('Work doc')).toBeNull();
 });
@@ -1027,8 +1028,9 @@ test('facet chips carry icons that distinguish collections from tags (#142)', as
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Work')).toBeTruthy());
 
-  expect(screen.getByTestId('chip-icon-file-tray-outline')).toBeTruthy();
-  expect(screen.getByTestId('chip-icon-folder-outline')).toBeTruthy();
+  await fireEvent.press(screen.getByTestId('inbox-scope-picker'));
+  expect(screen.getByRole('button', { name: 'Inbox' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Work' })).toBeTruthy();
 });
 
 test('container chips show a bookmark count (folders + Inbox), tags do not', async () => {
@@ -1056,13 +1058,10 @@ test('container chips show a bookmark count (folders + Inbox), tags do not', asy
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Work A')).toBeTruthy());
 
-  const shelf = screen.getByTestId('browse-shelf');
-  // Work folder holds 2, the Inbox set holds 1 — exactly two count tokens.
-  expect(within(shelf).getByText('· 2')).toBeTruthy();
-  expect(within(shelf).getByText('· 1')).toBeTruthy();
-  expect(within(shelf).queryAllByText(/^· /)).toHaveLength(2);
-  // The tag chip is present but carries no count.
-  expect(within(shelf).getByText('#design')).toBeTruthy();
+  await fireEvent.press(screen.getByTestId('inbox-scope-picker'));
+  expect(screen.getByRole('button', { name: 'Work' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Inbox' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: '#design' })).toBeTruthy();
 });
 
 test('the tag chip filters the Inbox to bookmarks with that tag', async () => {
@@ -1086,7 +1085,7 @@ test('the tag chip filters the Inbox to bookmarks with that tag', async () => {
   await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
 
   // The facet chip (a button) — disambiguated from the card's inline #design meta.
-  await fireEvent.press(screen.getByRole('button', { name: '#design' }));
+  await selectScope(screen, '#design');
 
   expect(screen.getByText('Design system')).toBeTruthy();
   expect(screen.queryByText('Unrelated note')).toBeNull();
@@ -1183,7 +1182,7 @@ test('cards show inline collection and tag metadata', async () => {
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
 
-  expect(screen.getByText('in Work')).toBeTruthy();
+  expect(screen.getByText('Work')).toBeTruthy();
   expect(screen.getAllByText('#design').length).toBeGreaterThan(0);
 });
 
@@ -1243,9 +1242,8 @@ test('every image-less card shows a site wordmark', async () => {
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('No favicon')).toBeTruthy());
 
-  const wordmarks = screen.getAllByTestId('inbox-card-wordmark');
-  expect(wordmarks).toHaveLength(2);
-  expect(screen.getByText('RAINDROP')).toBeTruthy();
+  expect(screen.getAllByTestId('inbox-card-monogram')).toHaveLength(2);
+  expect(screen.queryByTestId('inbox-card-preview')).toBeNull();
 });
 
 test('View options switches between saved Card and List layouts', async () => {
@@ -1821,7 +1819,7 @@ test('the Home Tags menu action carries the active folder facet as the route sco
 
   // Narrow to the Work folder first, then open the tag-browse route: the active
   // facet rides along as the scope param.
-  await fireEvent.press(screen.getByText('Work'));
+  await selectScope(screen, 'Work');
   await openHomeMenu(screen);
   await fireEvent.press(screen.getByRole('button', { name: 'Tags' }));
 
@@ -1851,7 +1849,7 @@ test('the active-filter bar clears the facet back to all bookmarks', async () =>
 
   // Pick the #cooking facet chip: the list narrows and the cooking-less
   // bookmark drops out.
-  await fireEvent.press(screen.getByRole('button', { name: '#cooking' }));
+  await selectScope(screen, '#cooking');
   await waitFor(() => expect(screen.queryByText('Local-first software')).toBeNull());
 
   // The sticky filter bar appears; pressing its clear action restores All.
@@ -1898,7 +1896,7 @@ test('selecting the All chip also strips the URL facet params (STASH-T, all rese
   mockSetParams.mockClear();
   // Tap the shelf's "All" chip: the filter resets AND the stale ?tag= param
   // must be stripped so an F5 doesn't resurrect #cooking.
-  await fireEvent.press(screen.getByRole('button', { name: 'All' }));
+  await selectScope(screen, 'All');
   await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
   expect(mockSetParams).toHaveBeenCalledWith({
     tag: undefined,
@@ -1955,7 +1953,7 @@ test('opening the Browse-by-tag route does not change the Inbox filter', async (
   await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
 
   // Narrow to the #cooking facet first.
-  await fireEvent.press(screen.getByRole('button', { name: '#cooking' }));
+  await selectScope(screen, '#cooking');
   await waitFor(() => expect(screen.queryByText('Local-first software')).toBeNull());
 
   // Pressing the toggle navigates and leaves the Inbox's own filter exactly as
@@ -1989,7 +1987,8 @@ test('blank-named tags and collections do not produce empty filter chips', async
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Korean video')).toBeTruthy());
 
-  // The real tag chip renders; the blank ones are dropped.
+  // The real tag chip renders in the scope picker; the blank ones are dropped.
+  await fireEvent.press(screen.getByTestId('inbox-scope-picker'));
   expect(screen.getByRole('button', { name: '#cooking' })).toBeTruthy();
   expect(screen.queryByRole('button', { name: '#' })).toBeNull();
   expect(screen.queryByRole('button', { name: '#   ' })).toBeNull();
@@ -2089,10 +2088,10 @@ test('long-pressing a card enters selection mode and subsequent short press sele
   ]);
 
   const screen = await renderInbox();
-  await waitFor(() => expect(screen.getAllByTestId('inbox-card-preview')[0]).toBeTruthy());
+  await waitFor(() => expect(screen.getAllByTestId('inbox-card-title')[0]).toBeTruthy());
 
   // Long-pressing the preview image enters selection mode directly with 1 selected.
-  await fireEvent(screen.getAllByTestId('inbox-card-preview')[0], 'longPress');
+  await fireEvent(screen.getAllByTestId('inbox-card-title')[0], 'longPress');
   await waitFor(() => {
     expect(screen.getByText('1 selected')).toBeTruthy();
     expect(screen.getByTestId('inbox-bulk-action-bar')).toBeTruthy();
@@ -2155,7 +2154,7 @@ test('a card without a preview image shows the site label instead of the raw URL
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('The future of work')).toBeTruthy());
 
-  expect(screen.getAllByText('WIRED')).toHaveLength(2);
+  expect(screen.getAllByText('WIRED')).toHaveLength(1);
   expect(screen.queryByText('https://example.com/article/12345')).toBeNull();
 });
 
@@ -2214,12 +2213,8 @@ test('a card without a preview image renders a fallback preview banner with the 
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('No preview image')).toBeTruthy());
 
-  // The card renders the preview container with the fallback banner
-  expect(screen.getByTestId('inbox-card-preview')).toBeTruthy();
-  // Uses the site name as a prominent wordmark instead of a one-letter tile.
-  expect(screen.getByTestId('inbox-card-wordmark')).toBeTruthy();
-  expect(screen.getByText('HACKER NEWS')).toBeTruthy();
-  // And the preview ribbon carries the site label
+  expect(screen.queryByTestId('inbox-card-preview')).toBeNull();
+  expect(screen.getByTestId('inbox-card-monogram')).toBeTruthy();
   expect(screen.getByText('Hacker News')).toBeTruthy();
 });
 
@@ -2316,7 +2311,7 @@ test('a query matching both site_name and a URL-only term keeps both matches vis
   await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), 'wired 98765');
 
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
-  expect(screen.getAllByText('WIRED')).toHaveLength(2);
+  expect(screen.getAllByText('WIRED')).toHaveLength(1);
   expect(screen.getByText('https://example.com/article/98765')).toBeTruthy();
 });
 
@@ -2500,7 +2495,8 @@ test('falls back to CardPreviewFallback when preview image fails to load in card
 
   // Now CardPreviewFallback is rendered
   await waitFor(() => {
-    expect(screen.getByTestId('inbox-card-preview-fallback')).toBeTruthy();
+    expect(screen.getByTestId('inbox-card-monogram')).toBeTruthy();
+    expect(screen.queryByTestId('inbox-card-preview')).toBeNull();
   });
   expect(screen.queryByTestId('inbox-card-preview-image')).toBeNull();
 });
@@ -2554,7 +2550,7 @@ test('hero row keeps search open action bounded and unshrinkable within viewport
 
   const wordmark = screen.getByTestId('inbox-hero-wordmark');
   const wordmarkStyle = StyleSheet.flatten(wordmark.props.style);
-  expect(wordmarkStyle.flexShrink).toBe(0);
+  expect(wordmarkStyle.flexShrink).toBe(1);
 });
 
 
@@ -2637,7 +2633,7 @@ test('List results retain the collection that matched a search', async () => {
   const screen = await renderInbox({ layout: null });
   await waitFor(() => expect(screen.getByTestId('inbox-list-title')).toBeTruthy());
   await fireEvent.changeText(screen.getByTestId('inbox-search-input'), 'Work');
-  await waitFor(() => expect(screen.getByText('in Work')).toBeTruthy());
+  await waitFor(() => expect(screen.getByText('Work')).toBeTruthy());
   expect(screen.getByTestId('inbox-list-title')).toBeTruthy();
 });
 
@@ -2678,9 +2674,10 @@ test('web hero search stays outside the collapsing header and reopens search aft
   expect(within(collapsible).queryByTestId('inbox-hero-search')).toBeNull();
   await fireEvent(collapsible, 'layout', { nativeEvent: { layout: { height: 150, width: 390, x: 0, y: 0 } } });
   await fireEvent(screen.getByTestId('inbox-list'), 'scroll', { nativeEvent: { contentOffset: { x: 0, y: 600 }, contentSize: { width: 390, height: 2000 }, layoutMeasurement: { width: 390, height: 844 } } });
-  await fireEvent.press(screen.getByTestId('inbox-hero-search'));
+  await fireEvent(screen.getByTestId('inbox-list'), 'scroll', { nativeEvent: { contentOffset: { x: 0, y: 0 }, contentSize: { width: 390, height: 2000 }, layoutMeasurement: { width: 390, height: 844 } } });
+  await fireEvent.press(screen.getByTestId('inbox-search-open'));
   expect(screen.getByTestId('inbox-search-input')).toBeTruthy();
-  expect(screen.getByTestId('inbox-hero-search').props.accessibilityLabel).toBe('Close search');
+  expect(screen.getByTestId('inbox-search-open').props.accessibilityLabel).toBe('Close search');
 });
 
 test('card source announces and toggles selection instead of opening the URL', async () => {

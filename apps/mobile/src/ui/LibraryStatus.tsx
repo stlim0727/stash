@@ -6,17 +6,17 @@ import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
 import { Button } from '@/ui/Button';
 
-export function LibraryStatus({ bookmarks, queue, authStatus, loading, loadError, syncing, paused = false, retry, signIn, guestActions }: {
+export function LibraryStatus({ bookmarks, queue, authStatus, loading, loadError, syncing, paused = false, retry, signIn, guestActions, inline = false }: {
   bookmarks: Bookmark[]; queue: LocalPendingBookmark[]; authStatus: string;
   loading: boolean; loadError: boolean; syncing: boolean; paused?: boolean;
-  retry: () => void; signIn: () => void; guestActions?: ReactNode;
+  retry: () => void; signIn: () => void; guestActions?: ReactNode; inline?: boolean;
 }) {
   const t = useT();
   const palette = usePalette();
   const [confirmation, setConfirmation] = useState<{ bookmarks: Bookmark[]; confirmed: boolean } | null>(null);
   const guest = ['anonymous', 'signed_out', 'not_configured'].includes(authStatus);
   useEffect(() => {
-    if (!guest || loading || loadError || bookmarks.length === 0) return;
+    if (!inline || !guest || loading || loadError || bookmarks.length === 0) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const verify = async (attempt: number) => {
@@ -30,7 +30,7 @@ export function LibraryStatus({ bookmarks, queue, authStatus, loading, loadError
     };
     timer = setTimeout(() => { void verify(0); }, 100);
     return () => { active = false; if (timer) clearTimeout(timer); };
-  }, [bookmarks, guest, loading, loadError]);
+  }, [bookmarks, guest, loading, loadError, inline]);
 
   if (loading || loadError) return null;
   const expired = authStatus === 'session_expired';
@@ -39,10 +39,19 @@ export function LibraryStatus({ bookmarks, queue, authStatus, loading, loadError
   const saved = guest && confirmation?.bookmarks === bookmarks && confirmation.confirmed;
   const key = expired ? 'library.resume' : guest ? (saved ? 'library.saved' : 'library.guest')
     : paused ? 'library.paused' : failed ? 'library.failed' : waiting ? 'library.waiting' : null;
-  if (!key || (guest && bookmarks.length === 0)) return null;
+  if (inline) {
+    if (expired || failed || !key || (guest && !saved)) return null;
+    return <Text testID="library-status-inline" style={{ color: palette.textSecondary, fontSize: 13 }}
+      onPress={paused ? signIn : undefined} accessibilityRole={paused ? 'button' : undefined}>
+      · {t(key)}
+    </Text>;
+  }
+  // Routine queue activity and guest persistence belong beside the saved count.
+  const bannerKey = expired ? 'library.resume' : failed ? 'library.failed' : null;
+  if (!bannerKey) return null;
   return <View testID="library-status" accessibilityRole="summary"
     style={{ padding: 16, marginBottom: 12, gap: 8, borderRadius: 16, borderWidth: 1, borderColor: palette.border, backgroundColor: palette.card }}>
-    <Text style={{ color: key === 'library.failed' ? palette.danger : palette.textSecondary }}>{t(key)}</Text>
+    <Text style={{ color: bannerKey === 'library.failed' ? palette.danger : palette.textSecondary }}>{t(bannerKey)}</Text>
     {guest ? guestActions : null}
     {expired || (!guest && paused) ? <Button variant="ghost" onPress={signIn}>{t(expired ? 'settings.account.signIn' : 'nav.settings')}</Button>
       : failed ? <Button variant="ghost" disabled={syncing} onPress={retry}>{t('library.retry')}</Button> : null}

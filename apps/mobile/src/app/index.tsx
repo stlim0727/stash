@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useLocalSearchParams, usePathname, useRouter } from 'expo-router';
 import { PostHogMaskView } from 'posthog-react-native';
 import {
-  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -26,13 +25,11 @@ import {
   type NativeSyntheticEvent,
   Platform,
   Pressable,
-  ScrollView,
   Share,
   StyleSheet,
   type StyleProp,
   Text,
   TextInput,
-  useColorScheme,
   useWindowDimensions,
   View,
   type ViewStyle,
@@ -42,13 +39,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { usePalette, uiMetrics } from '@/theme';
 import { useOpenReport } from '@/feedback/open-report';
-import { AnonymousNudgeBanner } from '@/ui/AnonymousNudgeBanner';
+import { LibraryHeader } from '@/ui/LibraryHeader';
 import { LibraryStatus } from '@/ui/LibraryStatus';
 import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
 import { Chip } from '@/ui/Chip';
 import { SearchSuggestionShelf } from '@/ui/SearchSuggestionShelf';
-import { ShelfEdge, useShelfEdges } from '@/ui/ShelfEdges';
 import { useSearchSuggestions } from '@/hooks/useSearchSuggestions';
 import {
   RECENT_SEARCHES_PREF_KEY,
@@ -67,8 +63,6 @@ import {
   MONOGRAM_COLORS,
   itemIcon,
   monogramIcon,
-  previewWordmark,
-  wordmarkForeground,
 } from '@/domain/item-icon';
 import { accessibilityTitle, displayTitle, isTitleDerived, siteLabel } from '@/domain/item-display';
 import { memoBodyFormat, textForDisplay } from '@/domain/text-format';
@@ -132,7 +126,6 @@ import {
   nextHeaderCollapseState,
   type HeaderCollapseState,
 } from '@/domain/header-collapse';
-import { didWordmarkImageLoad, shouldShowWordmarkFallback } from '@/domain/wordmark';
 import {
   didPreviewImageLoad,
   markPreviewImageLoaded,
@@ -271,7 +264,7 @@ function ItemIcon({
     // through their edges (the "irregular boundary"). `contain` keeps odd
     // aspect ratios from stretching.
     return (
-      <View style={[sizeStyle, styles.faviconTile, { borderColor: palette.border }]}>
+      <View testID={testID} style={[sizeStyle, styles.faviconTile, { borderColor: palette.border }]}>
         <Image
           source={{ uri: icon.uri }}
           style={styles.faviconImage}
@@ -291,99 +284,10 @@ function ItemIcon({
   );
 }
 
-/**
- * Fallback preview banner for cards without a preview image.
- * Turns site metadata into a deterministic typographic wordmark. This gives an
- * image-less card some identity without pretending generated art came from the page.
- */
-function CardPreviewFallback({
-  item,
-  testID,
-  hideFavicon,
-}: {
-  item: Bookmark;
-  testID?: string;
-  hideFavicon?: boolean;
-}) {
-  const palette = usePalette();
-  const [faviconFailed, setFaviconFailed] = useState(false);
-  const base = itemIcon(item);
-  const icon = base.kind === 'favicon' && faviconFailed ? monogramIcon(item) : base;
-  const wordmark = previewWordmark(item);
-  const accentColor = MONOGRAM_COLORS[wordmark.variant];
-  const foregroundColor = wordmarkForeground(accentColor);
-
-  return (
-    <View
-      testID="inbox-card-preview-fallback"
-      style={[styles.cardPreviewFallback, { backgroundColor: accentColor }]}
-    >
-      <View style={[styles.cardFallbackOrb, styles.cardFallbackOrbTop, { borderColor: foregroundColor }]} />
-      <View style={[styles.cardFallbackOrb, styles.cardFallbackOrbBottom, { borderColor: foregroundColor }]} />
-      {icon.kind === 'favicon' && !hideFavicon ? (
-        <View
-          style={[
-            styles.cardFallbackFaviconTile,
-            {
-              borderColor: palette.border,
-              backgroundColor: palette.surfaceElevated,
-            },
-            palette.shadow.soft,
-          ]}
-        >
-          <Image
-            source={{ uri: icon.uri }}
-            style={styles.cardFallbackFaviconImage}
-            resizeMode="contain"
-            onError={() => setFaviconFailed(true)}
-          />
-        </View>
-      ) : null}
-      <PostHogMaskView style={[
-        styles.cardFallbackWordmarkMask,
-        icon.kind === 'favicon' && !hideFavicon && styles.cardFallbackWordmarkBesideFavicon,
-      ]}>
-        <Text
-          testID={testID}
-          style={[styles.cardFallbackWordmark, { color: foregroundColor }]}
-          numberOfLines={2}
-          adjustsFontSizeToFit
-          minimumFontScale={0.58}
-        >
-          {wordmark.label}
-        </Text>
-      </PostHogMaskView>
-    </View>
-  );
-}
-
 // The list that drives the collapsing header. Animated.FlatList lets the
 // scroll position feed an Animated.Value over the native driver; the cast keeps
 // FlatList's generic item typing (Animated.FlatList erases it to `any`).
 const AnimatedFlatList = Animated.FlatList as unknown as typeof FlatList;
-
-// Pre-rendered brand wordmark: the Keepory duckling lockup (mascot + "Keepory")
-// baked into PNGs, each with a light/dark variant (navy text on light, near-white
-// on dark; the duckling is unchanged). The Korean locale reuses the same lockup —
-// the brand name is "Keepory" in every locale. `ratio` is the asset's intrinsic
-// width/height so the Image can be sized by height alone.
-const WORDMARK = {
-  en: {
-    ratio: 4.27,
-    light: require('../../assets/images/wordmark-en-light.png'),
-    dark: require('../../assets/images/wordmark-en-dark.png'),
-  },
-  local: {
-    ratio: 4.27,
-    light: require('../../assets/images/wordmark-ko-light.png'),
-    dark: require('../../assets/images/wordmark-ko-dark.png'),
-  },
-};
-
-// Rendered height of the hero wordmark in dp; its width is this × the asset
-// ratio. Kept as a constant so the Image's explicit width and height stay in
-// lockstep (see heroWordmark / the hero Image).
-const WORDMARK_HEIGHT = 28;
 
 // On wide (desktop-web) viewports, cap the content column and center it so
 // cards, the header, and the browse shelf don't stretch edge-to-edge. No effect
@@ -449,26 +353,6 @@ type FolderTileItem = {
 };
 type InboxListItem = Bookmark | GridPlaceholder | InlineDetailItem | FolderTileItem;
 
-/**
- * Web-only positioning shell for the browse shelf. On native it renders NOTHING
- * of its own — just its children — so the iOS/Android tree is byte-for-byte
- * unchanged. On web it wraps the clipped ScrollView in a relatively-positioned
- * box matching the shelf's centered content column, so the edge fades/buttons
- * pin to the real clipped edges (the 720px box) rather than the window edges.
- */
-function ShelfContainer({
-  web,
-  maxWidth,
-  children,
-}: {
-  web: boolean;
-  maxWidth: number;
-  children: ReactNode;
-}) {
-  if (!web) return <>{children}</>;
-  return <View style={[styles.shelfWrap, { maxWidth }]}>{children}</View>;
-}
-
 function InboxRootSurface({
   backgroundColor,
   children,
@@ -525,85 +409,17 @@ function WebCrispAnimatedSurface({
 }
 
 
-/**
- * One pill in the Inbox browse shelf. Memoized so a filter change (which
- * re-renders the whole screen) only re-renders the chips whose `active` flag
- * actually flips — not all of them. With a large library the shelf can hold
- * well over a hundred tag chips, and re-rendering every one on each tap was
- * what made a chip tap feel dead for seconds after drilling in from the tag
- * cloud. `target` comes straight from the (memoized) chip list / module-level
- * filter constants and `onSelect` is referentially stable, so memo's prop
- * compare holds across taps.
- */
-const BrowseChip = memo(function BrowseChip({
-  target,
-  label,
-  icon,
-  count,
-  active,
-  onSelect,
-  mask,
-}: {
-  target: InboxFilter;
-  label: string;
-  icon?: keyof typeof Ionicons.glyphMap;
-  count?: number;
-  active: boolean;
-  onSelect: (target: InboxFilter) => void;
-  /** True for a tag/collection name (bookmark-derived content); the two
-   *  fixed filters ("All", "No collection") pass nothing. */
-  mask?: boolean;
-}) {
-  return (
-    <Chip
-      accessibilityRole="button"
-      accessibilityState={{ selected: active }}
-      onPress={() => onSelect(target)}
-      variant={active ? 'selected' : 'default'}
-      quiet={Platform.OS === 'web' && !active}
-      icon={icon}
-      count={count}
-      mask={mask}
-    >
-      {label}
-    </Chip>
-  );
-});
-
 export default function InboxScreen() {
   usePreviewImageFailuresVersion();
   const palette = usePalette();
   const t = useT();
-  const insets = useSafeAreaInsets();
+  const rawInsets = useSafeAreaInsets();
+  const insets = rawInsets ?? { top: 0, bottom: 0, left: 0, right: 0 };
   const router = useRouter();
   const { openReport, capturing } = useOpenReport('/');
   const [homeMenuOpen, setHomeMenuOpen] = useState(false);
+  const [scopeMenuOpen, setScopeMenuOpen] = useState(false);
   const auth = useSupabaseAuth();
-  // Pick the wordmark variant that matches the active light/dark theme. If a
-  // locale ever ships a native form (app.nameLocal differs from app.name) the
-  // bilingual lockup is used; today every locale shares the "Keepory" lockup.
-  // The a11y label mirrors what sighted users see (e.g. "Keepory").
-  const hasLocalName = t('app.nameLocal') !== t('app.name');
-  const colorScheme = useColorScheme();
-  const wmSet = hasLocalName ? WORDMARK.local : WORDMARK.en;
-  const wordmark = { source: colorScheme === 'dark' ? wmSet.dark : wmSet.light, ratio: wmSet.ratio };
-  const wordmarkLabel = hasLocalName ? `${t('app.name')} ${t('app.nameLocal')}` : t('app.name');
-  // The wordmark is a pre-rendered PNG. If it ever fails to load — a browser that
-  // blocks the asset, or a request dropped across the OAuth redirect (seen in a
-  // Brave private window after sign-in) — fall back to plain text so the
-  // top-left brand mark is never blank.
-  const [wordmarkFailed, setWordmarkFailed] = useState(false);
-  const [wordmarkLoaded, setWordmarkLoaded] = useState(Platform.OS !== 'web');
-  const wordmarkWidth = Math.round(WORDMARK_HEIGHT * wordmark.ratio);
-  const showWordmarkFallback = shouldShowWordmarkFallback({
-    platform: Platform.OS,
-    wordmarkFailed,
-    wordmarkLoaded,
-  });
-  useEffect(() => {
-    setWordmarkFailed(false);
-    setWordmarkLoaded(Platform.OS !== 'web');
-  }, [wordmark.source]);
   const {
     inbox,
     queue,
@@ -1014,50 +830,6 @@ export default function InboxScreen() {
     getReviewedSummary,
   ]);
 
-  // Every inbox bookmark still worth reviewing — a pending (un-applied,
-  // un-reviewed) tag suggestion OR a pending folder recommendation — regardless
-  // of whether it arrived "unseen". This drives the *persistent* review banner:
-  // the Review screen's entry point now lives here on the Inbox (it used to be a
-  // row in Settings), so the banner stands as long as anything is left to
-  // review, escalating to the "new" styling only while `newSuggestionsCount`
-  // marks fresh arrivals. Mirrors the Review list's inclusion rule exactly.
-  const pendingReviewCount = useMemo(() => {
-    let count = 0;
-    for (const bookmark of inbox) {
-      const applied = new Set(getTagsForBookmark(bookmark.id).map((tag) => tag.name.toLowerCase()));
-      const enrichment = getEnrichment(bookmark.id);
-      const pending = pendingSuggestions(enrichment, applied, getReviewedSuggestions(bookmark.id));
-      const folder = pendingSuggestedFolder(
-        enrichment,
-        collections,
-        bookmark.collection_id,
-        getDismissedFolderSuggestions(bookmark.id),
-      );
-      const summary = pendingSummary(
-        bookmark.metadata_status,
-        enrichment,
-        getReviewedSummary(bookmark.id),
-        bookmark.title,
-      );
-      if (pending.length > 0 || folder || summary) {
-        count += 1;
-      }
-    }
-    return count;
-  }, [
-    inbox,
-    collections,
-    getTagsForBookmark,
-    getEnrichment,
-    getReviewedSuggestions,
-    getDismissedFolderSuggestions,
-    getReviewedSummary,
-  ]);
-
-  // Whether the review banner is in its escalated "new arrivals" state (accent
-  // alert + acknowledge ✕) vs the calm standing "to review" entry.
-  const hasNewSuggestions = newSuggestionsCount > 0;
-
   // Long-press action menu: which bookmark it targets, and whether it's showing
   // the top-level actions or the "move to collection" picker. Null item = closed.
   const [menuItem, setMenuItem] = useState<Bookmark | null>(null);
@@ -1136,7 +908,8 @@ export default function InboxScreen() {
   // sort/browse row) mounts, which isn't necessarily the same height as the
   // normal layout the header reverts to on close.
   const preSearchCollapsibleHeightRef = useRef<number>(0);
-  const isWebPlatform = Platform.OS === 'web';
+  const isWeb = Platform.OS === 'web';
+  const isWebPlatform = isWeb;
   // `headerHeight` means "total expanded height" (used below for the list's
   // top padding/scroll inset and the filter bar's resting position) — native
   // still measures it directly off the one surface (unchanged); web derives
@@ -1156,17 +929,14 @@ export default function InboxScreen() {
       collapsed: headerCollapse.collapsed,
       heroHeight,
       collapsibleHeight,
-      wordmarkLoaded,
-      wordmarkFailed,
-      showWordmarkFallback,
+      wordmarkLoaded: true,
+      wordmarkFailed: false,
+      showWordmarkFallback: false,
     });
   }, [
     headerCollapse.collapsed,
     heroHeight,
     collapsibleHeight,
-    wordmarkLoaded,
-    wordmarkFailed,
-    showWordmarkFallback,
   ]);
   useEffect(() => () => setHeroDiagnosticsSnapshot(null), []);
   // The pinned active-filter bar is measured separately (it lives in its own
@@ -1925,25 +1695,6 @@ export default function InboxScreen() {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     }
   }
-  // The browse shelf is suppressed for the WHOLE focused state (§13.2, widening
-  // Phase-1 Q1): while focused at most one chip row may show — the suggestion
-  // shelf — never the browse shelf. The browse shelf returns only on blur. It's
-  // also folded away in the slimmed search-results state (above). This also keeps
-  // it hidden in the typing-no-match case, where neither row shows.
-  // The shelf shows when there's anything to put on it — facet chips OR the
-  // review chip (which now lives here instead of a banner). Without the
-  // pendingReviewCount term a brand-new user with suggestions but no folders
-  // yet would have an empty facet set and lose the Review entry point entirely.
-  const showShelf =
-    (chips.length > 0 || pendingReviewCount > 0) &&
-    !searchFocused &&
-    !slimSearchHeader &&
-    !searchOpen &&
-    !selectionMode;
-  // Keep the active scope bar available when a search/filter yields no rows,
-  // or when Folder view still has its New Folder tile after a library reset.
-  const showControls = inbox.length > 0 || searching || viewMode === 'folder';
-
   // The sort pill/menu shows one of two independent controls depending on the
   // active layout: Folder View's own name/count order, or the bookmark-level
   // date/accessed/name order everywhere else. Switching layouts never
@@ -1992,18 +1743,6 @@ export default function InboxScreen() {
     setRecentSearches((current) => removeRecent(current, target));
   }, []);
 
-  // Web-only browse-shelf overflow affordance (wheel-to-horizontal + edge
-  // chevrons); see `useShelfEdges`. Recomputed on viewport-width and chip-count
-  // changes. The search-suggestion shelf uses the same hook so the chip row
-  // behaves identically whether or not search is open.
-  const {
-    shelfRef,
-    canLeft: canShelfLeft,
-    canRight: canShelfRight,
-    updateEdges: updateShelfEdges,
-    scrollBy: scrollShelfBy,
-    isWeb,
-  } = useShelfEdges(showShelf, [winWidth, chips.length]);
   const InboxList = (isWeb ? FlatList : AnimatedFlatList) as typeof FlatList;
   const listRef = useRef<FlatList<InboxListItem>>(null);
   const scrollToTop = useCallback(() => {
@@ -2041,6 +1780,7 @@ export default function InboxScreen() {
   // tells the user that and offers a one-tap way back out. Precedence peels the
   // most-recently-added layer first: a live search clears before the underlying
   // facet.
+  const showControls = inbox.length > 0 || searching || viewMode === 'folder';
   const narrowed = filter.kind !== 'all' || searching;
   // The pinned active-filter bar shows under the same gates as before — only its
   // position changed (its own layer, no longer inside the collapsing header).
@@ -2506,107 +2246,12 @@ export default function InboxScreen() {
               </Pressable>
             </View>
           ) : (
-            <>
-              <View style={styles.heroTitleBlock}>
-            {/* The brand wordmark is a pre-rendered image (the Keepory duckling
-                lockup) rather than bundled fonts — a few KB of PNG instead of
-                multi-MB font files. Every locale uses the same lockup; a
-                light/dark variant matches the theme. Tapping it scrolls the
-                list back to the top, the same as tapping a title bar. */}
-            <Pressable
-              testID="inbox-hero-wordmark"
-              accessibilityRole="button"
-              accessibilityLabel={wordmarkLabel}
-              accessibilityHint={t('inbox.scrollToTopA11y')}
-              hitSlop={8}
-              onPress={scrollToTop}
-              style={[
-                styles.heroWordmarkBox,
-                { width: wordmarkWidth, height: WORDMARK_HEIGHT },
-              ]}
-            >
-              <Image
-                accessible={false}
-                testID="inbox-wordmark-image"
-                source={wordmark.source}
-                resizeMode="contain"
-                // A load can "succeed" with a 0x0 image — e.g. a fetch aborted
-                // mid-download under memory/CPU pressure still fires `load` on
-                // web instead of `error` (STASH-5J). Treat that the same as a
-                // real failure instead of latching wordmarkLoaded permanently.
-                onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
-                  if (!didWordmarkImageLoad(event.nativeEvent.source)) {
-                    setWordmarkFailed(true);
-                    setWordmarkLoaded(false);
-                    return;
-                  }
-                  setWordmarkLoaded(true);
-                }}
-                // If the asset can't be loaded, keep the text wordmark visible
-                // instead of leaving a blank space (see showWordmarkFallback).
-                onError={() => {
-                  setWordmarkFailed(true);
-                  setWordmarkLoaded(false);
-                }}
-                // Size with an EXPLICIT width+height (derived from the asset ratio),
-                // not height+aspectRatio. In this flex row, height+aspectRatio let
-                // Yoga fall back toward the PNG's huge intrinsic size and the
-                // wordmark blew up to fill the screen on native (the column layout
-                // this came from constrained it via alignSelf:'flex-start'). An
-                // explicit box removes that ambiguity.
-                style={[
-                  styles.heroWordmark,
-                  { width: wordmarkWidth, height: WORDMARK_HEIGHT },
-                  showWordmarkFallback ? styles.heroWordmarkHidden : null,
-                ]}
-              />
-              {showWordmarkFallback ? (
-                <Text
-                  accessible={false}
-                  testID="inbox-wordmark-fallback"
-                  style={[styles.heroWordmarkFallback, { color: palette.text }]}
-                  numberOfLines={1}
-                >
-                  {t('app.name')}
-                </Text>
-              ) : null}
-            </Pressable>
-            <Text
-              style={[styles.heroCountText, { color: palette.textSecondary }]}
-              numberOfLines={1}
-            >
-              {t('inbox.savedCount', { count: inbox.length })}
-            </Text>
-          </View>
-          {/* Search and secondary navigation. Reporting captures the screen
-              after this menu has been dismissed. */}
-          <View style={styles.heroActions}>
-            {isWeb ? (
-              <Pressable
-                testID="inbox-hero-search"
-                accessibilityRole="button"
-                accessibilityLabel={searchOpen ? t('inbox.searchCloseA11y') : t('inbox.searchOpenA11y')}
-                disabled={selectionMode || !recentsReady}
-                onPress={() => (searchOpen ? closeSearch() : openSearch())}
-                style={{ minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' }}
-                {...preventMouseDownFocusSteal}
-              >
-                <Ionicons name={searchOpen ? 'close' : 'search'} size={24} color={palette.text} />
-              </Pressable>
-            ) : null}
-            <Pressable
-              testID="inbox-menu-open"
-              accessibilityRole="button"
-              accessibilityLabel={t('inbox.menuA11y')}
-              accessibilityState={{ expanded: homeMenuOpen, disabled: capturing }}
-              disabled={capturing}
-              onPress={() => setHomeMenuOpen(true)}
-              style={{ minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' }}
-            >
-              <Ionicons name="ellipsis-horizontal" size={24} color={palette.text} />
-            </Pressable>
-          </View>
-        </>
+            <LibraryHeader count={inbox.length} unread={newSuggestionsCount}
+              menuOpen={homeMenuOpen} disabled={capturing} onTop={scrollToTop}
+              onMenu={() => setHomeMenuOpen(true)}
+              status={<LibraryStatus inline bookmarks={inbox} queue={queue} authStatus={auth.status}
+                loading={isLoading} loadError={loadError} syncing={isSyncing} paused={syncPaused}
+                retry={() => { void syncNow({ force: true }); }} signIn={() => router.push('/settings')} />} />
       )}
         </View>
         {/* Everything below the hero — error/session banners, search, sort/
@@ -2748,105 +2393,25 @@ export default function InboxScreen() {
         ) : null}
         {!selectionMode && !searchFocused && !searchOpen ? (
         <View testID="inbox-filter-options-row" style={[styles.filterOptionsRow, { maxWidth: contentMaxWidth }]}>
-          <Pressable
-            testID="inbox-view-options"
-            accessibilityRole="button"
+          {viewMode === 'folder' ? (
+            <Text testID="inbox-collections-heading" style={[styles.controlsHeading, { color: palette.text }]}>{t('inbox.collectionsHeading')}</Text>
+          ) : (
+            <Pressable testID="inbox-scope-picker" accessibilityRole="button"
+              accessibilityLabel={t('inbox.scopePickerA11y')} accessibilityState={{ expanded: scopeMenuOpen }}
+              onPress={() => setScopeMenuOpen(true)} style={[styles.scopePicker, { borderColor: palette.controlBorder }]}>
+              <Text numberOfLines={2} style={[styles.viewOptionsLabel, { color: palette.text }]}>
+                {filter.kind === 'all' ? t('inbox.filterAll') : filter.kind === 'uncollected' ? t('inbox.filterNoCollection') : activeChip?.label ?? t('inbox.filterAll')}
+              </Text>
+              <Ionicons name="chevron-down" size={14} color={palette.textSecondary} />
+            </Pressable>
+          )}
+          <Pressable testID="inbox-view-options" accessibilityRole="button"
             accessibilityLabel={t('inbox.viewOptions')}
-            accessibilityState={{ disabled: isLoading || !viewOptionsReady }}
-            disabled={isLoading || !viewOptionsReady}
-            onPress={() => setSortMenuOpen(true)}
-            style={[styles.viewOptions, { borderColor: palette.controlBorder }]}
-          >
+            accessibilityState={{ disabled: isLoading || !viewOptionsReady }} disabled={isLoading || !viewOptionsReady}
+            onPress={() => setSortMenuOpen(true)} style={styles.viewOptions}>
             <Ionicons name="options-outline" size={18} color={palette.textSecondary} />
             <Text style={[styles.viewOptionsLabel, { color: palette.text }]}>{t('inbox.viewOptions')}</Text>
           </Pressable>
-          <View style={{ flex: 1, minWidth: 0 }}>
-        {showShelf ? (
-          <ShelfContainer web={isWeb} maxWidth={contentMaxWidth}>
-            <ScrollView
-              ref={shelfRef}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              testID="browse-shelf"
-              style={[styles.shelf, { maxWidth: contentMaxWidth }]}
-              contentContainerStyle={[styles.shelfContent, isWeb ? styles.shelfContentWeb : null]}
-              // Web-only: track the clipped geometry so the edge affordances
-              // appear/disappear as the user scrolls or the row is measured.
-              onScroll={isWeb ? updateShelfEdges : undefined}
-              onLayout={isWeb ? updateShelfEdges : undefined}
-              scrollEventThrottle={isWeb ? 16 : undefined}
-            >
-              {pendingReviewCount > 0 ? (
-                // The Review entry point rides here as the first chip (it used
-                // to be a full-width banner above the search — folded into the
-                // shelf to keep the top area thin, à la Telegram's folder row).
-                // It's an ACTION, not a facet: it routes to /review rather than
-                // re-scoping the list. Accent-filled while unseen suggestions are
-                // fresh, calm otherwise; visiting Review is the acknowledgment
-                // (review.tsx clears the unseen set on focus), so there's no ✕.
-                <Chip
-                  testID="review-chip"
-                  accessibilityRole="button"
-                  accessibilityLabel={
-                    hasNewSuggestions
-                      ? t('inbox.newSuggestionsA11y', { count: newSuggestionsCount })
-                      : t('inbox.reviewPendingA11y', { count: pendingReviewCount })
-                  }
-                  variant={hasNewSuggestions ? 'accent' : 'default'}
-                  quiet={Platform.OS === 'web' && !hasNewSuggestions}
-                  onPress={() => router.push('/review')}
-                >
-                  {hasNewSuggestions
-                    ? t('inbox.newSuggestions', { count: newSuggestionsCount })
-                    : t('inbox.reviewPending', { count: pendingReviewCount })}
-                </Chip>
-              ) : null}
-              <BrowseChip
-                target={ALL_FILTER}
-                label={t('inbox.filterAll')}
-                active={sameFilter(ALL_FILTER, filter)}
-                onSelect={onSelectFilter}
-              />
-              {hasUncollected ? (
-                <BrowseChip
-                  target={UNCOLLECTED_FILTER}
-                  label={t('inbox.filterNoCollection')}
-                  icon="file-tray-outline"
-                  count={uncollectedCount}
-                  active={sameFilter(UNCOLLECTED_FILTER, filter)}
-                  onSelect={onSelectFilter}
-                />
-              ) : null}
-              {chips.map((chip) => (
-                <BrowseChip
-                  key={chip.key}
-                  target={chip.filter}
-                  label={chip.label}
-                  icon={chip.icon}
-                  count={chip.count}
-                  active={sameFilter(chip.filter, filter)}
-                  onSelect={onSelectFilter}
-                  mask
-                />
-              ))}
-            </ScrollView>
-            {isWeb && canShelfLeft ? (
-              <ShelfEdge
-                side="left"
-                label={t('inbox.shelfPrevA11y')}
-                onPress={() => scrollShelfBy(-1)}
-              />
-            ) : null}
-            {isWeb && canShelfRight ? (
-              <ShelfEdge
-                side="right"
-                label={t('inbox.shelfMoreA11y')}
-                onPress={() => scrollShelfBy(1)}
-              />
-            ) : null}
-          </ShelfContainer>
-        ) : null}
-          </View>
         </View>
         ) : null}
         </View>
@@ -2987,7 +2552,7 @@ export default function InboxScreen() {
             <LibraryStatus bookmarks={inbox} queue={queue} authStatus={auth.status}
               loading={isLoading} loadError={loadError} syncing={isSyncing} paused={syncPaused}
               retry={() => { void syncNow({ force: true }); }} signIn={() => router.push('/settings')}
-              guestActions={<AnonymousNudgeBanner embedded isAnonymous={auth.status === 'anonymous'} bookmarkCount={inbox.length} />} />
+              />
             {/* The section label only earns its vertical space while searching,
                 where the match COUNT is real information. In the default/faceted
                 state it's redundant chrome: a newest-first list obviously leads
@@ -3295,7 +2860,7 @@ export default function InboxScreen() {
           const visibleMetaParts = [
             ...(item.content_type === 'text' ? [t('inbox.memoType')] : []),
             ...(item.content_type === 'image' ? [t('inbox.photoType')] : []),
-            ...(collectionName ? [t('inbox.inCollection', { name: collectionName })] : []),
+            ...(collectionName ? [collectionName] : []),
             ...orderedTags.slice(0, 2).map((tag) => `#${tag.name}`),
             ...(orderedTags.length > 2 ? [`+${orderedTags.length - 2}`] : []),
           ];
@@ -3328,7 +2893,7 @@ export default function InboxScreen() {
           if (viewMode === 'list') {
             const thumbUri = selectPreviewImageUri(item.local_image_uri, item.preview_image_url);
             const compactMeta = [
-              ...(collectionName ? [t('inbox.inCollection', { name: collectionName })] : []),
+              ...(collectionName ? [collectionName] : []),
               ...orderedTags.map((tag) => `#${tag.name}`),
             ].join('  ·  ');
             return (
@@ -3338,9 +2903,9 @@ export default function InboxScreen() {
                   styles.listRow,
                   styles.compactRow,
                   {
-                    backgroundColor: isSelected ? palette.accentSoft : palette.surfaceElevated,
+                    backgroundColor: isSelected ? palette.accentSoft : 'transparent',
                     borderColor: isSelected ? palette.accent : palette.border,
-                    borderWidth: isSelected ? 1.5 : 1,
+                    borderBottomWidth: isSelected ? 1.5 : StyleSheet.hairlineWidth,
                     opacity: pressed ? 0.78 : 1,
                   },
                 ]}
@@ -3451,12 +3016,35 @@ export default function InboxScreen() {
                       highlightStyle={highlightStyle}
                     />
                   ) : null}
-                  {compactMeta ? (
-                    <PostHogMaskView>
-                      <Text style={[styles.compactMeta, { color: palette.textSecondary, lineHeight: 20 }]} numberOfLines={1}>
-                        {compactMeta}
-                      </Text>
-                    </PostHogMaskView>
+                  {visibleMetaParts.length > 0 ? (
+                    <View style={styles.metaChipRow}>
+                      {visibleMetaParts.map((part) => (
+                        <View
+                          key={part}
+                          accessible
+                          accessibilityLabel={part}
+                          style={[
+                            styles.metaChip,
+                            Platform.OS === 'web'
+                              ? { backgroundColor: palette.surface, borderColor: palette.border }
+                              : { backgroundColor: palette.mutedSurface },
+                          ]}
+                        >
+                          {part === collectionName ? <Ionicons name="folder-outline" size={12} color={palette.textSecondary} /> : null}
+                          <PostHogMaskView style={{ flexShrink: 1 }}>
+                            <Text
+                              style={[
+                                styles.metaChipLabel,
+                                { color: Platform.OS === 'web' ? palette.textSecondary : palette.accentText },
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {part}
+                            </Text>
+                          </PostHogMaskView>
+                        </View>
+                      ))}
+                    </View>
                   ) : null}
                 </Pressable>
                 {suggestionCount > 0 ? (
@@ -3515,7 +3103,7 @@ export default function InboxScreen() {
                 onPress={selectionMode ? () => toggleSelect(item.id) : undefined}
                 onLongPress={handleItemLongPress}
               >
-                <View style={styles.cardPreviewContainer}>
+                {previewUri || selectionMode ? <View style={[styles.cardPreviewContainer, !previewUri ? { height: 32 } : null]}>
                   {selectionMode ? (
                     <Pressable
                       testID={`inbox-select-checkbox-${item.id}`}
@@ -3565,23 +3153,12 @@ export default function InboxScreen() {
                           }
                         }}
                       />
-                    ) : (
-                      <CardPreviewFallback
-                        item={item}
-                        testID="inbox-card-wordmark"
-                        hideFavicon={selectionMode}
-                      />
-                    )}
+                    ) : null}
                   </Pressable>
-                </View>
+                </View> : null}
                 <View style={styles.cardBody}>
-                  <View style={styles.cardTitleRow}>
-                    {/* Not independently labelled: it's a supplementary tap
-                        target over the same action the title/link pill
-                        already exposes to screen readers, so it stays out
-                        of the accessibility tree rather than duplicating
-                        the "Open link" label. */}
-                    {previewUri ? (
+                  {!previewUri ? (
+                    <View style={styles.cardCompactHeader}>
                       <Pressable
                         accessible={false}
                         tabIndex={-1}
@@ -3591,79 +3168,146 @@ export default function InboxScreen() {
                       >
                         <ItemIcon item={item} testID="inbox-card-monogram" />
                       </Pressable>
-                    ) : null}
-                  {/* Only the title is the accessible "open details" button so
-                      the sibling … overflow button stays independently
-                      focusable; the whole card remains tappable visually. */}
-                  <Pressable
-                    style={styles.cardTitlePressable}
-                    accessibilityRole={selectionMode ? 'checkbox' : 'button'}
-                    accessibilityLabel={selectionMode ? (isSelected ? t('inbox.deselectItemA11y', { title: displayTitle(item) ?? t('common.untitled') }) : t('inbox.selectItemA11y', { title: displayTitle(item) ?? t('common.untitled') })) : (accessibilityTitle(item) ?? t('common.untitled'))}
-                    accessibilityHint={selectionMode ? undefined : t('inbox.openBookmarkHint')}
-                    accessibilityState={selectionMode ? { checked: isSelected } : { busy: isOpening }}
-                    onPress={handleItemPress}
-                    onLongPress={handleItemLongPress}
-                  >
-                    <HighlightedText
-                      testID="inbox-card-title"
-                      style={[
-                        styles.cardTitle,
-                        {
-                          lineHeight: 22,
-                          color: isTitleDerived(item) ? palette.textSecondary : palette.text,
-                          fontWeight: isTitleDerived(item) ? WEB_MEDIUM_WEIGHT : WEB_SEMIBOLD_WEIGHT,
-                        },
-                      ]}
-                      numberOfLines={2}
-                      text={displayTitle(item) ?? t('common.untitled')}
-                      query={highlightQuery}
-                      highlightStyle={highlightStyle}
-                    />
-                  </Pressable>
-                  {suggestionCount > 0 ? (
-                    <View
-                      accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
-                      style={[styles.suggestBadge, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
-                    >
-                      <Text style={[styles.suggestBadgeLabel, { color: palette.accentText }]}>
-                        ✨ {suggestionCount}
-                      </Text>
+                      <View style={styles.cardCompactTitleCol}>
+                        <Pressable
+                          style={styles.cardTitlePressable}
+                          accessibilityRole={selectionMode ? 'checkbox' : 'button'}
+                          accessibilityLabel={selectionMode ? (isSelected ? t('inbox.deselectItemA11y', { title: displayTitle(item) ?? t('common.untitled') }) : t('inbox.selectItemA11y', { title: displayTitle(item) ?? t('common.untitled') })) : (accessibilityTitle(item) ?? t('common.untitled'))}
+                          accessibilityHint={selectionMode ? undefined : t('inbox.openBookmarkHint')}
+                          accessibilityState={selectionMode ? { checked: isSelected } : { busy: isOpening }}
+                          onPress={handleItemPress}
+                          onLongPress={handleItemLongPress}
+                        >
+                          <HighlightedText
+                            testID="inbox-card-title"
+                            style={[
+                              styles.cardTitle,
+                              {
+                                lineHeight: 22,
+                                color: isTitleDerived(item) ? palette.textSecondary : palette.text,
+                                fontWeight: isTitleDerived(item) ? WEB_MEDIUM_WEIGHT : WEB_SEMIBOLD_WEIGHT,
+                              },
+                            ]}
+                            numberOfLines={2}
+                            text={displayTitle(item) ?? t('common.untitled')}
+                            query={highlightQuery}
+                            highlightStyle={highlightStyle}
+                          />
+                        </Pressable>
+                        {item.url ? (
+                          <Pressable
+                            accessibilityRole={selectionMode ? 'checkbox' : 'link'}
+                            accessibilityLabel={selectionMode
+                              ? t(isSelected ? 'inbox.deselectItemA11y' : 'inbox.selectItemA11y', { title: displayTitle(item) ?? t('common.untitled') })
+                              : t('common.openLink')}
+                            accessibilityState={selectionMode ? { checked: isSelected } : undefined}
+                            onPress={selectionMode ? () => toggleSelect(item.id) : openLink}
+                            onLongPress={handleItemLongPress}
+                          >
+                            <HighlightedText
+                              style={[styles.cardUrl, { color: palette.textSecondary }]}
+                              numberOfLines={1}
+                              text={siteLabelText}
+                              query={highlightQuery}
+                              highlightStyle={highlightStyle}
+                            />
+                          </Pressable>
+                        ) : null}
+                      </View>
+                      {suggestionCount > 0 ? (
+                        <View
+                          accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
+                          style={[styles.suggestBadge, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
+                        >
+                          <Text style={[styles.suggestBadgeLabel, { color: palette.accentText }]}>
+                            ✨ {suggestionCount}
+                          </Text>
+                        </View>
+                      ) : null}
+                      {!selectionMode ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={t('inbox.moreActions')}
+                          hitSlop={8}
+                          style={[styles.moreButton, styles.cardMoreButton]}
+                          onPress={() => setMenuItem(item)}
+                        >
+                          <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
+                        </Pressable>
+                      ) : null}
                     </View>
-                  ) : null}
-                  {/* Always-present overflow: the discoverable way into
-                      move/share/trash, not a long-press a user must guess. */}
-                  {!selectionMode ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={t('inbox.moreActions')}
-                      hitSlop={8}
-                      style={[styles.moreButton, styles.cardMoreButton]}
-                      onPress={() => setMenuItem(item)}
-                    >
-                      <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
-                    </Pressable>
-                  ) : null}
-                </View>
-                {item.url ? (
-                  <Pressable
-                    accessibilityRole={selectionMode ? 'checkbox' : 'link'}
-                    accessibilityLabel={selectionMode
-                      ? t(isSelected ? 'inbox.deselectItemA11y' : 'inbox.selectItemA11y', { title: displayTitle(item) ?? t('common.untitled') })
-                      : t('common.openLink')}
-                    accessibilityState={selectionMode ? { checked: isSelected } : undefined}
-                    onPress={selectionMode ? () => toggleSelect(item.id) : openLink}
-                    onLongPress={handleItemLongPress}
-                    style={{ minHeight: uiMetrics.touchTarget, justifyContent: 'center' }}
-                  >
-                    <HighlightedText
-                      style={[styles.cardUrl, { color: palette.textSecondary }]}
-                      numberOfLines={1}
-                      text={siteLabelText}
-                      query={highlightQuery}
-                      highlightStyle={highlightStyle}
-                    />
-                  </Pressable>
-                ) : null}
+                  ) : (
+                    <>
+                      <View style={styles.cardTitleRow}>
+                        <Pressable
+                          style={styles.cardTitlePressable}
+                          accessibilityRole={selectionMode ? 'checkbox' : 'button'}
+                          accessibilityLabel={selectionMode ? (isSelected ? t('inbox.deselectItemA11y', { title: displayTitle(item) ?? t('common.untitled') }) : t('inbox.selectItemA11y', { title: displayTitle(item) ?? t('common.untitled') })) : (accessibilityTitle(item) ?? t('common.untitled'))}
+                          accessibilityHint={selectionMode ? undefined : t('inbox.openBookmarkHint')}
+                          accessibilityState={selectionMode ? { checked: isSelected } : { busy: isOpening }}
+                          onPress={handleItemPress}
+                          onLongPress={handleItemLongPress}
+                        >
+                          <HighlightedText
+                            testID="inbox-card-title"
+                            style={[
+                              styles.cardTitle,
+                              {
+                                lineHeight: 22,
+                                color: isTitleDerived(item) ? palette.textSecondary : palette.text,
+                                fontWeight: isTitleDerived(item) ? WEB_MEDIUM_WEIGHT : WEB_SEMIBOLD_WEIGHT,
+                              },
+                            ]}
+                            numberOfLines={2}
+                            text={displayTitle(item) ?? t('common.untitled')}
+                            query={highlightQuery}
+                            highlightStyle={highlightStyle}
+                          />
+                        </Pressable>
+                        {suggestionCount > 0 ? (
+                          <View
+                            accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
+                            style={[styles.suggestBadge, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
+                          >
+                            <Text style={[styles.suggestBadgeLabel, { color: palette.accentText }]}>
+                              ✨ {suggestionCount}
+                            </Text>
+                          </View>
+                        ) : null}
+                        {!selectionMode ? (
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={t('inbox.moreActions')}
+                            hitSlop={8}
+                            style={[styles.moreButton, styles.cardMoreButton]}
+                            onPress={() => setMenuItem(item)}
+                          >
+                            <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
+                          </Pressable>
+                        ) : null}
+                      </View>
+                      {item.url ? (
+                        <Pressable
+                          accessibilityRole={selectionMode ? 'checkbox' : 'link'}
+                          accessibilityLabel={selectionMode
+                            ? t(isSelected ? 'inbox.deselectItemA11y' : 'inbox.selectItemA11y', { title: displayTitle(item) ?? t('common.untitled') })
+                            : t('common.openLink')}
+                          accessibilityState={selectionMode ? { checked: isSelected } : undefined}
+                          onPress={selectionMode ? () => toggleSelect(item.id) : openLink}
+                          onLongPress={handleItemLongPress}
+                          style={{ minHeight: uiMetrics.touchTarget, justifyContent: 'center' }}
+                        >
+                          <HighlightedText
+                            style={[styles.cardUrl, { color: palette.textSecondary }]}
+                            numberOfLines={1}
+                            text={siteLabelText}
+                            query={highlightQuery}
+                            highlightStyle={highlightStyle}
+                          />
+                        </Pressable>
+                      ) : null}
+                    </>
+                  )}
                 {memoPreview ? (
                   <HighlightedText
                     style={[styles.memoPreviewText, { color: palette.textSecondary }]}
@@ -3707,7 +3351,8 @@ export default function InboxScreen() {
                             : { backgroundColor: palette.mutedSurface },
                         ]}
                       >
-                        <PostHogMaskView>
+                        {part === collectionName ? <Ionicons name="folder-outline" size={12} color={palette.textSecondary} /> : null}
+                        <PostHogMaskView style={{ flexShrink: 1 }}>
                           <Text
                             style={[
                               styles.metaChipLabel,
@@ -3751,7 +3396,7 @@ export default function InboxScreen() {
           onPress={() => router.push('/add')}
           style={({ pressed }) => [
             styles.fab,
-            { backgroundColor: palette.accent, bottom: insets.bottom + 16, opacity: pressed ? 0.9 : 1 },
+            { backgroundColor: palette.accent, bottom: insets.bottom + 16, right: insets.right + 16, opacity: pressed ? 0.9 : 1 },
           ]}
         >
           <Ionicons name="add" size={34} color="#ffffff" />
@@ -3772,6 +3417,10 @@ export default function InboxScreen() {
         title={t('inbox.menuA11y')}
         onClose={() => setHomeMenuOpen(false)}
         actions={[
+          { key: 'review', testID: 'inbox-menu-review', label: t('inbox.aiReviewMenu', { count: newSuggestionsCount }), icon: 'sparkles-outline', onPress: () => {
+            setHomeMenuOpen(false);
+            router.push('/review');
+          } },
           { key: 'tags', label: t('nav.browseTags'), icon: 'pricetags-outline', onPress: () => {
             setHomeMenuOpen(false);
             openBrowseTags();
@@ -3790,6 +3439,12 @@ export default function InboxScreen() {
           } },
         ]}
       />
+      <ActionSheet visible={scopeMenuOpen} title={t('inbox.scopePickerA11y')} actionsMask
+        onClose={() => setScopeMenuOpen(false)} actions={[
+          { key: 'all', label: t('inbox.filterAll'), selected: sameFilter(ALL_FILTER, filter), onPress: () => { onSelectFilter(ALL_FILTER); setScopeMenuOpen(false); } },
+          { key: 'uncollected', label: t('inbox.filterNoCollection'), icon: 'file-tray-outline', selected: sameFilter(UNCOLLECTED_FILTER, filter), onPress: () => { onSelectFilter(UNCOLLECTED_FILTER); setScopeMenuOpen(false); } },
+          ...chips.map((chip) => ({ key: chip.key, label: chip.label, icon: chip.icon, selected: sameFilter(chip.filter, filter), onPress: () => { onSelectFilter(chip.filter); setScopeMenuOpen(false); } })),
+        ]} />
       <ActionSheet
         visible={bulkMoveSheetOpen}
         title={t('inbox.bulkMoveTitle', { count: selectedIds.size })}
@@ -3920,7 +3575,7 @@ const styles = StyleSheet.create({
     transform: [],
   },
   listModeList: {
-    gap: 8,
+    gap: 0,
   },
   hero: {
     flexDirection: 'row',
@@ -3932,66 +3587,6 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: '100%',
     alignSelf: 'center',
-  },
-  heroTitleBlock: {
-    flex: 1,
-    minWidth: 0,
-    // Wordmark and saved-count share one row, bottoms aligned so the count
-    // reads as sitting on the wordmark's baseline.
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 10,
-  },
-  heroWordmarkBox: {
-    // Concrete width+height are set inline from WORDMARK_HEIGHT × the asset
-    // ratio. flexShrink:0 so the row never squeezes it.
-    flexShrink: 0,
-    justifyContent: 'center',
-    position: 'relative',
-  },
-  heroWordmark: {
-    left: 0,
-    position: 'absolute',
-    top: 0,
-  },
-  heroWordmarkHidden: {
-    opacity: 0,
-  },
-  // Text stand-in when the wordmark PNG fails to load, sized to sit on the same
-  // baseline as the saved-count beside it.
-  heroWordmarkFallback: {
-    flexShrink: 0,
-    fontSize: 24,
-    fontWeight: '800',
-    letterSpacing: -0.5,
-    lineHeight: WORDMARK_HEIGHT,
-  },
-  heroCountText: {
-    fontSize: 13,
-    fontWeight: '600',
-    // Nudge off the very bottom so it lines up with the wordmark's baseline
-    // rather than its descender edge.
-    // The PNG has transparent padding around the visible wordmark. Aligning
-    // the Text box to the Image box therefore leaves the count optically low;
-    // lift it to the visible letter baseline instead.
-    marginBottom: 4,
-    flexShrink: 1,
-  },
-  avatar: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  // Right-side hero action cluster: the search magnifier and the settings gear
-  // sit as twin round buttons.
-  heroActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    flexShrink: 0,
   },
   sectionLabel: {
     fontSize: 13,
@@ -4186,62 +3781,30 @@ const styles = StyleSheet.create({
   filterOptionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
     paddingHorizontal: uiMetrics.screenGutter,
     paddingVertical: 8,
     gap: 8,
     width: '100%',
     alignSelf: 'center',
   },
+  controlsHeading: { fontSize: 16, fontWeight: '700', flexShrink: 1 },
+  scopePicker: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 48, maxWidth: '55%', borderWidth: 1, borderRadius: 10, padding: 8 },
   viewOptions: {
     flexDirection: 'row',
     alignItems: 'center',
     minHeight: 48,
     gap: 8,
-    borderWidth: 1,
-    borderRadius: uiMetrics.radius,
-    paddingHorizontal: 12,
+    paddingHorizontal: 0,
     paddingVertical: 8,
-    maxWidth: '50%',
+    maxWidth: '100%',
+    flexShrink: 1,
   },
   viewOptionsLabel: {
     fontSize: 14,
     fontWeight: '600',
     flexShrink: 1,
-  },
-  shelf: {
-    flexGrow: 0,
-    // minHeight (NOT a fixed height): floors the viewport so a horizontal
-    // ScrollView can't collapse onto its content on Android, while still letting
-    // the row GROW to a taller pill (larger OS font/display sizes, or the taller
-    // Samsung system font). A fixed height shorter than the real pill was
-    // shaving the rounded edge even when the text inside rendered intact. Chips
-    // are vertically centred via shelfContent.alignItems. Spacing is margin
-    // (outside the scroll box, so it can't clip).
-    minHeight: 38,
-    marginTop: 0,
-    marginBottom: 0,
-    width: '100%',
-    alignSelf: 'center',
-  },
-  shelfContent: {
-    paddingHorizontal: 0,
-    alignItems: 'center',
-    // Match the shelf floor so the pill is centred in the row (and the row grows
-    // to fit a taller pill rather than cropping it). No vertical padding here —
-    // that would clip the chips' bottom edge on Android.
-    minHeight: 42,
-    gap: 8,
-  },
-  shelfContentWeb: {
-    gap: 10,
-  },
-  // Web-only browse-shelf wrapper (positions the ShelfEdge overlays). Referenced
-  // only behind Platform.OS === 'web', so it never touches the native layout.
-  // The edge/fade/button styles live with `ShelfEdge` in @/ui/ShelfEdges.
-  shelfWrap: {
-    position: 'relative',
-    width: '100%',
-    alignSelf: 'center',
   },
   card: {
     position: 'relative',
@@ -4263,11 +3826,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    borderRadius: uiMetrics.radius,
+    borderRadius: 0,
     minHeight: 88,
-    borderWidth: 1,
     paddingVertical: 13,
-    paddingHorizontal: 16,
+    paddingHorizontal: 0,
   },
   listIcon: {
     width: 28,
@@ -4338,66 +3900,9 @@ const styles = StyleSheet.create({
     width: '100%',
     height: CARD_PREVIEW_HEIGHT,
   },
-  cardPreviewFallback: {
-    width: '100%',
-    height: CARD_PREVIEW_HEIGHT,
-    justifyContent: 'flex-end',
-    position: 'relative',
-    overflow: 'hidden',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-  },
-  cardFallbackFaviconTile: {
-    position: 'absolute',
-    top: 14,
-    left: 16,
-    width: 36,
-    height: 36,
-    borderRadius: 11,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  cardFallbackFaviconImage: {
-    width: 24,
-    height: 24,
-  },
-  cardFallbackOrb: {
-    position: 'absolute',
-    borderWidth: 22,
-    borderRadius: 999,
-    opacity: 0.11,
-  },
-  cardFallbackOrbTop: {
-    width: 150,
-    height: 150,
-    top: -92,
-    right: 36,
-  },
-  cardFallbackOrbBottom: {
-    width: 110,
-    height: 110,
-    right: -28,
-    bottom: -54,
-  },
-  cardFallbackWordmarkMask: {
-    width: '82%',
-  },
-  cardFallbackWordmarkBesideFavicon: {
-    // The tile ends at x=52; text starts at x=64 even when it wraps.
-    paddingLeft: 44,
-  },
-  cardFallbackWordmark: {
-    width: '100%',
-    fontSize: 34,
-    lineHeight: 34,
-    fontWeight: '900',
-    letterSpacing: -1.2,
-  },
   cardBody: {
-    padding: 16,
-    gap: 9,
+    padding: 12,
+    gap: 4,
   },
   cardBodyTextOnlyWeb: {
     paddingVertical: 13,
@@ -4406,6 +3911,16 @@ const styles = StyleSheet.create({
   cardOpenLabel: {
     fontSize: 14,
     fontWeight: '600',
+  },
+  cardCompactHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  cardCompactTitleCol: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
   },
   cardTitleRow: {
     flexDirection: 'row',

@@ -1,17 +1,4 @@
-/**
- * Layout regression guards for the Browse facet shelf (the horizontal chip row
- * under "BROWSE": All / Inbox / collections / #tags).
- *
- * On Android a horizontal ScrollView can collapse its viewport onto its content
- * and clip the chips' bottom edge, and vertical padding on the content
- * container makes it worse (see the comments on `styles.shelf`). These guards
- * lock in the two invariants that fixed it (PR #62):
- *   1. the shelf ScrollView has an explicit height, so the viewport can't
- *      collapse below a chip's height;
- *   2. the shelf content container has NO vertical padding (spacing must be
- *      margin, which lives outside the scroll box and can't clip).
- */
-import { render, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 import { StyleSheet, type ViewStyle } from 'react-native';
 
@@ -74,27 +61,24 @@ async function renderShelf() {
       </CaptureToastProvider>
     </BookmarksProvider>,
   );
-  await waitFor(() => expect(screen.getByTestId('browse-shelf')).toBeTruthy());
-  return screen.getByTestId('browse-shelf');
+  await waitFor(() => expect(screen.getByTestId('inbox-scope-picker')).toBeTruthy());
+  return screen;
 }
 
-test('browse shelf reserves a vertical floor (Android viewport-collapse guard)', async () => {
-  const shelf = await renderShelf();
-  const style = StyleSheet.flatten(shelf.props.style) as ViewStyle;
-
-  // Either a fixed height or a minHeight reserves the floor that stops the
-  // horizontal ScrollView from collapsing onto its content. minHeight is
-  // preferred (it grows with larger fonts instead of clipping), but accept
-  // either so this guards the invariant, not the exact property.
-  const floor = style.minHeight ?? style.height;
-  expect(typeof floor).toBe('number');
+test('scope control grows with text and the redundant filter strip is absent', async () => {
+  const screen = await renderShelf();
+  expect(screen.queryByTestId('browse-shelf')).toBeNull();
+  const picker = screen.getByTestId('inbox-scope-picker');
+  const style = StyleSheet.flatten(picker.props.style) as ViewStyle;
+  expect(style.minHeight).toBe(48);
+  expect(style.height).toBeUndefined();
 });
 
-test('browse shelf content has no vertical padding (Android clip trap)', async () => {
-  const shelf = await renderShelf();
-  const content = StyleSheet.flatten(shelf.props.contentContainerStyle) as ViewStyle;
-
-  expect(content.paddingVertical).toBeUndefined();
-  expect(content.paddingTop).toBeUndefined();
-  expect(content.paddingBottom).toBeUndefined();
+test('Folder view shows a heading without a scope picker or filter strip', async () => {
+  const screen = await renderShelf();
+  await fireEvent.press(screen.getByTestId('inbox-view-options'));
+  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  expect(screen.getByText('Collections')).toBeTruthy();
+  expect(screen.queryByTestId('inbox-scope-picker')).toBeNull();
+  expect(screen.queryByTestId('browse-shelf')).toBeNull();
 });
