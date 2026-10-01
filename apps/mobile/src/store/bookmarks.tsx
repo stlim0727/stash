@@ -972,7 +972,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   }, [auth]);
   const broadcastSyncNudgeRef = useRef<(() => void) | null>(null);
   const syncPendingRef = useRef(false);
-  const syncNowRef = useRef<(() => Promise<boolean>) | null>(null);
+  const syncPendingForceRef = useRef(false);
+  const syncNowRef = useRef<((options?: { force?: boolean }) => Promise<boolean>) | null>(null);
   const checkAiRetriesRef = useRef<(() => void) | null>(null);
   const localCreateFlushesInFlight = useRef(0);
   const pendingUserTitleEdits = useRef(new Set<string>());
@@ -1010,8 +1011,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const pendingTagOpsRef = useRef<PendingTagOp[]>([]);
   const tagSyncInFlight = useRef(false);
   const tagSyncPending = useRef(false);
+  const tagSyncPendingForce = useRef(false);
   const tagOpsWriteRef = useRef(Promise.resolve(true));
   const tagWorkPending = useRef(0);
+  const tagEditsPending = useRef(0);
+  const tagJournalRetryAtRef = useRef(0);
+  const tagJournalHealthyRef = useRef(true);
+  const [tagJournalRetryAt, setTagJournalRetryAt] = useState(0);
   const [pendingImportCollections, setPendingImportCollections] = useState<
     PendingImportCollection[]
   >([]);
@@ -1242,7 +1248,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // own finally block would still see it set and schedule a redundant
       // extra sync 50ms later (Sentry STASH-3K review).
       syncPendingRef.current = false;
-      void syncNowRef.current?.().catch(() => {});
+      const pendingForce = syncPendingForceRef.current;
+      syncPendingForceRef.current = false;
+      void syncNowRef.current?.({ force: pendingForce }).catch(() => {});
     }
   }, []);
 
@@ -1313,9 +1321,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         try {
           await ensureRepositoryReady();
           await repository.setMeta(PENDING_TAG_OPS_KEY, JSON.stringify(pendingTagOpsRef.current));
+          tagJournalHealthyRef.current = true;
+          tagJournalRetryAtRef.current = 0;
+          setTagJournalRetryAt(0);
           return true;
         } catch (error) {
           logStorageError("tag ops", error);
+          tagJournalHealthyRef.current = false;
+          const retryAt = Date.now() + UPLOAD_RETRY_BACKOFF_MS[0]!;
+          tagJournalRetryAtRef.current = retryAt;
+          setTagJournalRetryAt(retryAt);
           return false;
         }
       });
@@ -2935,8 +2950,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             );
             if (localCreateFlushesInFlight.current === 0) {
               syncPendingRef.current = false;
+              const pendingForce = syncPendingForceRef.current;
+              syncPendingForceRef.current = false;
               setTimeout(() => {
-                void syncNowRef.current?.().catch(() => {});
+                void syncNowRef.current?.({ force: pendingForce }).catch(() => {});
               }, 50);
             }
           });
@@ -3252,7 +3269,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // rows and durably re-creates every one of them as a fresh duplicate —
       // this is the exact "561 -> 1122" doubling reported twice. Refuse
       // outright rather than risk it; the caller asks the user to retry.
-      if (bookmarksRef.current === null || isSyncingState) {
+      if (bookmarksRef.current === null || isSyncingState || tagEditsPending.current > 0) {
         recordLog(
           "warn",
           `import: refused (not ready) items=${items.length} loaded=${bookmarksRef.current !== null} isSyncing=${isSyncingState}`,
@@ -3664,8 +3681,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             enrichInBackground(bookmark);
           }
         };
-        ensureRepositoryReady()
-          .then(async () => {
+        void serializeTagWork(async () => {
+            await ensureRepositoryReady();
             const epochAtStart = resetEpoch.current;
             if (resetEpoch.current !== epochAtStart) {
               recordLog("warn", "import: loop aborted by library reset");
@@ -3730,8 +3747,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             }
             if (localCreateFlushesInFlight.current === 0) {
               syncPendingRef.current = false;
+              const pendingForce = syncPendingForceRef.current;
+              syncPendingForceRef.current = false;
               setTimeout(() => {
-                void syncNowRef.current?.().catch(() => {});
+                void syncNowRef.current?.({ force: pendingForce }).catch(() => {});
               }, 50);
             }
           });
@@ -3743,7 +3762,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       );
       return { imported, duplicates, skipped };
     },
-    [auth.userId, loadedBookmarks, enrichInBackground, isSyncingState],
+    [auth.userId, loadedBookmarks, enrichInBackground, isSyncingState, serializeTagWork],
   );
 
   // Record that the user just opened a bookmark (viewed its Detail or opened its
@@ -4447,12 +4466,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     }
     if (tagSyncInFlight.current) {
       tagSyncPending.current = true;
+      tagSyncPendingForce.current ||= force;
       return false;
     }
     tagSyncInFlight.current = true;
     try {
-      if (!(await tagOpsWriteRef.current)) {
-        return false;
+      await tagOpsWriteRef.current;
+      if (!tagJournalHealthyRef.current) {
+        if (!force && Date.now() < tagJournalRetryAtRef.current) return false;
+        if (!(await applyTagOps(pendingTagOpsRef.current))) return false;
       }
       const userId = auth.session.user.id;
       const epoch = resetEpoch.current;
@@ -4621,7 +4643,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       tagSyncInFlight.current = false;
       if (tagSyncPending.current) {
         tagSyncPending.current = false;
-        void syncNowRef.current?.();
+        const pendingForce = tagSyncPendingForce.current;
+        tagSyncPendingForce.current = false;
+        void syncNowRef.current?.({ force: pendingForce }).catch(() => {});
       }
     }
   }, [auth.session, applyTagData, applyTagOps, hasSyncedOnce]);
@@ -4630,12 +4654,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // journal first, then publish/persist its derived snapshot. A failed journal
   // changes neither memory nor the cache, and overlapping edits cannot clobber.
   const commitTagEdit = useCallback(
-    (bookmarkId: string, names: string[], operation: "add" | "remove"): Promise<string | null> =>
-      serializeTagWork(async () => {
+    (bookmarkId: string, names: string[], operation: "add" | "remove"): Promise<string | null> => {
+      tagEditsPending.current += 1;
+      return serializeTagWork(async () => {
         bookmarkId = resolveAliasedId(bookmarkId, idAliases.current);
         if (!hasRemoteIdentity(bookmarkId) || !bookmarksRef.current?.some((bookmark) =>
           resolveAliasedId(bookmark.id, idAliases.current) === bookmarkId)) {
           return "This bookmark cannot be tagged.";
+        }
+        await ensureRepositoryReady();
+        if (!(await repository.getBookmark(bookmarkId))) {
+          return "This bookmark is still being saved. Please retry.";
         }
         const cleaned = names.map((name) => name.trim()).filter(Boolean);
         if (cleaned.length === 0) return "Enter a tag name.";
@@ -4654,6 +4683,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         try {
           await ensureRepositoryReady();
           await repository.setMeta(PENDING_TAG_OPS_KEY, JSON.stringify(nextOps));
+          tagJournalHealthyRef.current = true;
+          tagJournalRetryAtRef.current = 0;
+          setTagJournalRetryAt(0);
         } catch (error) {
           logStorageError("tag edit journal", error);
           return "Could not save tags on this device. Please retry.";
@@ -4661,7 +4693,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         applyTagOps(nextOps, { persist: false });
         applyTagData(nextData);
         return null;
-      }),
+      }).finally(() => { tagEditsPending.current -= 1; });
+    },
     [serializeTagWork, applyTagOps, applyTagData],
   );
 
@@ -5995,10 +6028,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       const force = options?.force === true;
       if (syncInFlight.current) {
         syncPendingRef.current = true;
+        syncPendingForceRef.current ||= force;
         return false;
       }
       if (localCreateFlushesInFlight.current > 0) {
         syncPendingRef.current = true;
+        syncPendingForceRef.current ||= force;
         return false;
       }
       if (!auth.session) {
@@ -7733,8 +7768,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         setIsSyncing(false);
         if (syncPendingRef.current) {
           syncPendingRef.current = false;
+          const pendingForce = syncPendingForceRef.current;
+          syncPendingForceRef.current = false;
           setTimeout(() => {
-            void syncNowRef.current?.().catch(() => {});
+            void syncNowRef.current?.({ force: pendingForce }).catch(() => {});
           }, 50);
         }
       }
@@ -8464,17 +8501,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     if (deadlines.length === 0) return;
     let cancelled = false;
     const timer = setTimeout(() => {
-      // A failed storage write must not create a 100ms retry loop.
-      void tagOpsWriteRef.current.then((healthy) => {
-        if (!cancelled && healthy) void syncNowRef.current?.().catch(() => {});
+      // Await queued work, then let sync repair an unhealthy journal first.
+      void tagOpsWriteRef.current.then(() => {
+        if (!cancelled) void syncNowRef.current?.().catch(() => {});
       });
-    }, Math.max(100, Math.min(...deadlines) - Date.now()));
+    }, Math.max(100, Math.max(Math.min(...deadlines), tagJournalRetryAt) - Date.now()));
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
   }, [pendingTagOps, bookmarks, auth.userId, auth.status, reconciledCacheUserId,
-    syncPaused, isSyncingState, hasSyncedOnce]);
+    syncPaused, isSyncingState, hasSyncedOnce, tagJournalRetryAt]);
 
   // Lazy anonymous creation on the first save after logout. With lazy logout,
   // signing out leaves `auth.status === 'signed_out'` and NO session — no

@@ -20,6 +20,10 @@ Acknowledgements clear only the exact UUID they uploaded. Local edits compute ag
 They persist the journal before publishing or writing the derived snapshot and
 before starting upload. Failed writes return an error without changing the queue
 or the visible/cached association.
+Import batch and fallback writes occupy that same queue, so edits made while an
+import is saving wait for its durable bookmark and journal. Import refuses while
+a manual edit is pending rather than capturing an incomplete journal. A manual
+edit also checks that its bookmark exists in durable storage before accepting it.
 The tag snapshot is derived data: startup replays the journal over the cached
 snapshot, including if a crash interrupted the snapshot write.
 
@@ -29,7 +33,8 @@ Tag uploads run one at a time and only under the reconciled cache owner.
 Associations wait for `hasSyncedOnce`; the bookmark's UUID alone is not evidence
 of remote existence. Local-only images keep tags locally until image/create sync
 becomes available. Pause blocks upload. Changes made during an upload request a
-follow-up sync. Responses from a departed identity or reset epoch are discarded.
+follow-up sync; a forced request keeps its force flag through that follow-up.
+Responses from a departed identity or reset epoch are discarded.
 Reset refuses while a tag upload or serialized tag mutation is in flight.
 
 Failures retain the operation and persist retry count, attempt time and error
@@ -38,7 +43,11 @@ kind. Automatic retries use the bookmark queue's exponential schedule (5, 15,
 Sync now bypasses backoff. A cancellable timer wakes sync at the earliest eligible
 failed-operation deadline, including after restart. Cleanup also cancels a wake-up
 already waiting for journal persistence, so it cannot start sync after unmount. Pause, auth/cache ownership,
-bookmark creation, and storage health gate automatic retry. One durable health marker escalates at attempt 3 for
+bookmark creation, and storage health gate automatic retry. Failed retry-journal
+writes are retried after a five-second storage cooldown; a forced sync repairs
+the journal immediately. Upload resumes only after that repair succeeds, and
+unrelated successful queued work cannot clear the journal failure state.
+One durable health marker escalates at attempt 3 for
 ordinary errors or 6 for network/DNS errors through existing observability.
 
 A successful remove becomes a confirmed tombstone. Pull still replays it, so a
@@ -65,7 +74,9 @@ Regression checks cover offline edits and provider restart, journal-only recover
 write failures (including restart and overlapping edits), create-before-association
 ordering, persisted retry backoff, automatic deadline retries and pause/resume,
 manual retry, in-flight add/remove acknowledgement, anonymous carry-over, and
-a stalled journal write racing duplicate adoption and a second edit.
+a stalled journal write racing duplicate adoption and a second edit, batch and
+fallback imports racing edits, deferred forced retries, and journal repair after
+temporary storage failure without a new edit.
 The real web repository also verifies metadata survives reinitialization.
 Existing native SQLite metadata writes are awaited; this change adds no schema or
 backend deployment. Physical-device process termination, the full UX matrix and
