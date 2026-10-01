@@ -7,6 +7,7 @@ import {
   Alert,
   Image,
   type ImageLoadEventData,
+  InteractionManager,
   Linking,
   type NativeSyntheticEvent,
   Platform,
@@ -252,26 +253,46 @@ export default function BookmarkDetailScreen({
   const resolvedId = bookmark?.id;
   const reportEnrichment = resolvedId ? getEnrichment(resolvedId) : undefined;
   useEffect(() => {
-    if (resolvedId) {
-      markSuggestionsSeen(resolvedId);
+    if (!resolvedId) {
+      return;
     }
+    const handle = InteractionManager.runAfterInteractions(() => {
+      markSuggestionsSeen(resolvedId);
+    });
+    return () => {
+      handle.cancel();
+    };
   }, [resolvedId, reportEnrichment, markSuggestionsSeen]);
   // Viewing a bookmark's Detail counts as opening it — record the access so the
   // "Recently opened" Inbox sort reflects it. Once per id (a re-open remounts).
+  // Run after interactions so the global store mutation does not cause a re-render
+  // storm across the background stack while navigation is transitioning.
   useEffect(() => {
-    if (markAccessOnMount && resolvedId) {
-      markBookmarkAccessed(resolvedId);
+    if (!markAccessOnMount || !resolvedId) {
+      return;
     }
+    const handle = InteractionManager.runAfterInteractions(() => {
+      markBookmarkAccessed(resolvedId);
+    });
+    return () => {
+      handle.cancel();
+    };
   }, [markAccessOnMount, resolvedId, markBookmarkAccessed]);
   // STASH-61: opening Detail is also the one on-demand moment we check whether
   // a saved YouTube video is still available — never background polling. The
   // store no-ops for a non-YouTube bookmark, so this is safe to call for every
   // bookmark opened. Once per id (a re-open remounts), mirroring the access
-  // tracking above.
+  // tracking above. Run after interactions to keep the transition smooth.
   useEffect(() => {
-    if (resolvedId) {
-      checkVideoAvailability(resolvedId, bookmark?.url);
+    if (!resolvedId) {
+      return;
     }
+    const handle = InteractionManager.runAfterInteractions(() => {
+      checkVideoAvailability(resolvedId, bookmark?.url);
+    });
+    return () => {
+      handle.cancel();
+    };
   }, [resolvedId, bookmark?.url, checkVideoAvailability]);
   // One breadcrumb on first mount so a freeze right after opening a
   // freshly-shared bookmark (Sentry STASH-H) places the Detail screen on the

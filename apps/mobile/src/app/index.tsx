@@ -631,23 +631,32 @@ export default function InboxScreen() {
   } = useBookmarks();
   const { show: showToast } = useCaptureToast();
   const [openingBookmarkId, setOpeningBookmarkId] = useState<string | null>(null);
-  const openBookmarkFrame = useRef<number | null>(null);
-  // Native detail screens can take a moment to mount. Keep the tapped item
-  // visibly busy until navigation replaces the Inbox, then clear it when the
-  // user returns so the card never remains stuck in its loading state.
+  const openingBookmarkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isNavigatingRef = useRef(false);
+  // Detail navigation is triggered immediately on tap to eliminate artificial
+  // frame delays. If opening experiences a real delay (>150ms), show the busy
+  // indicator on the card. When returning to the Inbox or on blur, clear the
+  // timer and reset the busy state.
   useFocusEffect(
     useCallback(() => {
-      if (openBookmarkFrame.current !== null) {
-        cancelAnimationFrame(openBookmarkFrame.current);
-        openBookmarkFrame.current = null;
+      if (openingBookmarkTimerRef.current !== null) {
+        clearTimeout(openingBookmarkTimerRef.current);
+        openingBookmarkTimerRef.current = null;
       }
       setOpeningBookmarkId(null);
+      isNavigatingRef.current = false;
+      return () => {
+        if (openingBookmarkTimerRef.current !== null) {
+          clearTimeout(openingBookmarkTimerRef.current);
+          openingBookmarkTimerRef.current = null;
+        }
+      };
     }, []),
   );
   useEffect(
     () => () => {
-      if (openBookmarkFrame.current !== null) {
-        cancelAnimationFrame(openBookmarkFrame.current);
+      if (openingBookmarkTimerRef.current !== null) {
+        clearTimeout(openingBookmarkTimerRef.current);
       }
     },
     [],
@@ -3241,17 +3250,23 @@ export default function InboxScreen() {
               setInlineDetailId((current) => (current === item.id ? null : item.id));
               return;
             }
-            if (openingBookmarkId !== null) {
+            if (isNavigatingRef.current) {
               return;
             }
-            setOpeningBookmarkId(item.id);
-            // Let React commit the busy overlay before mounting the potentially
-            // expensive detail route; otherwise both updates share this press
-            // event and the spinner may never reach the screen.
-            openBookmarkFrame.current = requestAnimationFrame(() => {
-              openBookmarkFrame.current = null;
-              router.push({ pathname: '/bookmark/[id]', params: { id: item.id } });
-            });
+            isNavigatingRef.current = true;
+            // Push route immediately so the user experiences zero artificial delay.
+            router.push({ pathname: '/bookmark/[id]', params: { id: item.id } });
+
+            // Only show a busy indicator if mounting/navigation takes longer
+            // than a noticeable threshold (a real delay), avoiding an immediate
+            // re-render of the entire inbox for fast transitions.
+            if (openingBookmarkTimerRef.current !== null) {
+              clearTimeout(openingBookmarkTimerRef.current);
+            }
+            openingBookmarkTimerRef.current = setTimeout(() => {
+              openingBookmarkTimerRef.current = null;
+              setOpeningBookmarkId(item.id);
+            }, 150);
           };
           const isOpening = openingBookmarkId === item.id;
           const openLink = () => {
