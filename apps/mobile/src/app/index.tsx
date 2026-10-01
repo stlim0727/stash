@@ -41,6 +41,7 @@ import { usePalette, uiMetrics } from '@/theme';
 import { useOpenReport } from '@/feedback/open-report';
 import { LibraryHeader } from '@/ui/LibraryHeader';
 import { LibraryStatus } from '@/ui/LibraryStatus';
+import { AnonymousNudgeBanner } from '@/ui/AnonymousNudgeBanner';
 import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
 import { Chip } from '@/ui/Chip';
@@ -2553,6 +2554,10 @@ export default function InboxScreen() {
               loading={isLoading} loadError={loadError} syncing={isSyncing} paused={syncPaused}
               retry={() => { void syncNow({ force: true }); }} signIn={() => router.push('/settings')}
               />
+            <AnonymousNudgeBanner
+              isAnonymous={auth.status === 'anonymous'}
+              bookmarkCount={inbox.length}
+            />
             {/* The section label only earns its vertical space while searching,
                 where the match COUNT is real information. In the default/faceted
                 state it's redundant chrome: a newest-first list obviously leads

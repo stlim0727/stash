@@ -103,21 +103,21 @@ async function focusSearch(screen: Awaited<ReturnType<typeof render>>) {
   return input;
 }
 
-test('focusing the empty field shows the suggestion shelf and hides the browse shelf', async () => {
+test('focusing the empty field shows the suggestion shelf and hides the controls row', async () => {
   seedTaggedLibrary();
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
 
-  // Before focus: the browse shelf is shown, the suggestion shelf is not.
-  expect(screen.getByTestId('browse-shelf')).toBeTruthy();
+  // Before focus: the controls row is shown, the suggestion shelf is not.
+  expect(screen.getByTestId('inbox-filter-options-row')).toBeTruthy();
   expect(screen.queryByTestId('search-suggestion-shelf')).toBeNull();
 
   await focusSearch(screen);
 
-  // After focus (empty query): the suggestion shelf takes the slot; the browse
-  // shelf is hidden (mutual exclusion).
+  // After focus (empty query): the suggestion shelf takes the slot; the controls
+  // row is hidden (mutual exclusion).
   await waitFor(() => expect(screen.getByTestId('search-suggestion-shelf')).toBeTruthy());
-  expect(screen.queryByTestId('browse-shelf')).toBeNull();
+  expect(screen.queryByTestId('inbox-filter-options-row')).toBeNull();
   expect(screen.getByText('Jump to')).toBeTruthy();
 });
 
@@ -151,10 +151,10 @@ test('tapping a recent chip fills the query and keeps the field focused', async 
   // the recent fills + keeps focus so the user can keep editing. Phase 2: the
   // shelf re-filters to the now-non-empty query (here "local-first" matches no
   // tag/folder/other-recent, so it has nothing to suggest and hides) — the
-  // browse shelf must NOT reappear while still focused.
+  // controls row must NOT reappear while still focused.
   expect(input.props.value).toBe('local-first');
   await waitFor(() => expect(screen.queryByTestId('search-suggestion-shelf')).toBeNull());
-  expect(screen.queryByTestId('browse-shelf')).toBeNull();
+  expect(screen.queryByTestId('inbox-filter-options-row')).toBeNull();
 });
 
 test('tapping a tag chip applies the tag facet and clears the query', async () => {
@@ -234,7 +234,7 @@ test('an empty library renders no suggestion shelf on focus', async () => {
   expect(screen.queryByText('Jump to')).toBeNull();
 });
 
-test('blurring the field hides the suggestion shelf and restores the browse shelf', async () => {
+test('blurring the field hides the suggestion shelf and restores the controls row', async () => {
   seedTaggedLibrary();
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
@@ -247,7 +247,7 @@ test('blurring the field hides the suggestion shelf and restores the browse shel
   });
 
   await waitFor(() => expect(screen.queryByTestId('search-suggestion-shelf')).toBeNull());
-  expect(screen.getByTestId('browse-shelf')).toBeTruthy();
+  expect(screen.getByTestId('inbox-filter-options-row')).toBeTruthy();
 });
 
 test('long-pressing a recent chip removes just that entry', async () => {
@@ -574,9 +574,9 @@ test('typing with no shelf match shows NEITHER the suggestion shelf NOR the brow
   await typeQuery(input, 'zzz');
 
   // No recent/tag/folder matches "zzz" → the suggestion shelf hides; and while
-  // focused the browse shelf must NOT reappear. The field-only header.
+  // focused the controls row must NOT reappear. The field-only header.
   await waitFor(() => expect(screen.queryByTestId('search-suggestion-shelf')).toBeNull());
-  expect(screen.queryByTestId('browse-shelf')).toBeNull();
+  expect(screen.queryByTestId('inbox-filter-options-row')).toBeNull();
   expect(screen.queryByText('Jump to')).toBeNull();
   // The zero-result empty state MUST render — this guards against a regression
   // where `searching` is computed from the raw query instead of debouncedQuery.
@@ -620,9 +620,9 @@ test('tapping a matched recent fills the query and keeps focus', async () => {
 
   // The recent completes the query and never blurs the field. The shelf still
   // shows (the full "design system" recent equals the query so it's dropped, but
-  // #design / Design still match) — the browse shelf stays hidden either way.
+  // #design / Design still match) — the controls row stays hidden either way.
   expect(input.props.value).toBe('design system');
-  expect(screen.queryByTestId('browse-shelf')).toBeNull();
+  expect(screen.queryByTestId('inbox-filter-options-row')).toBeNull();
 });
 
 test('the shelf and the results agree on what matches the query', async () => {
@@ -737,9 +737,9 @@ test('keyboard-hide without a blur drops the stranded shelf (Android Back button
       handlers.forEach((cb) => cb());
     });
 
-    // The shelf is gone and the browse shelf is restored — no longer stranded.
+    // The shelf is gone and the controls row is restored — no longer stranded.
     await waitFor(() => expect(screen.queryByTestId('search-suggestion-shelf')).toBeNull());
-    expect(screen.getByTestId('browse-shelf')).toBeTruthy();
+    expect(screen.getByTestId('inbox-filter-options-row')).toBeTruthy();
   } finally {
     addSpy.mockRestore();
   }
