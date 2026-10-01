@@ -71,6 +71,7 @@ import {
 } from '@/domain/preview-image-cache';
 import { isYoutubeAvailabilityCandidate } from '@/domain/page-metadata';
 import { hasRemoteIdentity, isLocalOnlyBookmark } from '@/sync/sync-bookmarks';
+import { notifyDetailMounted } from '@/domain/detail-navigation-signal';
 
 // Lines of title shown before collapsing behind a "Show more" toggle.
 const TITLE_COLLAPSED_LINES = 4;
@@ -263,12 +264,22 @@ export default function BookmarkDetailScreen({
   // point at a row that no longer exists.
   const resolvedId = bookmark?.id;
   const reportEnrichment = resolvedId ? getEnrichment(resolvedId) : undefined;
+  // Notify that Detail has mounted so any pending delayed spinner timer in Inbox
+  // is canceled immediately, preventing unnecessary background re-renders.
+  useEffect(() => {
+    if (resolvedId) {
+      notifyDetailMounted(resolvedId);
+    }
+  }, [resolvedId]);
+
   // Avoid running global store mutations and background SQLite writes while the
   // native stack transition animation is in progress. Listen for transitionEnd,
-  // falling back after 250ms for web/inline/test environments.
-  const [transitionSettled, setTransitionSettled] = useState(inline || !navigation);
+  // falling back after a generous safety timeout for environments where no
+  // transition listener is available or fires.
+  const hasTransitionListener = !inline && typeof (navigation as any)?.addListener === 'function';
+  const [transitionSettled, setTransitionSettled] = useState(!hasTransitionListener);
   useEffect(() => {
-    if (inline || !navigation) {
+    if (!hasTransitionListener) {
       setTransitionSettled(true);
       return;
     }
@@ -289,9 +300,9 @@ export default function BookmarkDetailScreen({
         markSettled();
       }
     });
-    if (!settled) {
-      fallbackTimer = setTimeout(markSettled, 250);
-    }
+    // Safety fallback: if transitionEnd never fires (e.g. edge cases), settle after
+    // 1200ms, which is safely longer than standard native stack animations (350-500ms).
+    fallbackTimer = setTimeout(markSettled, 1200);
     return () => {
       settled = true;
       if (typeof unsubscribe === 'function') {
@@ -302,7 +313,7 @@ export default function BookmarkDetailScreen({
         fallbackTimer = null;
       }
     };
-  }, [inline, navigation]);
+  }, [hasTransitionListener, navigation]);
 
   useEffect(() => {
     if (!transitionSettled || !resolvedId) {

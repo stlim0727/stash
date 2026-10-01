@@ -89,6 +89,7 @@ import {
   sortBookmarks,
   type SortOption,
 } from '@/domain/sort';
+import { registerDetailOpenListener } from '@/domain/detail-navigation-signal';
 import {
   DEFAULT_FOLDER_SORT,
   FOLDER_SORT_PREF_KEY,
@@ -637,7 +638,9 @@ export default function InboxScreen() {
   // frame delays. If opening experiences a real delay (>150ms), show the busy
   // indicator on the card. When returning to the Inbox (gaining focus), clear the
   // timer and reset the busy state. Do not cancel on blur, so slow transitions
-  // still display progress feedback while the Inbox remains visible.
+  // still display progress feedback while the Inbox remains visible. When Detail
+  // mounts, it emits a signal so we cancel any pending timer immediately, avoiding
+  // background re-renders of the large Inbox list when navigation was fast.
   useFocusEffect(
     useCallback(() => {
       if (openingBookmarkTimerRef.current !== null) {
@@ -648,14 +651,22 @@ export default function InboxScreen() {
       isNavigatingRef.current = false;
     }, []),
   );
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    const unregister = registerDetailOpenListener(() => {
+      if (openingBookmarkTimerRef.current !== null) {
+        clearTimeout(openingBookmarkTimerRef.current);
+        openingBookmarkTimerRef.current = null;
+      }
+      setOpeningBookmarkId(null);
+      isNavigatingRef.current = false;
+    });
+    return () => {
+      unregister();
       if (openingBookmarkTimerRef.current !== null) {
         clearTimeout(openingBookmarkTimerRef.current);
       }
-    },
-    [],
-  );
+    };
+  }, []);
   const [query, setQuery] = useState('');
   // The TextInput stays bound to `query` (instant echo), but the derived work —
   // filtering, sorting, the searching flag, the section label — keys off this
