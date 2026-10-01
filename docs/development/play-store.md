@@ -153,6 +153,14 @@ Before submitting a minified build, smoke test startup, sign-in, share capture,
 SQLite persistence after restarting, and notifications. JavaScript/Hermes source
 maps for Sentry are separate from the Java/Kotlin mapping file.
 
+The internal APK workflow also attaches its exact R8 mapping to the GitHub
+Release as `stash-<commit>-<run-number>-<run-attempt>-mapping.txt`. Unique names
+preserve older mappings when the rolling `dev` APK is replaced. Download the
+mapping matching the installed build when uploading Java/Kotlin mappings to
+Sentry; attaching it to GitHub does not automatically upload it to Sentry.
+For Play builds, retain the mapping from the exact AAB (extract the entry above)
+for Sentry as well; Play's automatic import only applies to Play crash reports.
+
 Reference: https://support.google.com/googleplay/android-developer/answer/9848633
 
 ## Play Console Setup

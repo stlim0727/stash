@@ -460,11 +460,15 @@ jobs:
             echo "make_latest=$MAKE_LATEST"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Stage the APK
+      - name: Stage the APK and exact-build R8 mapping
         run: |
           mkdir -p dist
           cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk \
              "dist/${{ steps.meta.outputs.apk }}"
+          # The rolling dev APK is replaced; mappings need unique names so
+          # earlier installed builds remain debuggable in Sentry.
+          cp apps/mobile/android/app/build/outputs/mapping/release/mapping.txt \
+             "dist/stash-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}-mapping.txt"
           ls -la dist
 
       # When Supabase is configured, verify Expo actually inlined the URL into
@@ -624,6 +628,9 @@ jobs:
 
           ➡️ **[Download ${{ steps.meta.outputs.apk }}](${{ steps.meta.outputs.url }})**
 
+          R8 mapping for this exact build: \`stash-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}-mapping.txt\`
+          (attached below; retain for Sentry Java/Kotlin crash analysis).
+
           Local-only unless the repo's \`EXPO_PUBLIC_SUPABASE_*\` secrets were set
           at build time.
           EOF
@@ -660,6 +667,7 @@ jobs:
           name: ${{ steps.meta.outputs.rel_name }}
           files: |
             dist/*.apk
+            dist/*-mapping.txt
             dist/install-qr.png
           body_path: dist/RELEASE_BODY.md
 
