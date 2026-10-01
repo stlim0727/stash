@@ -8558,6 +8558,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // otherwise re-fire this effect every render. We reset the guard whenever we
   // leave `signed_out`, so a later save (or a recovered network) tries again.
   const lazyMintInFlight = useRef(false);
+  // Provenance annotations are observations, not a new save or retry signal.
+  // Depend on operational queue state so annotating the first capture cannot
+  // trigger another anonymous-session attempt after a failed mint.
+  const lazyMintQueueKey = JSON.stringify(queue.map((entry) => [
+    entry.local_id, entry.operation, entry.sync_status, entry.updated_at, entry.retry_count,
+  ]));
   useEffect(() => {
     if (auth.status !== "signed_out") {
       lazyMintInFlight.current = false;
@@ -8566,7 +8572,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     if (
       lazyMintInFlight.current ||
       bookmarks === null ||
-      !queue.some(
+      !queueRef.current.some(
         (entry) =>
           entry.sync_status === "pending" || entry.sync_status === "syncing",
       )
@@ -8592,7 +8598,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         lazyMintInFlight.current = false;
         logStorageError("lazy anonymous mint", error);
       });
-  }, [auth, bookmarks, queue]);
+  }, [auth, bookmarks, lazyMintQueueKey]);
 
   // Pull on first ready, and again whenever the signed-in user changes —
   // including the anonymous → real upgrade at sign-in and an account switch.
