@@ -260,3 +260,19 @@ test.each([[401, 'sign_in'], [403, 'permission']])('HTTP %s requests user action
   expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(1);
   await screen.unmount();
 });
+
+test('HTTP 503 keeps recovering after repeated failures instead of asking the user to retry', async () => {
+  jest.useFakeTimers();
+  apiMock.__listBookmarksUpdatedSinceMock.mockRejectedValue(new SupabaseRequestError('Temporarily unavailable', 503));
+  const screen = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(screen.result.current.librarySyncFlow.phase).toBe('retrying'));
+  for (const delay of [5000, 15000, 30000]) {
+    await act(async () => { await jest.advanceTimersByTimeAsync(delay); });
+  }
+  expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(4);
+  expect(screen.result.current.librarySyncFlow.phase).toBe('retrying');
+  apiMock.__listBookmarksUpdatedSinceMock.mockResolvedValue([]);
+  await act(async () => { await jest.advanceTimersByTimeAsync(60000); });
+  await waitFor(() => expect(screen.result.current.librarySyncFlow.phase).toBe('idle'));
+  await screen.unmount();
+});

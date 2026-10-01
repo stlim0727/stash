@@ -49,7 +49,7 @@ have a 5s minimum to avoid a hot loop on missing timestamps or unchanged work.
 Legacy import followups without attempt timestamps use a 30s wakeup cadence.
 The existing tag retry timer follows the same action-required policy.
 
-Transport errors remain automatically retryable. Authentication/permission
+Transport errors and HTTP 408/429/5xx remain automatically retryable. Authentication/permission
 errors and ordinary failures after three attempts require inspection instead
 of an automatic retry loop. The existing explicit Settings sync action remains
 available, and ordinary sync triggers retain their existing upload policy.

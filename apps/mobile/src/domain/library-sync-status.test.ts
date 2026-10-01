@@ -81,6 +81,7 @@ test('all cloud channels, including confirmed tag tombstones and restore failure
 
 test('request provenance determines action; transient errors never become terminal from retry count alone', () => {
   assert.equal(buildLibrarySyncFlow({ ...input, queue: [entry({ sync_status: 'failed', last_error_kind: 'transient_dns', retry_count: 100 })] }).phase, 'retrying');
+  assert.equal(buildLibrarySyncFlow({ ...input, queue: [entry({ sync_status: 'failed', last_error_kind: 'retryable_http', retry_count: 100 })] }).phase, 'retrying');
   assert.equal(buildLibrarySyncFlow({ ...input, queue: [entry({ sync_status: 'failed', last_error_kind: 'other', retry_count: 1 })] }).phase, 'retrying');
   assert.equal(buildLibrarySyncFlow({ ...input, queue: [entry({ sync_status: 'failed', last_error_kind: 'other', retry_count: 3 })] }).phase, 'attention');
   assert.equal(buildLibrarySyncFlow({ ...input, queue: [entry({ sync_status: 'failed', last_error_kind: 'permission' })] }).phase, 'permission');

@@ -37,9 +37,9 @@ export function buildLibrarySyncFlow(input: {
     : input.authStatus === 'error' && remaining > 0 ? 'sign_in'
     : input.syncing ? 'working'
     : input.runFailure?.kind === 'other' && (input.runFailure.attempts ?? 0) >= 3 ? 'attention'
-    : queue.some((entry) => entry.sync_status === 'failed' && entry.last_error_kind !== 'transient_dns' && entry.last_error_kind !== 'transient_network' && entry.retry_count >= 3) ? 'attention'
-    : tags.some((op) => !op.confirmed && op.last_error_kind !== 'transient_dns' && op.last_error_kind !== 'transient_network' && (op.retry_count ?? 0) >= 3) ? 'attention'
-    : [...imports, ...restores].some((item) => item.status === 'failed' && item.last_error_kind !== 'transient_dns' && item.last_error_kind !== 'transient_network' && (item.retry_count ?? 0) >= 3) ? 'attention'
+    : queue.some((entry) => entry.sync_status === 'failed' && entry.last_error_kind !== 'transient_dns' && entry.last_error_kind !== 'transient_network' && entry.last_error_kind !== 'retryable_http' && entry.retry_count >= 3) ? 'attention'
+    : tags.some((op) => !op.confirmed && op.last_error_kind !== 'transient_dns' && op.last_error_kind !== 'transient_network' && op.last_error_kind !== 'retryable_http' && (op.retry_count ?? 0) >= 3) ? 'attention'
+    : [...imports, ...restores].some((item) => item.status === 'failed' && item.last_error_kind !== 'transient_dns' && item.last_error_kind !== 'transient_network' && item.last_error_kind !== 'retryable_http' && (item.retry_count ?? 0) >= 3) ? 'attention'
     : input.runFailure || queue.some((entry) => entry.sync_status === 'failed') || tags.some((op) => !op.confirmed && (op.retry_count ?? 0) > 0)
       || imports.some((item) => item.status === 'failed') || restores.some((item) => item.status === 'failed') ? 'retrying'
     : remaining > 0 ? 'working' : 'idle';

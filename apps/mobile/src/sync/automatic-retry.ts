@@ -8,7 +8,7 @@ export interface RetryableFollowup {
 }
 export function canAutomaticallyRetry(kind: SyncErrorKind | null | undefined, attempts: number): boolean {
   return kind !== 'auth' && kind !== 'permission' &&
-    (kind === 'transient_dns' || kind === 'transient_network' || attempts < 3);
+    (kind === 'transient_dns' || kind === 'transient_network' || kind === 'retryable_http' || attempts < 3);
 }
 
 /** Use upload backoff, including the network multiplier; never force retries. */

@@ -51,7 +51,7 @@ export interface CaptureCompletedEvent {
 }
 
 export type SyncRecoveryDelayBand = 'under_10s' | '10_30s' | '30_60s' | '1_5m' | 'over_5m';
-export type SyncRecoveryFailureKind = 'transient_dns' | 'transient_network' | 'auth' | 'permission' | 'other' | 'unknown';
+export type SyncRecoveryFailureKind = 'transient_dns' | 'transient_network' | 'retryable_http' | 'auth' | 'permission' | 'other' | 'unknown';
 
 export interface SyncRecoveredEvent {
   readonly name: 'sync_recovered';
@@ -111,6 +111,7 @@ export const ALLOWED_SYNC_RECOVERY_DELAY_BANDS: ReadonlySet<SyncRecoveryDelayBan
 export const ALLOWED_SYNC_RECOVERY_FAILURE_KINDS: ReadonlySet<SyncRecoveryFailureKind> = new Set([
   'auth',
   'permission',
+  'retryable_http',
   'transient_dns',
   'transient_network',
   'other',

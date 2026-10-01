@@ -482,6 +482,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
           row.last_error_kind === 'transient_network' ||
           row.last_error_kind === 'auth' ||
           row.last_error_kind === 'permission' ||
+          row.last_error_kind === 'retryable_http' ||
           row.last_error_kind === 'other'
             ? row.last_error_kind
             : null,

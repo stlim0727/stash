@@ -15,6 +15,7 @@ test('retries use the existing upload backoff, network multiplier, and earliest 
   assert.equal(nextAutomaticSyncRetryAt({ ...input, queue: [failed({ last_error_kind: 'transient_dns' })] }), now + 15000);
   assert.equal(nextAutomaticSyncRetryAt({ ...input, queue: [failed({ retry_count: 2 }), failed()] }), now + 5000);
   assert.equal(nextAutomaticSyncRetryAt({ ...input, queue: [failed({ retry_count: 100, last_error_kind: 'transient_network' })] }), now + 900000);
+  assert.equal(nextAutomaticSyncRetryAt({ ...input, queue: [failed({ retry_count: 100, last_error_kind: 'retryable_http' })] }), now + 300000);
 });
 
 test('login, permission, exhausted ordinary attempts and permanent exclusions do not auto-retry', () => {
