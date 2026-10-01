@@ -1255,7 +1255,7 @@ export default function BookmarkDetailScreen({
       <TagField
         tags={tags.map((tag) => ({ id: tag.id, name: tag.name }))}
         suggestions={tagSuggestions}
-        editable={canOrganizeRemotely}
+        editable={hasRemoteIdentity(bookmark.id)}
         busy={busy}
         onAdd={handleAddTag}
         onRemove={handleRemoveTag}
@@ -1280,7 +1280,7 @@ export default function BookmarkDetailScreen({
         onAcceptAllSuggestions={handleAcceptAll}
         onDismissAllSuggestions={handleDismissAllTags}
         disabledHint={
-          canOrganizeRemotely ? undefined : t('detail.tagsDisabledHint')
+          hasRemoteIdentity(bookmark.id) ? undefined : t('detail.tagsDisabledHint')
         }
       />
 

@@ -303,3 +303,15 @@ test('replaceBookmarkIdentities drops an EXISTING queue entry under the OLD id, 
   const queueIds = (await repository.listQueue()).map((queued) => queued.local_id);
   assert.deepEqual(queueIds, ['new-id']);
 });
+
+
+test('pending tag intent survives web repository reload independently of the tag snapshot', async () => {
+  await repository.init([]);
+  const bookmark = makeBookmark('offline-tag-bookmark');
+  await repository.insertBookmark(bookmark);
+  const ops = [{ id: 'offline-op', bookmark_id: bookmark.id, tag_name: 'offline', op: 'add', source: 'user', confidence: null, created_at: 'now' }];
+  await repository.setMeta('pending_tag_ops', JSON.stringify(ops));
+  await repository.init([]);
+  assert.deepEqual(JSON.parse((await repository.getMeta('pending_tag_ops'))!), ops);
+  assert.equal((await repository.listBookmarks())[0]?.id, bookmark.id);
+});

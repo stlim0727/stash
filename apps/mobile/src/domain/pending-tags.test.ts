@@ -4,10 +4,12 @@ import { test } from 'node:test';
 import {
   applyPendingTagOps,
   applyTagOp,
+  carryOverTagOps,
   dequeueTagOp,
   dropPendingTagOpsForBookmarks,
   enqueueTagOp,
   reconcileSyncedAdd,
+  retireConfirmedTagRemovals,
   rekeyPendingTagOps,
   type PendingTagOp,
 } from './pending-tags.ts';
@@ -100,10 +102,10 @@ test('remove drops the link for that bookmark only', () => {
   );
 });
 
-test('enqueue: opposite ops cancel, same op de-dupes', () => {
+test('enqueue: opposite edits retain the latest intent, same op de-dupes', () => {
   const add = op({ op: 'add' });
   const remove = op({ op: 'remove', id: 'op-2' });
-  assert.deepEqual(enqueueTagOp([add], remove), []);
+  assert.deepEqual(enqueueTagOp([add], remove), [remove]);
   assert.deepEqual(enqueueTagOp([add], op({ op: 'add', id: 'op-3' })).length, 1);
   assert.deepEqual(enqueueTagOp([], add), [add]);
 });
@@ -147,4 +149,53 @@ test('dequeueTagOp clears the target after sync', () => {
     dequeueTagOp(ops, 'bm-1', 'food').map((o) => o.tag_name),
     ['work'],
   );
+});
+
+
+test('an old upload acknowledgement cannot clear a newer opposite edit', () => {
+  const add = op({ id: 'add-request' });
+  const remove = op({ id: 'remove-after-request', op: 'remove' });
+  const queued = enqueueTagOp([add], remove);
+  assert.deepEqual(dequeueTagOp(queued, add.bookmark_id, add.tag_name, add.id), [remove]);
+  assert.deepEqual(dequeueTagOp(queued, remove.bookmark_id, remove.tag_name, remove.id), []);
+});
+
+test('remove then add survives an in-flight remove acknowledgement', () => {
+  const remove = op({ id: 'remove-request', op: 'remove' });
+  const add = op({ id: 'add-after-request' });
+  const queued = enqueueTagOp([remove], add);
+  assert.deepEqual(dequeueTagOp(queued, remove.bookmark_id, remove.tag_name, remove.id), [add]);
+});
+
+
+test('account carry-over queues already-synced links and rekeys pending removals without duplication', () => {
+  const data = applyTagOp(EMPTY, op({}), 'guest');
+  const ops = [op({ id: 'remove', op: 'remove', tag_name: 'other', confirmed: true, retry_count: 4 })];
+  const result = carryOverTagOps(ops, data, new Map([['bm-1', 'new-bm']]), () => 'new-op', 'now');
+  assert.equal(result.length, 2);
+  assert.ok(result.every((op) => op.bookmark_id === 'new-bm'));
+  assert.equal(result[0]?.confirmed, false);
+  assert.equal(result[0]?.retry_count, 0);
+  assert.equal(result[1]?.tag_name, 'food');
+  assert.equal(result[1]?.op, 'add');
+  assert.equal(carryOverTagOps([op({})], data, new Map([['bm-1', 'new-bm']]), () => 'new-op', 'now').length, 1);
+});
+
+
+test('confirmed removal survives stale pulls and cache-preserving pulls until remote absence', () => {
+  const remove = op({ op: 'remove', confirmed: true });
+  const stale = applyTagOp(EMPTY, op({}), 'user');
+  assert.deepEqual(retireConfirmedTagRemovals([remove], stale, true), [remove]);
+  assert.deepEqual(applyPendingTagOps(stale, [remove], 'user').bookmarkTags, []);
+  assert.deepEqual(retireConfirmedTagRemovals([remove], EMPTY, false), [remove]);
+  assert.deepEqual(retireConfirmedTagRemovals([remove], EMPTY, true), []);
+  const unconfirmed = op({ op: 'remove' });
+  assert.deepEqual(retireConfirmedTagRemovals([unconfirmed], EMPTY, true), [unconfirmed]);
+});
+
+
+test('duplicate adoption collapses pending operations that now share a target', () => {
+  const source = op({ id: 'source', bookmark_id: 'old-id' });
+  const destination = op({ id: 'destination', bookmark_id: 'canonical-id', op: 'remove' });
+  assert.deepEqual(rekeyPendingTagOps([source, destination], new Map([['old-id', 'canonical-id']])), [destination]);
 });

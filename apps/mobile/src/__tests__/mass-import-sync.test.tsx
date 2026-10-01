@@ -286,7 +286,7 @@ jest.mock("@/domain/enrichment", () => ({
 }));
 
 import { BookmarksProvider, useBookmarks } from "@/store/bookmarks";
-import { type FakeRepositoryModule } from "./helpers/fake-repository";
+import { type FakeRepositoryModule, makeStoredBookmark } from "./helpers/fake-repository";
 
 const fakeRepo = jest.requireMock(
   "@/storage/repository",
@@ -1763,4 +1763,502 @@ test("manual duplicate title edited during a create uploads a follow-up update",
   await act(async () => { gate.resolve(); });
   await waitFor(() => expect(apiMock.__updateBookmarkMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ title: "New title" })), { timeout: 5000 });
   expect(result.current.inbox[0]?.title).toBe("New title");
+});
+
+
+test("manual offline tags wait for create confirmation before association upload", async () => {
+  authMock.__setAuth({ status: "not_configured", session: null, userId: null });
+  const { result, rerender, unmount } = await renderReadyStore();
+  let id = "";
+  await act(async () => {
+    const saved = result.current.addBookmark({ url: "https://example.com/manual-offline-tags" });
+    if (saved.status === "invalid") throw new Error(saved.error);
+    id = saved.bookmark.id;
+    await saved.persisted;
+  });
+  await act(async () => {
+    expect(await result.current.addTagsToBookmark(id, ["offline"])).toBeNull();
+  });
+  expect(apiMock.__bulkAttachMock).not.toHaveBeenCalled();
+  const gate = deferred<never>();
+  apiMock.__createBookmarkMock.mockImplementationOnce(() => gate.promise);
+  authMock.__setAuth({ status: "authenticated", session: mockRealSession, userId: "real-user" });
+  await rerender({});
+  await waitFor(() => expect(apiMock.__createBookmarkMock).toHaveBeenCalled());
+  expect(apiMock.__bulkAttachMock).not.toHaveBeenCalled();
+  await act(async () => gate.resolve({ bookmark_id: id, status: "created", metadata_status: "complete" } as never));
+  await waitFor(() => expect(apiMock.__bulkAttachMock).toHaveBeenCalledWith([
+    expect.objectContaining({ bookmark_id: id, tags: [expect.objectContaining({ name: "offline" })] }),
+  ]));
+  expect(apiMock.__createBookmarkMock.mock.invocationCallOrder[0]).toBeLessThan(apiMock.__bulkAttachMock.mock.invocationCallOrder[0]);
+  await unmount();
+});
+
+test("tag failures persist backoff across restart and manual sync bypasses it", async () => {
+  const id = "7e64cf1e-0000-4000-8000-000000000001";
+  fakeRepo.__reset([makeStoredBookmark({ id, user_id: "real-user" })]);
+  apiMock.__setRemoteRows([{ id, url: "https://example.com/stored" }]);
+  const first = await renderReadyStore();
+  apiMock.__bulkAttachMock.mockRejectedValueOnce(new Error("Network error"));
+  await act(async () => { await first.result.current.addTagsToBookmark(id, ["retry"]); });
+  await waitFor(() => expect(JSON.parse(fakeRepo.__meta("pending_tag_ops") ?? "[]")[0]?.retry_count).toBe(1));
+  const calls = apiMock.__bulkAttachMock.mock.calls.length;
+  await first.unmount();
+  const second = await renderReadyStore();
+  expect(apiMock.__bulkAttachMock.mock.calls.length).toBe(calls);
+  await act(async () => { await second.result.current.syncNow({ force: true }); });
+  await waitFor(() => expect(fakeRepo.__meta("pending_tag_ops")).toBe("[]"));
+  expect(apiMock.__bulkAttachMock.mock.calls.length).toBeGreaterThan(calls);
+  await second.unmount();
+});
+
+
+test("a remove during an in-flight tag add survives acknowledgement and is uploaded next", async () => {
+  const id = "7e64cf1e-0000-4000-8000-000000000001";
+  fakeRepo.__reset([makeStoredBookmark({ id, user_id: "real-user" })]);
+  apiMock.__setRemoteRows([{ id, url: "https://example.com/stored" }]);
+  const { result, unmount } = await renderReadyStore();
+  const gate = deferred<never>();
+  apiMock.__bulkAttachMock.mockImplementationOnce(() => gate.promise);
+  const api = jest.requireMock("@/api/bookmarks").createBookmarkApi(mockRealSession);
+  // Share this remove mock with every API instance created in the test.
+  const createApi = jest.requireMock("@/api/bookmarks").createBookmarkApi;
+  const spy = jest.spyOn(jest.requireMock("@/api/bookmarks"), "createBookmarkApi").mockImplementation((session) => ({
+    ...createApi(session), removeTags: api.removeTags,
+  }));
+  try {
+    await act(async () => { await result.current.addTagsToBookmark(id, ["race"]); });
+    await waitFor(() => expect(apiMock.__bulkAttachMock).toHaveBeenCalled());
+    await act(async () => { await result.current.removeTagFromBookmark(id, "race"); });
+    expect(JSON.parse(fakeRepo.__meta("pending_tag_ops") ?? "[]")[0].op).toBe("remove");
+    await act(async () => gate.resolve([{ bookmark_id: id, tags: [{
+      id: "race-server-tag", user_id: "real-user", name: "race", slug: "race", source: "user", created_at: "now",
+    }] }] as never));
+    await waitFor(() => expect(api.removeTags).toHaveBeenCalledWith({ bookmark_id: id, tags: ["race"] }));
+    expect(result.current.getTagsForBookmark(id)).toEqual([]);
+    await waitFor(() => expect(fakeRepo.__meta("pending_tag_ops")).toBe("[]"));
+  } finally {
+    spy.mockRestore();
+    await unmount();
+  }
+});
+
+
+test("anonymous account carry-over reuploads an already-synced tag under the rehomed bookmark", async () => {
+  const oldId = "7e64cf1e-0000-4000-8000-000000000001";
+  fakeRepo.__reset([makeStoredBookmark({ id: oldId, user_id: "guest-user" })], {
+    tags: [{ id: "guest-tag", user_id: "guest-user", name: "carried", slug: "carried", source: "user", created_at: "now" }],
+    bookmarkTags: [{ bookmark_id: oldId, tag_id: "guest-tag", source: "user", confidence: null, created_at: "now" }],
+    collections: [],
+  });
+  fakeRepo.__setMeta("synced_user_id", "guest-user");
+  fakeRepo.__setMeta("synced_user_is_anonymous", "true");
+  const { result, unmount } = await renderReadyStore();
+  await waitFor(() => expect(apiMock.__bulkAttachMock).toHaveBeenCalled());
+  const item = apiMock.__bulkAttachMock.mock.calls.find(([items]) => items.some((item: { tags: Array<{name: string}> }) => item.tags.some((tag) => tag.name === "carried")))?.[0][0];
+  expect(item).toBeDefined();
+  expect(item.bookmark_id).not.toBe(oldId);
+  expect(apiMock.__bulkAttachMock.mock.calls.flatMap(([items]) => items).filter((entry) => entry.tags.some((tag: { name: string }) => tag.name === "carried"))).toHaveLength(1);
+  await waitFor(() => expect(fakeRepo.__meta("pending_tag_ops")).toBe("[]"));
+  await unmount();
+});
+
+
+test.each(['add', 'remove'] as const)('%s tag retries at its backoff deadline without another save or manual sync', async (operation) => {
+  const id = '7e64cf1e-0000-4000-8000-000000000001';
+  fakeRepo.__reset([makeStoredBookmark({ id, user_id: 'real-user' })]);
+  apiMock.__setRemoteRows([{ id, url: 'https://example.com/stored' }]);
+  const store = await renderReadyStore();
+  const remove = jest.fn(async () => undefined);
+  const module = jest.requireMock('@/api/bookmarks');
+  const createApi = module.createBookmarkApi;
+  const spy = jest.spyOn(module, 'createBookmarkApi').mockImplementation((session) => ({
+    ...createApi(session), removeTags: remove,
+  }));
+  const upload = operation === 'add' ? apiMock.__bulkAttachMock : remove;
+  upload.mockRejectedValueOnce(new Error('server unavailable'));
+  jest.useFakeTimers();
+  try {
+    await act(async () => {
+      if (operation === 'add') await store.result.current.addTagsToBookmark(id, ['scheduled']);
+      else await store.result.current.removeTagFromBookmark(id, 'scheduled');
+    });
+    await waitFor(() => expect(JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]')[0]?.retry_count).toBe(1));
+    const op = JSON.parse(fakeRepo.__meta('pending_tag_ops')!)[0];
+    const deadline = Date.parse(op.last_attempt_at) + 5000;
+    await act(async () => { jest.advanceTimersByTime(Math.max(0, deadline - Date.now() - 1)); });
+    expect(upload).toHaveBeenCalledTimes(1);
+    await act(async () => { jest.advanceTimersByTime(1); });
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(fakeRepo.__meta('pending_tag_ops')).toBe('[]'));
+  } finally { await store.unmount(); jest.useRealTimers(); spy.mockRestore(); }
+});
+
+test('a paused failed-tag timer does not retry until sync resumes', async () => {
+  const id = '7e64cf1e-0000-4000-8000-000000000001';
+  fakeRepo.__reset([makeStoredBookmark({ id, user_id: 'real-user' })]);
+  apiMock.__setRemoteRows([{ id, url: 'https://example.com/stored' }]);
+  const store = await renderReadyStore();
+  apiMock.__bulkAttachMock.mockRejectedValueOnce(new Error('server unavailable'));
+  jest.useFakeTimers();
+  try {
+    await act(async () => { await store.result.current.addTagsToBookmark(id, ['paused']); });
+    await waitFor(() => expect(JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]')[0]?.retry_count).toBe(1));
+    await act(async () => { store.result.current.setSyncPaused(true); });
+    await act(async () => { jest.advanceTimersByTime(6000); });
+    expect(apiMock.__bulkAttachMock).toHaveBeenCalledTimes(1);
+    await act(async () => { store.result.current.setSyncPaused(false); });
+    await waitFor(() => expect(apiMock.__bulkAttachMock).toHaveBeenCalledTimes(2));
+  } finally { await store.unmount(); jest.useRealTimers(); }
+});
+
+test('a stalled tag write and another edit during duplicate adoption retain canonical IDs across restart', async () => {
+  const canonical = '7e64cf1e-0000-4000-8000-000000000099';
+  const url = 'https://example.com/rekey-journal-race';
+  const store = await renderReadyStore();
+  const create = deferred<never>();
+  apiMock.__createBookmarkMock.mockImplementationOnce(() => create.promise);
+  apiMock.__setRemoteRows([{ id: canonical, url }]);
+  let localId = '';
+  await act(async () => {
+    const saved = store.result.current.addBookmark({ url });
+    if (saved.status === 'invalid') throw new Error(saved.error);
+    localId = saved.bookmark.id;
+    await saved.persisted;
+  });
+  await waitFor(() => expect(apiMock.__createBookmarkMock).toHaveBeenCalled());
+  const journal = deferred();
+  const write = fakeRepo.repository.setMeta;
+  let stalled = false;
+  const writes = jest.spyOn(fakeRepo.repository, 'setMeta').mockImplementation(async (key, value) => {
+    if (key === 'pending_tag_ops' && value.includes('first') && !stalled) {
+      stalled = true;
+      await journal.promise;
+    }
+    await write(key, value);
+  });
+  const insert = jest.spyOn(fakeRepo.repository, 'insertBookmark');
+  const upload = apiMock.__bulkAttachMock.getMockImplementation()!;
+  apiMock.__bulkAttachMock.mockRejectedValue(new Error('keep journal pending for restart'));
+  let first!: Promise<string | null>;
+  let second!: Promise<string | null>;
+  try {
+    await act(async () => { first = store.result.current.addTagsToBookmark(localId, ['first']); });
+    await waitFor(() => expect(stalled).toBe(true));
+    await act(async () => { create.resolve({ bookmark_id: canonical, status: 'duplicate', metadata_status: 'complete' } as never); });
+    await waitFor(() => expect(insert).toHaveBeenCalledWith(expect.objectContaining({ id: canonical })));
+    await act(async () => { second = store.result.current.addTagsToBookmark(localId, ['second']); });
+    await act(async () => { journal.resolve(); await Promise.all([first, second]); });
+    expect(await first).toBeNull();
+    expect(await second).toBeNull();
+    await waitFor(() => expect(store.result.current.isSyncing).toBe(false));
+    const ops = JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]');
+    expect(ops.map((op: { tag_name: string }) => op.tag_name).sort()).toEqual(['first', 'second']);
+    expect(ops.every((op: { bookmark_id: string }) => op.bookmark_id === canonical)).toBe(true);
+    await store.unmount();
+    authMock.__setAuth({ status: 'not_configured', session: null, userId: null });
+    const restarted = await renderReadyStore();
+    expect(restarted.result.current.getTagsForBookmark(canonical).map((tag) => tag.name).sort()).toEqual(['first', 'second']);
+    await restarted.unmount();
+  } finally {
+    journal.resolve(); create.resolve({ bookmark_id: canonical, status: 'duplicate', metadata_status: 'complete' } as never);
+    writes.mockRestore(); insert.mockRestore(); apiMock.__bulkAttachMock.mockImplementation(upload);
+    await store.unmount();
+  }
+});
+
+test('a retry waiting for journal persistence is cancelled when the provider unmounts', async () => {
+  const id = '7e64cf1e-0000-4000-8000-000000000001';
+  fakeRepo.__reset([makeStoredBookmark({ id, user_id: 'real-user' })]);
+  apiMock.__setRemoteRows([{ id, url: 'https://example.com/stored' }]);
+  const store = await renderReadyStore();
+  const gate = deferred();
+  const write = fakeRepo.repository.setMeta;
+  let held = false;
+  const spy = jest.spyOn(fakeRepo.repository, 'setMeta').mockImplementation(async (key, value) => {
+    if (key === 'pending_tag_ops' && JSON.parse(value).some((op: { retry_count?: number }) => op.retry_count === 1)) {
+      held = true;
+      await gate.promise;
+    }
+    await write(key, value);
+  });
+  apiMock.__bulkAttachMock.mockRejectedValueOnce(new Error('server unavailable'));
+  jest.useFakeTimers();
+  try {
+    await act(async () => { await store.result.current.addTagsToBookmark(id, ['cancelled']); });
+    await waitFor(() => expect(held).toBe(true));
+    await act(async () => { jest.advanceTimersByTime(5100); });
+    expect(apiMock.__bulkAttachMock).toHaveBeenCalledTimes(1);
+    await store.unmount();
+    await act(async () => { gate.resolve(); });
+    expect(apiMock.__bulkAttachMock).toHaveBeenCalledTimes(1);
+  } finally { gate.resolve(); spy.mockRestore(); await store.unmount(); jest.useRealTimers(); }
+});
+
+
+test.each(['batch', 'fallback'] as const)('a tag edit during the %s import flush survives restart without losing imported tags', async (mode) => {
+  const store = await renderReadyStore();
+  await act(async () => { store.result.current.setSyncPaused(true); });
+  const gate = deferred();
+  const batch = fakeRepo.repository.insertImportBatch;
+  const write = fakeRepo.repository.setMeta;
+  let held = false;
+  if (mode === 'fallback') fakeRepo.repository.insertImportBatch = undefined;
+  const batchSpy = mode === 'batch' ? jest.spyOn(fakeRepo.repository, 'insertImportBatch').mockImplementation(async (...args) => {
+    held = true; await gate.promise; await batch!(...args);
+  }) : null;
+  const metaSpy = mode === 'fallback' ? jest.spyOn(fakeRepo.repository, 'setMeta').mockImplementation(async (key, value) => {
+    if (key === 'pending_tag_ops' && value.includes('imported')) { held = true; await gate.promise; }
+    await write(key, value);
+  }) : null;
+  let edit!: Promise<string | null>;
+  try {
+    await act(async () => { store.result.current.importBookmarks([{
+      source: 'pocket-csv', url: `https://example.com/import-tag-${mode}`, title: 'Imported',
+      notes: null, tags: ['imported'], collection: null,
+    }]); });
+    await waitFor(() => expect(held).toBe(true));
+    const id = store.result.current.inbox[0].id;
+    await act(async () => { edit = store.result.current.addTagsToBookmark(id, ['manual']); });
+    await act(async () => { gate.resolve(); await edit; });
+    expect(await edit).toBeNull();
+    expect(JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]').map((op: { tag_name: string }) => op.tag_name).sort()).toEqual(['imported', 'manual']);
+    expect(fakeRepo.__bookmarks().some((bookmark) => bookmark.id === id)).toBe(true);
+    await store.unmount();
+    authMock.__setAuth({ status: 'not_configured', session: null, userId: null });
+    const restarted = await renderReadyStore();
+    expect(restarted.result.current.getTagsForBookmark(id).map((tag) => tag.name).sort()).toEqual(['imported', 'manual']);
+    await restarted.unmount();
+  } finally {
+    gate.resolve(); batchSpy?.mockRestore(); metaSpy?.mockRestore();
+    fakeRepo.repository.insertImportBatch = batch; await store.unmount();
+  }
+});
+
+test('an import waits for a pending manual edit instead of capturing an incomplete tag journal', async () => {
+  const id = '7e64cf1e-0000-4000-8000-000000000001';
+  fakeRepo.__reset([makeStoredBookmark({ id, user_id: 'real-user' })]);
+  apiMock.__setRemoteRows([{ id, url: 'https://example.com/stored' }]);
+  const store = await renderReadyStore();
+  await act(async () => { store.result.current.setSyncPaused(true); });
+  const gate = deferred();
+  const write = fakeRepo.repository.setMeta;
+  let held = false;
+  const spy = jest.spyOn(fakeRepo.repository, 'setMeta').mockImplementation(async (key, value) => {
+    if (key === 'pending_tag_ops' && value.includes('manual-before-import')) { held = true; await gate.promise; }
+    await write(key, value);
+  });
+  let edit!: Promise<string | null>;
+  try {
+    await act(async () => { edit = store.result.current.addTagsToBookmark(id, ['manual-before-import']); });
+    await waitFor(() => expect(held).toBe(true));
+    await act(async () => { expect(store.result.current.importBookmarks([{
+      source: 'pocket-csv', url: 'https://example.com/import-after-edit', title: 'Imported', notes: null,
+      tags: ['imported'], collection: null,
+    }]).notReady).toBe(true); });
+    await act(async () => { gate.resolve(); await edit; });
+    expect(JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]')[0].tag_name).toBe('manual-before-import');
+  } finally { gate.resolve(); spy.mockRestore(); await store.unmount(); }
+});
+
+test('a forced manual sync queued behind a direct tag upload bypasses the new failure backoff', async () => {
+  const id = '7e64cf1e-0000-4000-8000-000000000001';
+  fakeRepo.__reset([makeStoredBookmark({ id, user_id: 'real-user' })]);
+  apiMock.__setRemoteRows([{ id, url: 'https://example.com/stored' }]);
+  const store = await renderReadyStore();
+  const gate = deferred<never>();
+  apiMock.__bulkAttachMock.mockImplementationOnce(() => gate.promise);
+  jest.useFakeTimers();
+  try {
+    await act(async () => { await store.result.current.addTagsToBookmark(id, ['forced']); });
+    await waitFor(() => expect(apiMock.__bulkAttachMock).toHaveBeenCalledTimes(1));
+    await act(async () => { await store.result.current.syncNow({ force: true }); });
+    await act(async () => { gate.reject(new Error('server unavailable')); });
+    await waitFor(() => expect(apiMock.__bulkAttachMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(fakeRepo.__meta('pending_tag_ops')).toBe('[]'));
+  } finally { await store.unmount(); jest.useRealTimers(); }
+});
+
+test.each(['manual', 'automatic'] as const)('%s retry repairs failed journal bookkeeping after storage recovers', async (mode) => {
+  const id = '7e64cf1e-0000-4000-8000-000000000001';
+  fakeRepo.__reset([makeStoredBookmark({ id, user_id: 'real-user' })]);
+  apiMock.__setRemoteRows([{ id, url: 'https://example.com/stored' }]);
+  const store = await renderReadyStore();
+  const write = fakeRepo.repository.setMeta;
+  let failures = mode === 'automatic' ? 2 : 1;
+  let repairAttempts = 0;
+  const spy = jest.spyOn(fakeRepo.repository, 'setMeta').mockImplementation(async (key, value) => {
+    if (key === 'pending_tag_ops' && JSON.parse(value).some((op: { retry_count?: number }) => (op.retry_count ?? 0) > 0)) {
+      repairAttempts += 1;
+      if (failures > 0) { failures -= 1; throw new Error('storage temporarily unavailable'); }
+    }
+    await write(key, value);
+  });
+  apiMock.__bulkAttachMock.mockRejectedValueOnce(new Error('server unavailable'));
+  jest.useFakeTimers();
+  try {
+    await act(async () => { await store.result.current.addTagsToBookmark(id, ['repair']); });
+    await waitFor(() => expect(repairAttempts).toBe(1));
+    expect(apiMock.__bulkAttachMock).toHaveBeenCalledTimes(1);
+    if (mode === 'manual') {
+      await act(async () => { await store.result.current.syncNow({ force: true }); });
+    } else {
+      await act(async () => { jest.advanceTimersByTime(5000); });
+      await waitFor(() => expect(repairAttempts).toBe(2));
+      expect(apiMock.__bulkAttachMock).toHaveBeenCalledTimes(1);
+      await act(async () => { jest.advanceTimersByTime(4000); });
+      expect(repairAttempts).toBe(2);
+      await act(async () => { jest.advanceTimersByTime(1000); });
+    }
+    await waitFor(() => expect(apiMock.__bulkAttachMock).toHaveBeenCalledTimes(2));
+    expect(repairAttempts).toBeGreaterThan(mode === 'automatic' ? 2 : 1);
+    await waitFor(() => expect(fakeRepo.__meta('pending_tag_ops')).toBe('[]'));
+  } finally { spy.mockRestore(); await store.unmount(); jest.useRealTimers(); }
+});
+
+test('suggested tag acceptance waits for a manual journal commit and preserves both intents after restart', async () => {
+  const id = '7e64cf1e-0000-4000-8000-000000000001';
+  fakeRepo.__reset([makeStoredBookmark({ id, user_id: 'real-user' })]);
+  apiMock.__setRemoteRows([{ id, url: 'https://example.com/stored' }]);
+  const store = await renderReadyStore();
+  await act(async () => { store.result.current.setSyncPaused(true); });
+  const gate = deferred();
+  const write = fakeRepo.repository.setMeta;
+  let held = false;
+  const spy = jest.spyOn(fakeRepo.repository, 'setMeta').mockImplementation(async (key, value) => {
+    if (key === 'pending_tag_ops' && value.includes('manual-first') && !held) { held = true; await gate.promise; }
+    await write(key, value);
+  });
+  let manual!: Promise<string | null>;
+  let suggested!: Promise<string | null>;
+  try {
+    await act(async () => { manual = store.result.current.addTagsToBookmark(id, ['manual-first']); });
+    await waitFor(() => expect(held).toBe(true));
+    await act(async () => { suggested = store.result.current.acceptSuggestedTags(id, [{ name: 'suggested', confidence: 0.91 }]); });
+    expect(store.result.current.getTagsForBookmark(id)).toEqual([]);
+    await act(async () => { gate.resolve(); await manual; await suggested; });
+    expect(await suggested).toBeNull();
+    const ops = JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]');
+    expect(ops.map((op: { tag_name: string }) => op.tag_name).sort()).toEqual(['manual-first', 'suggested']);
+    expect(ops.find((op: { tag_name: string }) => op.tag_name === 'suggested')).toMatchObject({ source: 'ai', confidence: 0.91 });
+    await store.unmount();
+    authMock.__setAuth({ status: 'not_configured', session: null, userId: null });
+    const restarted = await renderReadyStore();
+    expect(restarted.result.current.getTagsForBookmark(id).map((tag) => tag.name).sort()).toEqual(['manual-first', 'suggested']);
+    await restarted.unmount();
+  } finally { gate.resolve(); spy.mockRestore(); await store.unmount(); }
+});
+
+test('a suggested tag journal failure leaves tags and review state unchanged', async () => {
+  const id = '7e64cf1e-0000-4000-8000-000000000001';
+  fakeRepo.__reset([makeStoredBookmark({ id, user_id: 'real-user' })]);
+  apiMock.__setRemoteRows([{ id, url: 'https://example.com/stored' }]);
+  const store = await renderReadyStore();
+  await act(async () => { store.result.current.setSyncPaused(true); });
+  const write = fakeRepo.repository.setMeta;
+  const spy = jest.spyOn(fakeRepo.repository, 'setMeta').mockImplementation(async (key, value) => {
+    if (key === 'pending_tag_ops' && value.includes('suggested-failure')) throw new Error('disk full');
+    await write(key, value);
+  });
+  try {
+    await act(async () => {
+      expect(await store.result.current.acceptSuggestedTags(id, [{ name: 'suggested-failure', confidence: 0.8 }])).toMatch(/Could not save/);
+    });
+    expect(store.result.current.getTagsForBookmark(id)).toEqual([]);
+    expect(fakeRepo.__bookmarks()[0].dismissed_suggested_tags ?? []).toEqual([]);
+    expect(fakeRepo.__meta('pending_tag_ops') ?? '[]').toBe('[]');
+    expect(apiMock.__bulkAttachMock).not.toHaveBeenCalled();
+  } finally { spy.mockRestore(); await store.unmount(); }
+});
+
+test('imports refuse while a paused logout identity commit is pending', async () => {
+  const oldId = '7e64cf1e-0000-4000-8000-000000000001';
+  fakeRepo.__reset([makeStoredBookmark({ id: oldId, user_id: 'real-user',
+    content_type: 'image', url: null, url_hash: null, sync_status: 'failed', ever_synced: undefined,
+    local_image_uri: 'file:///stash-images/shared.jpg',
+    preview_image_url: 'https://storage.example.com/bookmark-images/real-user/' + oldId,
+  })]);
+  fakeRepo.__setMeta('pref.sync.paused', 'true');
+  fakeRepo.__setMeta('synced_user_id', 'real-user');
+  fakeRepo.__setMeta('pending_tag_ops', JSON.stringify([{
+    id: 'carry-op', bookmark_id: oldId, tag_name: 'carry-tag', op: 'add', source: 'user', confidence: null,
+    created_at: new Date().toISOString(),
+  }]));
+  const store = await renderReadyStore();
+  const gate = deferred();
+  const replace = fakeRepo.repository.replaceBookmarkIdentities!;
+  let held = false;
+  const spy = jest.spyOn(fakeRepo.repository, 'replaceBookmarkIdentities').mockImplementation(async (...args) => {
+    held = true; await gate.promise; await replace(...args);
+  });
+  try {
+    authMock.__setAuth({ status: 'signed_out', session: null, userId: null });
+    await act(async () => { store.rerender(undefined); });
+    await waitFor(() => expect(held).toBe(true));
+    expect(store.result.current.isSyncing).toBe(false);
+    await act(async () => { expect(store.result.current.importBookmarks([{
+      source: 'pocket-csv', url: 'https://example.com/import-during-account', title: 'Imported',
+      notes: null, tags: ['imported'], collection: null,
+    }]).notReady).toBe(true); });
+    await act(async () => { gate.resolve(); });
+    await waitFor(() => expect(JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]')[0]?.bookmark_id).not.toBe(oldId));
+    const ops = JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]');
+    expect(ops).toHaveLength(1);
+    expect(ops[0].tag_name).toBe('carry-tag');
+    expect(fakeRepo.__bookmarks().some((bookmark) => bookmark.id === ops[0].bookmark_id)).toBe(true);
+  } finally { gate.resolve(); spy.mockRestore(); await store.unmount(); }
+});
+
+test.each(['ordinary', 'transport'] as const)('%s tag escalation survives a failed threshold journal write and reports once after repair', async (kind) => {
+  const id = '7e64cf1e-0000-4000-8000-000000000001';
+  const threshold = kind === 'ordinary' ? 3 : 6;
+  fakeRepo.__reset([makeStoredBookmark({ id, user_id: 'real-user' })]);
+  apiMock.__setRemoteRows([{ id, url: 'https://example.com/stored' }]);
+  await fakeRepo.repository.setMeta('pending_tag_ops', JSON.stringify([{
+    id: 'threshold-op', bookmark_id: id, tag_name: 'stuck', op: 'add', source: 'user', confidence: null,
+    created_at: new Date().toISOString(), retry_count: threshold - 1, last_attempt_at: new Date().toISOString(),
+    last_error_kind: kind === 'ordinary' ? 'other' : 'network',
+  }]));
+  const store = await renderReadyStore();
+  const sentry = require('@/observability/sentry');
+  const report = jest.spyOn(sentry, 'reportSyncQueueHealthEscalation').mockImplementation(() => {});
+  const write = fakeRepo.repository.setMeta;
+  let failed = false;
+  const spy = jest.spyOn(fakeRepo.repository, 'setMeta').mockImplementation(async (key, value) => {
+    if (key === 'pending_tag_ops' && value.includes('health_escalated_at') && !failed) {
+      failed = true; throw new Error('storage unavailable at threshold');
+    }
+    await write(key, value);
+  });
+  apiMock.__bulkAttachMock.mockRejectedValue(new Error(kind === 'ordinary' ? 'server unavailable' : 'Network request failed'));
+  jest.useFakeTimers();
+  try {
+    await act(async () => { await store.result.current.syncNow({ force: true }); });
+    expect(failed).toBe(true);
+    expect(report).not.toHaveBeenCalled();
+    await act(async () => { await store.result.current.syncNow({ force: true }); });
+    expect(report).toHaveBeenCalledTimes(1);
+    expect(report).toHaveBeenCalledWith(expect.objectContaining({ operation: 'assign_tag', retryCount: threshold }));
+    expect(JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]')[0].health_escalated_at).toBeDefined();
+    await act(async () => { await store.result.current.syncNow({ force: true }); });
+    expect(report).toHaveBeenCalledTimes(1);
+  } finally { spy.mockRestore(); report.mockRestore(); await store.unmount(); jest.useRealTimers(); }
+});
+
+test.each(['add', 'remove', 'suggested'] as const)('%s tagging returns a handled error on bookmark preflight read failure and can retry', async (kind) => {
+  const id = '7e64cf1e-0000-4000-8000-000000000001';
+  fakeRepo.__reset([makeStoredBookmark({ id, user_id: 'real-user' })]);
+  apiMock.__setRemoteRows([{ id, url: 'https://example.com/stored' }]);
+  const store = await renderReadyStore();
+  await act(async () => { store.result.current.setSyncPaused(true); });
+  const spy = jest.spyOn(fakeRepo.repository, 'getBookmark').mockRejectedValueOnce(new Error('SQLite temporarily unavailable'));
+  const edit = () => kind === 'add' ? store.result.current.addTagsToBookmark(id, ['retry-read'])
+    : kind === 'remove' ? store.result.current.removeTagFromBookmark(id, 'retry-read')
+    : store.result.current.acceptSuggestedTags(id, [{ name: 'retry-read', confidence: 0.9 }]);
+  try {
+    await act(async () => { expect(await edit()).toMatch(/Could not save/); });
+    expect(fakeRepo.__meta('pending_tag_ops') ?? '[]').toBe('[]');
+    await act(async () => { expect(await edit()).toBeNull(); });
+    expect(JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]')).toHaveLength(1);
+  } finally { spy.mockRestore(); await store.unmount(); }
 });
