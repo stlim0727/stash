@@ -888,6 +888,100 @@ export default function BookmarkDetailScreen({
       }
     : null;
 
+  // Captured images are primary content; fetched URL previews follow the editors.
+  const previewHero = (() => {
+    if (isPreviewFailed) {
+      return (
+        <View
+          style={[
+            styles.previewFailedBanner,
+            { backgroundColor: palette.dangerSoft, borderColor: palette.danger },
+          ]}
+        >
+          <Ionicons name="warning-outline" size={24} color={palette.danger} />
+          <Text style={[styles.previewFailedText, { color: palette.text }]}>
+            {t('detail.previewFailedNote')}
+          </Text>
+        </View>
+      );
+    }
+    if (hidePreviewHero) {
+      return null;
+    }
+    const previewUri = rawPreviewUri;
+    if (!previewUri) {
+      return null;
+    }
+    return bookmark.url ? (
+      <Pressable
+        testID="bookmark-detail-preview-pressable"
+        accessibilityRole="link"
+        accessibilityLabel={t('common.openLink')}
+        accessibilityState={{ busy: isOpeningLink }}
+        onPress={handleOpenLink}
+        style={({ pressed }) => [
+          styles.previewContainer,
+          { backgroundColor: palette.mutedSurface },
+          pressed && styles.previewPressed,
+          isOpeningLink && { borderColor: palette.accent },
+        ]}
+      >
+        <Image
+          testID="bookmark-detail-preview"
+          source={{ uri: previewUri }}
+          style={styles.preview}
+          resizeMode="cover"
+          onError={() => markPreviewImageFailed(previewUri)}
+          onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
+            if (!didPreviewImageLoad(event.nativeEvent)) {
+              markPreviewImageFailed(previewUri);
+            } else {
+              markPreviewImageLoaded(previewUri);
+            }
+          }}
+        />
+        <View
+          testID="bookmark-detail-preview-ribbon"
+          style={styles.previewRibbon}
+          pointerEvents="none"
+        >
+          <PostHogMaskView>
+            <Text style={styles.previewRibbonText} numberOfLines={1}>
+              {host ?? t('common.open')}
+            </Text>
+          </PostHogMaskView>
+          <Ionicons name="open-outline" size={12} color="#ffffff" />
+        </View>
+        {isOpeningLink ? (
+          <View
+            testID="bookmark-detail-preview-opening"
+            pointerEvents="auto"
+            style={[styles.previewOpeningOverlay, { backgroundColor: palette.accentSoft }]}
+          >
+            <ActivityIndicator color={palette.accent} />
+          </View>
+        ) : null}
+      </Pressable>
+    ) : (
+      <View style={[styles.previewContainer, { backgroundColor: palette.mutedSurface }]}>
+        <Image
+          testID="bookmark-detail-preview"
+          source={{ uri: previewUri }}
+          style={styles.preview}
+          resizeMode="cover"
+          onError={() => markPreviewImageFailed(previewUri)}
+          onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
+            if (!didPreviewImageLoad(event.nativeEvent)) {
+              markPreviewImageFailed(previewUri);
+            } else {
+              markPreviewImageLoaded(previewUri);
+            }
+          }}
+        />
+      </View>
+    );
+  })();
+
   const content = (
     <>
       {inline && onInlineClose ? (
@@ -1058,6 +1152,8 @@ export default function BookmarkDetailScreen({
           }},
         ]} />
 
+      {bookmark.content_type === 'image' ? previewHero : null}
+
       {isTextMemo ? (
         <MemoEditor
           key={`body-${bookmark.id}`}
@@ -1188,100 +1284,7 @@ export default function BookmarkDetailScreen({
         }
       />
 
-      {/* Prefer a captured image's local URI (image bookmarks) over a fetched
-          preview; either renders the same hero. */}
-      {(() => {
-        if (isPreviewFailed) {
-          return (
-            <View
-              style={[
-                styles.previewFailedBanner,
-                { backgroundColor: palette.dangerSoft, borderColor: palette.danger },
-              ]}
-            >
-              <Ionicons name="warning-outline" size={24} color={palette.danger} />
-              <Text style={[styles.previewFailedText, { color: palette.text }]}>
-                {t('detail.previewFailedNote')}
-              </Text>
-            </View>
-          );
-        }
-        if (hidePreviewHero) {
-          return null;
-        }
-        const previewUri = rawPreviewUri;
-        if (!previewUri) {
-          return null;
-        }
-        return bookmark.url ? (
-          <Pressable
-            testID="bookmark-detail-preview-pressable"
-            accessibilityRole="link"
-            accessibilityLabel={t('common.openLink')}
-            accessibilityState={{ busy: isOpeningLink }}
-            onPress={handleOpenLink}
-            style={({ pressed }) => [
-              styles.previewContainer,
-              { backgroundColor: palette.mutedSurface },
-              pressed && styles.previewPressed,
-              isOpeningLink && { borderColor: palette.accent },
-            ]}
-          >
-            <Image
-              testID="bookmark-detail-preview"
-              source={{ uri: previewUri }}
-              style={styles.preview}
-              resizeMode="cover"
-              onError={() => markPreviewImageFailed(previewUri)}
-              onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
-                if (!didPreviewImageLoad(event.nativeEvent)) {
-                  markPreviewImageFailed(previewUri);
-                } else {
-                  markPreviewImageLoaded(previewUri);
-                }
-              }}
-            />
-            <View
-              testID="bookmark-detail-preview-ribbon"
-              style={styles.previewRibbon}
-              pointerEvents="none"
-            >
-              <PostHogMaskView>
-                <Text style={styles.previewRibbonText} numberOfLines={1}>
-                  {host ?? t('common.open')}
-                </Text>
-              </PostHogMaskView>
-              <Ionicons name="open-outline" size={12} color="#ffffff" />
-            </View>
-            {isOpeningLink ? (
-              <View
-                testID="bookmark-detail-preview-opening"
-                pointerEvents="auto"
-                style={[styles.previewOpeningOverlay, { backgroundColor: palette.accentSoft }]}
-              >
-                <ActivityIndicator color={palette.accent} />
-              </View>
-            ) : null}
-          </Pressable>
-        ) : (
-          <View style={[styles.previewContainer, { backgroundColor: palette.mutedSurface }]}>
-            <Image
-              testID="bookmark-detail-preview"
-              source={{ uri: previewUri }}
-              style={styles.preview}
-              resizeMode="cover"
-              onError={() => markPreviewImageFailed(previewUri)}
-              onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
-                if (!didPreviewImageLoad(event.nativeEvent)) {
-                  markPreviewImageFailed(previewUri);
-                } else {
-                  markPreviewImageLoaded(previewUri);
-                }
-              }}
-            />
-          </View>
-        );
-      })()}
+      {bookmark.content_type !== 'image' ? previewHero : null}
       {/* The AI summary is proposed as a note here — in its own clearly-labeled
           dashed ghost block, never poured into the field above — so it can't be
           mistaken for user-authored text (sacred-fields principle). Accept fills

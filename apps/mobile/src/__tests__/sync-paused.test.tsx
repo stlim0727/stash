@@ -476,3 +476,42 @@ test.each([false, true])('account cache stays hidden through delayed reconciliat
     deleteSpy.mockRestore();
   }
 });
+
+// Regression for #864: inspect every render, including before the passive ref mirror.
+test.each(['loading', 'error', 'session_expired', 'authenticated', 'not_configured'])(
+  'cold-start cache visibility respects %s auth and classifies the loaded rows',
+  async (status) => {
+    const cloudId = '7e64cf1e-0000-4000-8000-00000000b001';
+    const editedId = '7e64cf1e-0000-4000-8000-00000000b002';
+    const localId = '7e64cf1e-0000-4000-8000-00000000b003';
+    fakeRepo.__reset([
+      makeStoredBookmark({ id: cloudId, sync_status: 'synced' }),
+      makeStoredBookmark({ id: editedId, sync_status: 'pending', ever_synced: true }),
+      makeStoredBookmark({ id: localId, sync_status: 'pending', ever_synced: false }),
+    ]);
+    fakeRepo.__setMeta('sync_paused', 'true');
+    apiMock.__setRemoteIds([cloudId, editedId]);
+    authMock.__setAuth({ status, session: status === 'authenticated' ? mockRealSession : null,
+      userId: status === 'authenticated' ? 'real-user' : null });
+    const renders: string[][] = [];
+    const { result } = await renderHook(() => {
+      const store = useBookmarks();
+      if (!store.isLoading) renders.push(store.inbox.map((row) => row.id));
+      return store;
+    }, { wrapper });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(renders.length).toBeGreaterThan(0);
+    if (status !== 'not_configured') {
+      expect(renders[0]).toEqual([localId]);
+    }
+    if (status !== 'authenticated' && status !== 'not_configured') {
+      for (const ids of renders) expect(ids).toEqual([localId]);
+      expect(result.current.getBookmark(cloudId)).toBeUndefined();
+      expect(result.current.getBookmark(editedId)).toBeUndefined();
+      expect(result.current.getBookmark(localId)?.id).toBe(localId);
+    } else {
+      await waitFor(() => expect(result.current.inbox).toHaveLength(3));
+    }
+    expect(fakeRepo.__bookmarks()).toHaveLength(3);
+  },
+);

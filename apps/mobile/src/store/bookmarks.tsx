@@ -935,7 +935,8 @@ function mergeById<T>(
 export function BookmarksProvider({ children }: { children: ReactNode }) {
   const auth = useSupabaseAuth();
   const [reconciledCacheUserId, setReconciledCacheUserId] = useState<string | null>(null);
-  const hideAccountCache = auth.status === "session_expired" ||
+  const hideAccountCache = auth.status === "loading" || auth.status === "error" ||
+    auth.status === "session_expired" ||
     ((auth.status === "authenticated" || auth.status === "anonymous") &&
       auth.userId !== reconciledCacheUserId);
   // Mirror of `auth` so an ALREADY-RUNNING async closure (syncNow and
@@ -2729,7 +2730,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       image?: SharedImage;
     }): AddBookmarkResult => {
       const captureBookmarks = hideAccountCache
-        ? loadedBookmarks.filter((row) => !hasSyncedOnce(row.id))
+        ? loadedBookmarks.filter((row) => !isBookmarkSyncedOnce(row))
         : loadedBookmarks;
       const replayedCapture = capture_client_id
         ? captureBookmarks.find(
@@ -8803,7 +8804,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // Fresh local captures remain usable, including duplicate capture lookups.
   const visibleValue = useMemo<BookmarksContextValue>(() => {
     if (!hideAccountCache) return value;
-    const visibleRows = loadedBookmarks.filter((row) => !hasSyncedOnce(row.id));
+    const visibleRows = loadedBookmarks.filter((row) => !isBookmarkSyncedOnce(row));
     const ids = new Set(visibleRows.map((row) => row.id));
     const collectionIds = new Set(visibleRows.map((row) => row.collection_id));
     return {
@@ -8816,7 +8817,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       getCollection: (id) => collectionIds.has(id) ? value.getCollection(id) : undefined,
       getEnrichment: (id) => ids.has(id) ? value.getEnrichment(id) : undefined,
     };
-  }, [hideAccountCache, loadedBookmarks, hasSyncedOnce, value]);
+  }, [hideAccountCache, loadedBookmarks, value]);
 
   return (
     <BookmarksContext.Provider value={visibleValue}>

@@ -50,6 +50,13 @@ export default function AddBookmarkScreen() {
   const titleInputRef = useRef<TextInput | null>(null);
   const [mode, setMode] = useState<'link' | 'note'>('link');
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const focusTitleAfterExpand = useRef(false);
+  useEffect(() => {
+    if (mode === 'link' && detailsOpen && focusTitleAfterExpand.current) {
+      focusTitleAfterExpand.current = false;
+      titleInputRef.current?.focus();
+    }
+  }, [mode, detailsOpen]);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const normalizedUrl = normalizeUrl(url);
@@ -183,7 +190,14 @@ export default function AddBookmarkScreen() {
             placeholder={t('add.urlPlaceholder')} placeholderTextColor={palette.textSecondary}
             autoCapitalize="none" autoCorrect={false} autoFocus keyboardType="url" returnKeyType="next"
             value={url} onChangeText={(value) => { setUrl(value); setError(null); }}
-            onSubmitEditing={() => { setDetailsOpen(true); titleInputRef.current?.focus(); }} />
+            onSubmitEditing={() => {
+              if (detailsOpen) {
+                titleInputRef.current?.focus();
+              } else {
+                focusTitleAfterExpand.current = true;
+                setDetailsOpen(true);
+              }
+            }} />
           <Button variant="ghost" accessibilityState={{ expanded: detailsOpen }}
             onPress={() => setDetailsOpen((value) => !value)}>{t('add.details')}</Button>
           {detailsOpen ? <>{titleField}{noteField}</> : null}
