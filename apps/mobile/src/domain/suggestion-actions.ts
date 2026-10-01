@@ -4,7 +4,7 @@ import type { Collection, SuggestedTag } from './types';
 export interface SuggestionActionDeps {
   acceptSuggestedTags: (bookmarkId: string, suggestions: SuggestedTag[]) => Promise<string | null>;
   addTagsToBookmark: (bookmarkId: string, names: string[]) => Promise<string | null>;
-  assignCollection: (bookmarkId: string, collectionId: string | null) => void;
+  assignCollection: (bookmarkId: string, collectionId: string | null, source?: 'ai_apply') => void;
   createCollection: (name: string) => Promise<{ collection?: Collection; error?: string }>;
   dismissFolderSuggestion: (bookmarkId: string, tokens: string | string[]) => void;
 }
@@ -58,7 +58,7 @@ export async function acceptSuggestionBundle(
     return null;
   }
   if (folder.kind === 'existing') {
-    deps.assignCollection(bookmarkId, folder.id);
+    deps.assignCollection(bookmarkId, folder.id, 'ai_apply');
     recordFolderSuggestionActedOn(bookmarkId, input.folderTokens, deps.dismissFolderSuggestion);
     input.onAcceptedFolder?.(folder);
     return null;
@@ -68,7 +68,7 @@ export async function acceptSuggestionBundle(
   if (!result.collection) {
     return result.error ?? input.createCollectionError;
   }
-  deps.assignCollection(bookmarkId, result.collection.id);
+  deps.assignCollection(bookmarkId, result.collection.id, 'ai_apply');
   recordFolderSuggestionActedOn(bookmarkId, input.folderTokens, deps.dismissFolderSuggestion);
   input.onAcceptedFolder?.(folder);
   return null;

@@ -129,7 +129,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   const asSheet = width >= 760;
   const auth = useSupabaseAuth();
   const pathname = usePathname();
-  const { queue, isSyncing, lastPulledAt, aiQuotaExceeded, getBookmark } = useBookmarks();
+  const { queue, isSyncing, lastPulledAt, aiQuotaExceeded, getBookmark, getBookmarkProcessing } = useBookmarks();
 
   const [category, setCategory] = useState<FeedbackCategory>('bug');
   const [message, setMessage] = useState('');
@@ -271,6 +271,9 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
           : null,
         bookmarkId: reportedBookmark?.id ?? sourceContext?.bookmarkId,
         bookmark: bookmarkDiagnostics,
+        // Preserve what the user saw before screenshot capture / navigation.
+        bookmarkProcessing: sourceContext?.bookmarkProcessing ??
+          (reportedBookmark ? getBookmarkProcessing(reportedBookmark.id) : undefined),
       }),
     [
       appVersion,
@@ -278,6 +281,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       pathname,
       sourceContext,
       reportedBookmark,
+      getBookmarkProcessing,
       bookmarkDiagnostics,
       auth.status,
       queue,

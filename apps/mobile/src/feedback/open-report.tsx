@@ -71,13 +71,13 @@ export function useOpenReport(pathname: string) {
   const captureRef = useContext(CaptureContext);
   const busyRef = useRef(false);
   const [capturing, setCapturing] = useState(false);
-  const openReport = async () => {
+  const openReport = async (sourceOverride?: FeedbackSourceContext) => {
     if (busyRef.current) return;
     busyRef.current = true;
     setCapturing(true);
     let captureStartedAt: number | null = null;
     try {
-      const source = feedbackSourceFromPath(pathname);
+      const source = sourceOverride ?? feedbackSourceFromPath(pathname);
       setPendingFeedbackSource(source);
       // Logged (not stored separately) so it rides the existing log-buffer ->
       // diagnostics.logs pipeline into the report, independent of whether the

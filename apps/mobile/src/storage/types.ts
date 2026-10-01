@@ -4,6 +4,7 @@ import type {
   BookmarkTag,
   Collection,
   LocalPendingBookmark,
+  SyncChange,
   Tag,
 } from '@/domain/types';
 
@@ -110,6 +111,8 @@ export interface BookmarkRepository {
   listQueue(): Promise<LocalPendingBookmark[]>;
   enqueue(entry: LocalPendingBookmark): Promise<void>;
   updateQueueEntry(entry: LocalPendingBookmark): Promise<void>;
+  /** Diagnostic-only update: never recreate a completed entry or overwrite retry state. */
+  annotateQueueChanges?(localId: string, changes: SyncChange[]): Promise<void>;
   removeQueueEntry(localId: string): Promise<void>;
   /** Small durable key/value store (e.g. the pull watermark). */
   getMeta(key: string): Promise<string | null>;

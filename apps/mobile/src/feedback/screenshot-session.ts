@@ -1,4 +1,5 @@
 import type { FeedbackScreenshot } from '@/feedback/screenshot';
+import type { BookmarkProcessingSnapshot } from '@/domain/bookmark-processing';
 
 let pendingScreenshot: FeedbackScreenshot | null = null;
 let pendingSource: FeedbackSourceContext | null = null;
@@ -7,6 +8,7 @@ export interface FeedbackSourceContext {
   route: string;
   surface: string;
   bookmarkId?: string | null;
+  bookmarkProcessing?: BookmarkProcessingSnapshot;
 }
 
 export function setPendingFeedbackScreenshot(screenshot: FeedbackScreenshot | null): void {

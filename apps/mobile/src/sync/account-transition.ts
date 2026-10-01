@@ -387,6 +387,7 @@ export async function applyAccountTransition(
         local_id: newId,
         remote_id: null,
         operation: 'create',
+        changes: [{ source: 'account_rehome', fields: [], at: now }],
         // Rebuild from the (already rehomed, image URL cleared) row,
         // carrying a text note's body back as shared_text so URL-less notes
         // still upload to the new account, under the freshly-minted id so

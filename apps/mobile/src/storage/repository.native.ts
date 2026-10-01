@@ -1,6 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 
-import type { AIEnrichment, Bookmark, LocalPendingBookmark } from '@/domain/types';
+import type { AIEnrichment, Bookmark, LocalPendingBookmark, SyncChange } from '@/domain/types';
+import { parseSyncChanges } from '@/domain/sync-changes';
 import { noteSqliteOpenFailure } from '@/storage/diagnostics';
 import { IMPORT_BATCH_SIZE, runImportBatchTransactions } from '@/storage/import-batch';
 import { ensureNativeSqliteDirectory } from '@/storage/sqlite-directory.native';
@@ -22,6 +23,7 @@ interface BookmarkRow {
 }
 
 interface QueueRow {
+  changes: string | null;
   local_id: string;
   remote_id: string | null;
   operation: string;
@@ -87,7 +89,8 @@ const SCHEMA_SQL = `
     health_escalated_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    last_attempt_at TEXT
+    last_attempt_at TEXT,
+    changes TEXT
   );
 `;
 
@@ -222,6 +225,12 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         // Column already exists.
       }
 
+      try {
+        await db.execAsync('ALTER TABLE local_pending_bookmarks ADD COLUMN changes TEXT DEFAULT NULL');
+      } catch {
+        // Column already exists.
+      }
+
       const seeded = await db.getFirstAsync<{ value: string }>(
         "SELECT value FROM meta WHERE key = 'seeded'",
       );
@@ -299,8 +308,8 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         for (const entry of entries) {
           await db.runAsync(
             `INSERT OR REPLACE INTO local_pending_bookmarks
-            (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, last_error_kind, health_escalated_at, created_at, updated_at, last_attempt_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, last_error_kind, health_escalated_at, created_at, updated_at, last_attempt_at, changes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               entry.local_id,
               entry.remote_id,
@@ -314,6 +323,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
               entry.created_at,
               entry.updated_at,
               entry.last_attempt_at ?? null,
+              entry.changes ? JSON.stringify(entry.changes) : null,
             ],
           );
         }
@@ -384,8 +394,8 @@ class SqliteBookmarkRepository implements BookmarkRepository {
           await writeBookmark(db, bookmark);
           await db.runAsync(
             `INSERT OR REPLACE INTO local_pending_bookmarks
-            (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, last_error_kind, health_escalated_at, created_at, updated_at, last_attempt_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, last_error_kind, health_escalated_at, created_at, updated_at, last_attempt_at, changes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               entry.local_id,
               entry.remote_id,
@@ -399,6 +409,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
               entry.created_at,
               entry.updated_at,
               entry.last_attempt_at ?? null,
+              entry.changes ? JSON.stringify(entry.changes) : null,
             ],
           );
         },
@@ -458,6 +469,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         'SELECT * FROM local_pending_bookmarks ORDER BY created_at ASC',
       );
       return rows.map((row) => ({
+        ...(parseSyncChanges(row.changes) ? { changes: parseSyncChanges(row.changes) } : {}),
         local_id: row.local_id,
         remote_id: row.remote_id,
         operation: (row.operation ?? 'create') as LocalPendingBookmark['operation'],
@@ -484,8 +496,8 @@ class SqliteBookmarkRepository implements BookmarkRepository {
       (db) =>
         db.runAsync(
           `INSERT OR REPLACE INTO local_pending_bookmarks
-        (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, last_error_kind, health_escalated_at, created_at, updated_at, last_attempt_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, last_error_kind, health_escalated_at, created_at, updated_at, last_attempt_at, changes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             entry.local_id,
             entry.remote_id,
@@ -499,6 +511,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
             entry.created_at,
             entry.updated_at,
             entry.last_attempt_at ?? null,
+            entry.changes ? JSON.stringify(entry.changes) : null,
           ],
         ),
       'enqueue',
@@ -507,6 +520,13 @@ class SqliteBookmarkRepository implements BookmarkRepository {
 
   async updateQueueEntry(entry: LocalPendingBookmark): Promise<void> {
     await this.enqueue(entry);
+  }
+
+  async annotateQueueChanges(localId: string, changes: SyncChange[]): Promise<void> {
+    await this.connection.run((db) => db.runAsync(
+      'UPDATE local_pending_bookmarks SET changes = ? WHERE local_id = ?',
+      [JSON.stringify(changes), localId],
+    ), 'annotateQueueChanges');
   }
 
   async removeQueueEntry(localId: string): Promise<void> {

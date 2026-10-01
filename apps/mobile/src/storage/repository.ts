@@ -1,4 +1,4 @@
-import type { AIEnrichment, Bookmark, LocalPendingBookmark } from '@/domain/types';
+import type { AIEnrichment, Bookmark, LocalPendingBookmark, SyncChange } from '@/domain/types';
 import type {
   BookmarkRepository,
   CreateSyncCompletion,
@@ -291,6 +291,11 @@ class WebBookmarkRepository implements BookmarkRepository {
 
   async updateQueueEntry(entry: LocalPendingBookmark): Promise<void> {
     await this.enqueue(entry);
+  }
+
+  async annotateQueueChanges(localId: string, changes: SyncChange[]): Promise<void> {
+    this.queue = this.queue.map((entry) => entry.local_id === localId ? { ...entry, changes } : entry);
+    this.write(QUEUE_KEY, this.queue);
   }
 
   async removeQueueEntry(localId: string): Promise<void> {
