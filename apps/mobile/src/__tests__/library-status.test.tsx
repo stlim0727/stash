@@ -141,3 +141,11 @@ test('a rejected token with an active provider offers sync recovery rather than 
   await fireEvent.press(screen.getByText('View sync details'));
   expect(props.signIn).toHaveBeenCalledTimes(1);
 });
+
+
+test('provider restoration errors with empty-queue pull failures offer available re-authentication', async () => {
+  const screen = await render(<LibraryStatus {...props} inline={false} authStatus="error" flow={{ phase: 'sign_in', remaining: 0 }} />);
+  expect(screen.getByText('Sign in to resume sync')).toBeTruthy();
+  await fireEvent.press(screen.getByText('Sign In'));
+  expect(props.signIn).toHaveBeenCalledTimes(1);
+});

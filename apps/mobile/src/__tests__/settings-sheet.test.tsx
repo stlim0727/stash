@@ -53,7 +53,7 @@ jest.mock('@/store/bookmarks', () => {
   return { ...actual, useBookmarks: () => {
     const store = actual.useBookmarks();
     return mockRecoveryPhase ? { ...store, queue: [], isSyncing: false,
-      librarySyncFlow: { phase: mockRecoveryPhase, remaining: 0 }, syncNow: mockRetrySync } : store;
+      librarySyncFlow: { phase: mockRecoveryPhase, remaining: mockRecoveryPhase === "offline" ? 1 : 0 }, syncNow: mockRetrySync } : store;
   } };
 });
 
@@ -112,6 +112,19 @@ test.each(['attention', 'sign_in', 'permission'])('empty-queue %s failures expos
     const screen = await renderSettings();
     await fireEvent.press(screen.getByLabelText('Sync'));
     expect(mockRetrySync).toHaveBeenCalledWith({ force: true });
+    await screen.unmount();
+  } finally { mockRecoveryPhase = null; }
+});
+
+
+test('offline pending work shows connectivity feedback instead of a no-op manual sync action', async () => {
+  mockRecoveryPhase = 'offline';
+  mockRetrySync.mockClear();
+  try {
+    const screen = await renderSettings();
+    expect(screen.queryByLabelText('Sync')).toBeNull();
+    expect(screen.getByLabelText('Will sync automatically when connected')).toBeTruthy();
+    expect(mockRetrySync).not.toHaveBeenCalled();
     await screen.unmount();
   } finally { mockRecoveryPhase = null; }
 });

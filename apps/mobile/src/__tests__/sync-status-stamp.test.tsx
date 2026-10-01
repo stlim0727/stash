@@ -297,3 +297,41 @@ test('a rejected-token recovery never falls back to the rejected bearer when ref
   expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(1);
   await screen.unmount();
 });
+
+test('an earlier bookmark retry and unrelated sync cannot bypass a failed pull deadline', async () => {
+  jest.useFakeTimers();
+  const id = '1a2b3c4d-0000-4000-8000-00000000abcd';
+  fakeRepo.__reset([makeStoredBookmark({ id, sync_status: 'failed', ever_synced: false })]);
+  fakeRepo.__setMeta('synced_user_id', 'real-user');
+  const at = new Date().toISOString();
+  await fakeRepo.repository.enqueue({
+    local_id: id, remote_id: null, operation: 'create', payload: { url: 'https://example.com/retry' },
+    sync_status: 'failed', retry_count: 1, last_error: 'Temporary failure', last_error_kind: 'other',
+    created_at: at, updated_at: at, last_attempt_at: at,
+  });
+  apiMock.__listBookmarksUpdatedSinceMock.mockRejectedValueOnce(new Error('Network request failed'));
+  const screen = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(screen.result.current.librarySyncFlow.phase).toBe('retrying'));
+  await act(async () => { await screen.result.current.syncNow(); });
+  expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(1);
+  await act(async () => { await jest.advanceTimersByTimeAsync(5000); });
+  expect(apiMock.__createBookmarkMock).toHaveBeenCalledTimes(1);
+  expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(1);
+  await act(async () => { await jest.advanceTimersByTimeAsync(10000); });
+  expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(2);
+  expect(screen.result.current.librarySyncFlow.phase).toBe('idle');
+  await screen.unmount();
+});
+
+test('a retained provider error turns an empty-outbox pull failure into actionable recovery', async () => {
+  jest.useFakeTimers();
+  apiMock.__listBookmarksUpdatedSinceMock.mockRejectedValueOnce(new Error('Network request failed'));
+  const screen = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(screen.result.current.librarySyncFlow.phase).toBe('retrying'));
+  await act(async () => { authMock.__setAuth({ status: 'error' }); });
+  await screen.rerender(undefined);
+  expect(screen.result.current.librarySyncFlow).toEqual({ phase: 'sign_in', remaining: 0 });
+  await act(async () => { await jest.advanceTimersByTimeAsync(30000); });
+  expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(1);
+  await screen.unmount();
+});

@@ -97,3 +97,9 @@ test('permanently unsyncable entries do not claim an automatic retry or block co
   assert.deepEqual(buildLibrarySyncFlow({ ...input, queue: [excluded], permanentlyUnsyncableIds: new Set(['a']) }), idle);
   assert.deepEqual(buildLibrarySyncFlow({ ...input, queue: [excluded, entry({ local_id: 'b' })], permanentlyUnsyncableIds: new Set(['a']) }), { phase: 'working', remaining: 1 });
 });
+
+
+test('provider errors with failed pulls are actionable even when every outbox is empty', () => {
+  assert.equal(buildLibrarySyncFlow({ ...input, authStatus: 'error', runFailure: { kind: 'transient_network', attempts: 1 } }).phase, 'sign_in');
+  assert.equal(buildLibrarySyncFlow({ ...input, authStatus: 'error' }).phase, 'idle');
+});

@@ -49,7 +49,7 @@ export function LibraryStatus({ bookmarks, queue, authStatus, loading, loadError
 
   if (loading || loadError) return null;
   const saved = guest && confirmation?.bookmarks === bookmarks && confirmation.confirmed;
-  const key = (phase === 'sign_in' && authStatus !== 'session_expired' ? 'library.attention' : SYNC_COPY[phase]) ?? (guest && saved ? 'library.saved' : null);
+  const key = (phase === 'sign_in' && authStatus !== 'session_expired' && authStatus !== 'error' ? 'library.attention' : SYNC_COPY[phase]) ?? (guest && saved ? 'library.saved' : null);
   const actionable = phase === 'sign_in' || phase === 'permission' || phase === 'attention';
   if (inline) {
     if (actionable || !key) return null;
@@ -65,7 +65,7 @@ export function LibraryStatus({ bookmarks, queue, authStatus, loading, loadError
     style={{ padding: 16, marginBottom: 12, gap: 8, borderRadius: 16, borderWidth: 1, borderColor: palette.border, backgroundColor: palette.card }}>
     <Text style={{ color: phase === 'sign_in' ? palette.textSecondary : palette.danger }}>{t(key)}</Text>
     {guest ? guestActions : null}
-    {phase === 'sign_in' && authStatus === 'session_expired' ? <Button variant="ghost" onPress={signIn}>{t('settings.account.signIn')}</Button>
+    {phase === 'sign_in' && (authStatus === 'session_expired' || authStatus === 'error') ? <Button variant="ghost" onPress={signIn}>{t('settings.account.signIn')}</Button>
       : <Button variant="ghost" onPress={signIn}>{t('library.viewSync')}</Button>}
   </View>;
 }

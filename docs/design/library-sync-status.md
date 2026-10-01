@@ -25,6 +25,7 @@ changes clear its history; account identity also scopes the UI display history.
 | Retry delay persists for 15 seconds | Sync delayed, retrying automatically. |
 | Explicitly observed offline | Will sync automatically when connected; immediate. |
 | User pauses sync | Sync paused; tapping opens Settings. |
+| Provider error with retained failed pull | Sign in recovery, even with empty outboxes; no automatic-retry promise. |
 | Session expired | Sign in to resume; immediate sign-in action. |
 | HTTP 401 with an active provider session | Open sync details; manual retry forces token refresh. |
 | HTTP 403 | Explain access denial and open sync details in Settings. |
@@ -64,6 +65,13 @@ only an explicit manual force overrides them. Legacy failed followups without
 a timestamp share a stable hydration anchor for their initial 30-second wait.
 Tag health alerts retain the ordinary three-failure threshold for HTTP/API
 errors; only DNS/network failures use six.
+
+The pull driver checks its own retry deadline and eligibility even when
+another channel or unrelated save starts a sync. A manual force can override
+this wait; reconnect uses the normal readiness policy. A skipped pull keeps
+its failure observation and does not claim a completed full-sync stamp.
+Settings hides the manual sync action while offline and shows an accessible
+connectivity indicator instead.
 
 Retry timers are cancelled while offline, paused, busy, without an active
 session, or before local cache ownership has been reconciled. Reconnecting

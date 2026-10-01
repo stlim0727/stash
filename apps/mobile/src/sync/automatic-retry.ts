@@ -11,6 +11,15 @@ export function canAutomaticallyRetry(kind: SyncErrorKind | null | undefined, at
     (kind === 'transient_dns' || kind === 'transient_network' || kind === 'retryable_http' || attempts < 3);
 }
 
+export function syncRunRetryReadyAt(failure: SyncRunFailure): number {
+  const base = UPLOAD_RETRY_BACKOFF_MS[Math.min(Math.max(0, failure.attempts - 1), UPLOAD_RETRY_BACKOFF_MS.length - 1)]!;
+  return failure.at + base * (failure.kind === 'transient_dns' || failure.kind === 'transient_network' ? 3 : 1);
+}
+
+export function isPullReady(failure: SyncRunFailure | null, now: number, force = false): boolean {
+  return force || !failure || (canAutomaticallyRetry(failure.kind, failure.attempts) && now >= syncRunRetryReadyAt(failure));
+}
+
 /** A stable hydration anchor gives legacy failures without timestamps one quiet wait. */
 export function followupRetryReadyAt(item: RetryableFollowup, legacyAttemptAt: number): number {
   const at = Date.parse(item.last_attempt_at ?? '');
@@ -42,8 +51,7 @@ export function nextAutomaticSyncRetryAt(input: {
   }
   const failure = input.runFailure;
   if (failure && canAutomaticallyRetry(failure.kind, failure.attempts)) {
-    const base = UPLOAD_RETRY_BACKOFF_MS[Math.min(Math.max(0, failure.attempts - 1), UPLOAD_RETRY_BACKOFF_MS.length - 1)]!;
-    deadlines.push(failure.at + base * (failure.kind === 'transient_dns' || failure.kind === 'transient_network' ? 3 : 1));
+    deadlines.push(syncRunRetryReadyAt(failure));
   }
   for (const item of input.followups ?? []) {
     if (item.status !== 'failed' || !canAutomaticallyRetry(item.last_error_kind, item.retry_count ?? 0)) continue;

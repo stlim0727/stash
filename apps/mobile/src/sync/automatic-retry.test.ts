@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isFollowupReady, nextAutomaticSyncRetryAt } from '@/sync/automatic-retry';
+import { isFollowupReady, isPullReady, nextAutomaticSyncRetryAt } from '@/sync/automatic-retry';
 import type { LocalPendingBookmark } from '@/domain/types';
 const failed = (patch: Partial<LocalPendingBookmark> = {}): LocalPendingBookmark => ({
   local_id: 'a', remote_id: 'a', operation: 'update', payload: {}, sync_status: 'failed',
@@ -50,4 +50,17 @@ test('each followup enforces its own kind and deadline while manual force can re
   assert.equal(isFollowupReady({ status: 'failed' }, now + 29999, now), false);
   assert.equal(isFollowupReady({ status: 'failed' }, now + 30000, now), true);
   assert.equal(isFollowupReady({ status: 'pending' }, now, now), true);
+});
+
+
+test("pull readiness is independent from another channel's earlier deadline", () => {
+  const failure = { kind: 'transient_network' as const, at: now, attempts: 1 };
+  assert.equal(nextAutomaticSyncRetryAt({ ...input, queue: [failed()], runFailure: failure }), now + 5000);
+  assert.equal(isPullReady(failure, now + 5000), false);
+  assert.equal(isPullReady(failure, now + 15000), true);
+  assert.equal(isPullReady(failure, now, true), true);
+  for (const blocked of [{ ...failure, kind: 'auth' as const }, { ...failure, kind: 'permission' as const }, { ...failure, kind: 'other' as const, attempts: 3 }]) {
+    assert.equal(isPullReady(blocked, now + 900000), false);
+    assert.equal(isPullReady(blocked, now, true), true);
+  }
 });

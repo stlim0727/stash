@@ -94,7 +94,7 @@ import {
   type ProcessingStats,
 } from "@/domain/processing-status";
 import { buildLibrarySyncFlow, type LibrarySyncFlow } from "@/domain/library-sync-status";
-import { canAutomaticallyRetry, isFollowupReady, nextAutomaticSyncRetryAt } from "@/sync/automatic-retry";
+import { canAutomaticallyRetry, isFollowupReady, isPullReady, nextAutomaticSyncRetryAt } from "@/sync/automatic-retry";
 import { useNetworkOffline } from "@/ui/use-network-offline";
 import {
   applyPendingTagOps,
@@ -1051,8 +1051,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const offlineRef = useRef(offline);
   offlineRef.current = offline;
   const [syncRunFailure, setSyncRunFailure] = useState<{
-    kind: ReturnType<typeof syncErrorKind>; at: number; attempts: number;
+    kind: ReturnType<typeof syncErrorKind>; at: number; attempts: number; userId: string | null;
   } | null>(null);
+  const syncRunFailureRef = useRef(syncRunFailure);
+  syncRunFailureRef.current = syncRunFailure;
   useEffect(() => { setSyncRunFailure(null); }, [auth.userId]);
   const [isSyncingState, setIsSyncing] = useState(false);
   const [isSyncDebounceActive, setIsSyncDebounceActive] = useState(false);
@@ -7598,7 +7600,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // enrichment). Local rows with queued work are never overwritten.
         // Re-checked here (not just at entry) so pausing mid-run — after the
         // account reconciliation above but before this point — still skips it.
-        if (!syncPausedRef.current) {
+        const pullFailure = syncRunFailureRef.current;
+        const pullReady = isPullReady(pullFailure?.userId === session.user.id ? pullFailure : null, Date.now(), force);
+        if (!syncPausedRef.current && pullReady) {
           try {
             const result = await pullRemoteChanges(
               api,
@@ -7797,7 +7801,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             } else {
               if (authRef.current.userId === auth.userId) {
                 setSyncRunFailure((previous) => ({
-                  kind: syncErrorKind(error), at: Date.now(), attempts: (previous?.attempts ?? 0) + 1,
+                  userId: auth.userId, kind: syncErrorKind(error), at: Date.now(), attempts: (previous?.attempts ?? 0) + 1,
                 }));
               }
               logStorageError("pull", error);
@@ -7815,7 +7819,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // and must never surface as a "sync run" failure for the pass that
         // actually just succeeded.
         try {
-          void trackSyncStatus({
+          if (pullReady && !syncPausedRef.current) void trackSyncStatus({
             client: createSupabaseClient(),
             session,
             runtime: {
@@ -7833,7 +7837,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         if (authRef.current.userId === auth.userId) {
           setSyncRunFailure((previous) => ({
-            kind: syncErrorKind(error), at: Date.now(), attempts: (previous?.attempts ?? 0) + 1,
+            userId: auth.userId, kind: syncErrorKind(error), at: Date.now(), attempts: (previous?.attempts ?? 0) + 1,
           }));
         }
         logStorageError("sync run", error);

@@ -778,7 +778,7 @@ export default function SettingsScreen() {
     hasPending &&
     !isSyncing &&
     !isResettingLibrary &&
-    !syncPaused;
+    !syncPaused && librarySyncFlow?.phase !== "offline";
 
   // A bookmark may be uploading, fetching metadata, and queued for AI at the
   // same time. `processingStats` assigns it to exactly one display stage
@@ -976,6 +976,10 @@ export default function SettingsScreen() {
                 >
                   <Ionicons name="refresh" size={18} color={palette.accent} />
                 </Pressable>
+              ) : librarySyncFlow?.phase === "offline" ? (
+                <View accessibilityRole="text" accessibilityLiveRegion="polite" accessibilityLabel={t("library.offline")}>
+                  <Ionicons name="cloud-offline-outline" size={20} color={palette.textSecondary} />
+                </View>
               ) : cloudAvailable && !syncPaused ? (
                 <Ionicons
                   name="checkmark-circle"

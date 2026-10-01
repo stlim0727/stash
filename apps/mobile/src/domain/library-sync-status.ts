@@ -35,7 +35,7 @@ export function buildLibrarySyncFlow(input: {
     : input.paused ? 'paused'
     : input.offline ? 'offline'
     : kinds.includes('permission') ? 'permission'
-    : input.authStatus === 'error' && remaining > 0 ? 'sign_in'
+    : input.authStatus === 'error' && (remaining > 0 || input.runFailure) ? 'sign_in'
     : input.syncing ? 'working'
     : input.runFailure?.kind === 'other' && (input.runFailure.attempts ?? 0) >= 3 ? 'attention'
     : queue.some((entry) => entry.sync_status === 'failed' && entry.last_error_kind !== 'transient_dns' && entry.last_error_kind !== 'transient_network' && entry.last_error_kind !== 'retryable_http' && entry.retry_count >= 3) ? 'attention'
