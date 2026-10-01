@@ -2543,7 +2543,7 @@ export default function InboxScreen() {
         contentContainerStyle={[
           styles.list,
           { maxWidth: contentMaxWidth },
-          viewMode !== 'card' ? styles.listModeList : null,
+          viewMode === 'list' ? styles.listModeList : viewMode === 'folder' ? styles.folderGridList : null,
           // Start the list below the floating header (and the pinned filter bar
           // when active), and clear the Add button so it never covers the last row.
           { paddingTop: listPaddingTop, paddingBottom: insets.bottom + (selectionMode ? 120 : 88) },
@@ -2863,11 +2863,11 @@ export default function InboxScreen() {
               })
             : cardTags;
           const visibleMetaParts = [
-            ...(item.content_type === 'text' ? [t('inbox.memoType')] : []),
-            ...(item.content_type === 'image' ? [t('inbox.photoType')] : []),
-            ...(collectionName ? [collectionName] : []),
-            ...orderedTags.slice(0, 2).map((tag) => `#${tag.name}`),
-            ...(orderedTags.length > 2 ? [`+${orderedTags.length - 2}`] : []),
+            ...(item.content_type === 'text' ? [{ key: 'content-type-text', type: 'type' as const, label: t('inbox.memoType') }] : []),
+            ...(item.content_type === 'image' ? [{ key: 'content-type-image', type: 'type' as const, label: t('inbox.photoType') }] : []),
+            ...(collectionName ? [{ key: `collection-${item.collection_id ?? collectionName}`, type: 'collection' as const, label: collectionName }] : []),
+            ...orderedTags.slice(0, 2).map((tag) => ({ key: `tag-${tag.id}`, type: 'tag' as const, label: `#${tag.name}` })),
+            ...(orderedTags.length > 2 ? [{ key: 'tags-overflow', type: 'overflow' as const, label: `+${orderedTags.length - 2}` }] : []),
           ];
           const siteLabelText = siteLabel(item);
           const memoPreview =
@@ -3025,9 +3025,9 @@ export default function InboxScreen() {
                     <View style={styles.metaChipRow}>
                       {visibleMetaParts.map((part) => (
                         <View
-                          key={part}
+                          key={part.key}
                           accessible
-                          accessibilityLabel={part}
+                          accessibilityLabel={part.label}
                           style={[
                             styles.metaChip,
                             Platform.OS === 'web'
@@ -3035,7 +3035,7 @@ export default function InboxScreen() {
                               : { backgroundColor: palette.mutedSurface },
                           ]}
                         >
-                          {part === collectionName ? <Ionicons name="folder-outline" size={12} color={palette.textSecondary} /> : null}
+                          {part.type === 'collection' ? <Ionicons name="folder-outline" size={12} color={palette.textSecondary} /> : null}
                           <PostHogMaskView style={{ flexShrink: 1 }}>
                             <Text
                               style={[
@@ -3044,7 +3044,7 @@ export default function InboxScreen() {
                               ]}
                               numberOfLines={1}
                             >
-                              {part}
+                              {part.label}
                             </Text>
                           </PostHogMaskView>
                         </View>
@@ -3208,6 +3208,8 @@ export default function InboxScreen() {
                             accessibilityState={selectionMode ? { checked: isSelected } : undefined}
                             onPress={selectionMode ? () => toggleSelect(item.id) : openLink}
                             onLongPress={handleItemLongPress}
+                            style={{ minHeight: uiMetrics.touchTarget, justifyContent: 'center' }}
+                            hitSlop={8}
                           >
                             <HighlightedText
                               style={[styles.cardUrl, { color: palette.textSecondary }]}
@@ -3342,13 +3344,9 @@ export default function InboxScreen() {
                   <View style={styles.metaChipRow}>
                     {visibleMetaParts.map((part) => (
                       <View
-                        key={part}
-                        // `accessible` + `accessibilityLabel` give VoiceOver/
-                        // TalkBack the real chip text as one announced unit —
-                        // the masked Text below has no accessible ancestor of
-                        // its own otherwise (this chip isn't interactive).
+                        key={part.key}
                         accessible
-                        accessibilityLabel={part}
+                        accessibilityLabel={part.label}
                         style={[
                           styles.metaChip,
                           Platform.OS === 'web'
@@ -3356,7 +3354,7 @@ export default function InboxScreen() {
                             : { backgroundColor: palette.mutedSurface },
                         ]}
                       >
-                        {part === collectionName ? <Ionicons name="folder-outline" size={12} color={palette.textSecondary} /> : null}
+                        {part.type === 'collection' ? <Ionicons name="folder-outline" size={12} color={palette.textSecondary} /> : null}
                         <PostHogMaskView style={{ flexShrink: 1 }}>
                           <Text
                             style={[
@@ -3365,7 +3363,7 @@ export default function InboxScreen() {
                             ]}
                             numberOfLines={1}
                           >
-                            {part}
+                            {part.label}
                           </Text>
                         </PostHogMaskView>
                       </View>
@@ -3447,7 +3445,7 @@ export default function InboxScreen() {
       <ActionSheet visible={scopeMenuOpen} title={t('inbox.scopePickerA11y')} actionsMask
         onClose={() => setScopeMenuOpen(false)} actions={[
           { key: 'all', label: t('inbox.filterAll'), selected: sameFilter(ALL_FILTER, filter), onPress: () => { onSelectFilter(ALL_FILTER); setScopeMenuOpen(false); } },
-          { key: 'uncollected', label: t('inbox.filterNoCollection'), icon: 'file-tray-outline', selected: sameFilter(UNCOLLECTED_FILTER, filter), onPress: () => { onSelectFilter(UNCOLLECTED_FILTER); setScopeMenuOpen(false); } },
+          ...(hasUncollected ? [{ key: 'uncollected', label: t('inbox.filterNoCollection'), icon: 'file-tray-outline' as const, selected: sameFilter(UNCOLLECTED_FILTER, filter), onPress: () => { onSelectFilter(UNCOLLECTED_FILTER); setScopeMenuOpen(false); } }] : []),
           ...chips.map((chip) => ({ key: chip.key, label: chip.label, icon: chip.icon, selected: sameFilter(chip.filter, filter), onPress: () => { onSelectFilter(chip.filter); setScopeMenuOpen(false); } })),
         ]} />
       <ActionSheet
@@ -3581,6 +3579,9 @@ const styles = StyleSheet.create({
   },
   listModeList: {
     gap: 0,
+  },
+  folderGridList: {
+    gap: WEB_CARD_GRID_COLUMN_GAP,
   },
   hero: {
     flexDirection: 'row',
@@ -4013,6 +4014,9 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   metaChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     borderRadius: 999,
     borderWidth: Platform.select({ web: StyleSheet.hairlineWidth, default: 0 }),
     paddingVertical: Platform.select({ web: 2, default: 4 }),

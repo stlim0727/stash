@@ -40,20 +40,20 @@ export function LibraryStatus({ bookmarks, queue, authStatus, loading, loadError
   const key = expired ? 'library.resume' : guest ? (saved ? 'library.saved' : 'library.guest')
     : paused ? 'library.paused' : failed ? 'library.failed' : waiting ? 'library.waiting' : null;
   if (inline) {
-    if (expired || failed || !key || (guest && !saved)) return null;
+    if (expired || (!paused && failed) || !key || (guest && !saved)) return null;
     return <Text testID="library-status-inline" style={{ color: palette.textSecondary, fontSize: 13 }}
       onPress={paused ? signIn : undefined} accessibilityRole={paused ? 'button' : undefined}>
       · {t(key)}
     </Text>;
   }
   // Routine queue activity and guest persistence belong beside the saved count.
-  const bannerKey = expired ? 'library.resume' : failed ? 'library.failed' : null;
+  const bannerKey = expired ? 'library.resume' : (!paused && failed) ? 'library.failed' : null;
   if (!bannerKey) return null;
   return <View testID="library-status" accessibilityRole="summary"
     style={{ padding: 16, marginBottom: 12, gap: 8, borderRadius: 16, borderWidth: 1, borderColor: palette.border, backgroundColor: palette.card }}>
     <Text style={{ color: bannerKey === 'library.failed' ? palette.danger : palette.textSecondary }}>{t(bannerKey)}</Text>
     {guest ? guestActions : null}
-    {expired || (!guest && paused) ? <Button variant="ghost" onPress={signIn}>{t(expired ? 'settings.account.signIn' : 'nav.settings')}</Button>
+    {expired ? <Button variant="ghost" onPress={signIn}>{t('settings.account.signIn')}</Button>
       : failed ? <Button variant="ghost" disabled={syncing} onPress={retry}>{t('library.retry')}</Button> : null}
   </View>;
 }

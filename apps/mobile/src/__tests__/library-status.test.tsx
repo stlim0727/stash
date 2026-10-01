@@ -58,3 +58,12 @@ test('paused sync directs the user to Settings rather than an ineffective retry'
   await fireEvent.press(screen.getByText('· Sync paused'));
   expect(props.signIn).toHaveBeenCalledTimes(1);
 });
+
+test('paused sync maintains precedence even when failed queue entries exist', async () => {
+  const queue = [{ local_id: bookmarks[0].id, sync_status: 'failed' }] as LocalPendingBookmark[];
+  const screen = await render(<LibraryStatus {...props} authStatus="authenticated" paused queue={queue} />);
+  expect(screen.getByText('· Sync paused')).toBeTruthy();
+  expect(screen.queryByTestId('library-status')).toBeNull();
+  await screen.rerender(<LibraryStatus {...props} inline={false} authStatus="authenticated" paused queue={queue} />);
+  expect(screen.queryByTestId('library-status')).toBeNull();
+});
