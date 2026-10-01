@@ -1058,10 +1058,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const isSyncing = isSyncingState || isSyncDebounceActive;
   const librarySyncFlow = useMemo(() => buildLibrarySyncFlow({
     authStatus: auth.status, offline, paused: syncPaused, syncing: isSyncing,
-    queue, tagOps: pendingTagOps, importCollections: pendingImportCollections,
+    queue, permanentlyUnsyncableIds: new Set(queue.filter(isPermanentlyUnsyncableUrl).map((entry) => entry.local_id)),
+    tagOps: pendingTagOps, importCollections: pendingImportCollections,
     enrichmentRestores: pendingEnrichmentRestores, runFailure: syncRunFailure,
   }), [auth.status, offline, syncPaused, isSyncing, queue, pendingTagOps,
     pendingImportCollections, pendingEnrichmentRestores, syncRunFailure]);
+  const librarySyncFlowRef = useRef(librarySyncFlow);
+  librarySyncFlowRef.current = librarySyncFlow;
   const [isResettingLibrary, setIsResettingLibrary] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const syncInFlight = useRef(false);
@@ -6125,7 +6128,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // when remote sync is paused.
           setReconciledCacheUserId(sessionUser.id);
         }
-        syncPendingRef.current = true;
+        if (syncPausedRef.current) syncPendingRef.current = true;
         return false;
       }
       syncInFlight.current = true;
@@ -6137,7 +6140,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // Re-ensure the session so a token that expired while the app stayed
         // open is refreshed before we sync; otherwise every entry would fail
         // against a stale bearer token until restart.
-        const session = (await auth.ensureAnonymousSession()) ?? auth.session;
+        const refreshRejectedSession = force && librarySyncFlowRef.current.phase === "sign_in";
+        const restoredSession = await auth.ensureAnonymousSession(refreshRejectedSession);
+        // A failed forced refresh must preserve the provider's expiry/error state,
+        // never retry with the bearer token the server already rejected.
+        if (refreshRejectedSession && !restoredSession) return false;
+        const session = restoredSession ?? auth.session;
         const currentUser = {
           id: session.user.id,
           isAnonymous: session.user.is_anonymous !== false,

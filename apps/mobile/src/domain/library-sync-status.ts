@@ -14,12 +14,13 @@ export function buildLibrarySyncFlow(input: {
   offline: boolean;
   syncing: boolean;
   queue: readonly LocalPendingBookmark[];
+  permanentlyUnsyncableIds?: ReadonlySet<string>;
   tagOps?: readonly { confirmed?: boolean; retry_count?: number; last_error_kind?: SyncErrorKind }[];
   importCollections?: readonly { status: 'pending' | 'failed'; last_error_kind?: SyncErrorKind; retry_count?: number }[];
   enrichmentRestores?: readonly { status: 'pending' | 'failed'; last_error_kind?: SyncErrorKind; retry_count?: number }[];
   runFailure?: SyncFailureObservation | null;
 }): LibrarySyncFlow {
-  const queue = input.queue.filter((entry) => entry.sync_status !== 'synced');
+  const queue = input.queue.filter((entry) => entry.sync_status !== 'synced' && !input.permanentlyUnsyncableIds?.has(entry.local_id));
   // Confirmed tag removals are still waiting for pull confirmation.
   const tags = input.tagOps ?? [];
   const imports = input.importCollections ?? [];

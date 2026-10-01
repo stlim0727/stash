@@ -172,6 +172,7 @@ export default function SettingsScreen() {
     queue,
     isSyncing,
     syncNow,
+    librarySyncFlow,
     syncPaused,
     setSyncPaused,
     inbox,
@@ -770,7 +771,8 @@ export default function SettingsScreen() {
       entry.sync_status !== "synced" && !isPermanentlyUnsyncableUrl(entry),
   ).length;
   const cloudAvailable = auth.isSignedIn; // anonymous OR authenticated session
-  const hasPending = waiting > 0;
+  const hasPending = waiting > 0 || (librarySyncFlow?.remaining ?? 0) > 0
+    || ["retrying", "attention", "sign_in", "permission"].includes(librarySyncFlow?.phase ?? "idle");
   const canSync =
     cloudAvailable &&
     hasPending &&

@@ -9,7 +9,8 @@ cloud sync completion does not claim they have finished.
 
 `buildLibrarySyncFlow` projects those channels into one observation. Remaining
 counts include failed/backoff work, not only entries currently eligible for
-upload. A failed pull is retained even with an empty outbox, so it cannot be
+upload. Permanently unsyncable bookmark entries are excluded from this cloud
+flow, while their item-level diagnostics remain available. A failed pull is retained even with an empty outbox, so it cannot be
 mistaken for completion. Successful pulls clear that observation. Account
 changes clear its history; account identity also scopes the UI display history.
 
@@ -24,7 +25,8 @@ changes clear its history; account identity also scopes the UI display history.
 | Retry delay persists for 15 seconds | Sync delayed, retrying automatically. |
 | Explicitly observed offline | Will sync automatically when connected; immediate. |
 | User pauses sync | Sync paused; tapping opens Settings. |
-| Session expired / HTTP 401 | Sign in to resume; immediate sign-in action. |
+| Session expired | Sign in to resume; immediate sign-in action. |
+| HTTP 401 with an active provider session | Open sync details; manual retry forces token refresh. |
 | HTTP 403 | Explain access denial and open sync details in Settings. |
 | Three ordinary non-transport failures | Needs attention; open sync details in Settings. |
 
@@ -52,11 +54,16 @@ The existing tag retry timer follows the same action-required policy.
 Transport errors and HTTP 408/429/5xx remain automatically retryable. Authentication/permission
 errors and ordinary failures after three attempts require inspection instead
 of an automatic retry loop. The existing explicit Settings sync action remains
-available, and ordinary sync triggers retain their existing upload policy.
+available even when a failed pull has an empty bookmark queue or only other
+cloud channels remain. For a rejected session it forces refresh first; a null
+refresh result never falls back to the rejected bearer token. Actual expiry
+then exposes the provider's sign-in UI. Ordinary sync triggers retain their
+existing upload policy.
 
 Retry timers are cancelled while offline, paused, busy, without an active
 session, or before local cache ownership has been reconciled. Reconnecting
-wakes the normal sync path and respects remaining upload backoff. Offline sync
+wakes the normal sync path once and respects remaining upload backoff; an
+offline-only request does not queue an extra deferred pass. Offline sync
 still performs the same local ownership reconciliation as paused sync, so an
 account switch cannot expose the previous account's cache. Already-running
 requests are not cancelled or assumed to have failed by a connectivity event.

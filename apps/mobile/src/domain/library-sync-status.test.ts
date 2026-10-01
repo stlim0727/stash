@@ -90,3 +90,10 @@ test('request provenance determines action; transient errors never become termin
   assert.equal(buildLibrarySyncFlow({ ...input, tagOps: [{ retry_count: 3 }] }).phase, 'attention');
   assert.equal(buildLibrarySyncFlow({ ...input, paused: true, offline: true }).phase, 'paused');
 });
+
+
+test('permanently unsyncable entries do not claim an automatic retry or block completion', () => {
+  const excluded = entry({ sync_status: 'failed', retry_count: 1 });
+  assert.deepEqual(buildLibrarySyncFlow({ ...input, queue: [excluded], permanentlyUnsyncableIds: new Set(['a']) }), idle);
+  assert.deepEqual(buildLibrarySyncFlow({ ...input, queue: [excluded, entry({ local_id: 'b' })], permanentlyUnsyncableIds: new Set(['a']) }), { phase: 'working', remaining: 1 });
+});

@@ -46,6 +46,17 @@ jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
   default: () => mockWindowSize,
 }));
 
+const mockRetrySync = jest.fn(async () => true);
+let mockRecoveryPhase: string | null = null;
+jest.mock('@/store/bookmarks', () => {
+  const actual = jest.requireActual('@/store/bookmarks');
+  return { ...actual, useBookmarks: () => {
+    const store = actual.useBookmarks();
+    return mockRecoveryPhase ? { ...store, queue: [], isSyncing: false,
+      librarySyncFlow: { phase: mockRecoveryPhase, remaining: 0 }, syncNow: mockRetrySync } : store;
+  } };
+});
+
 import SettingsScreen from '@/app/settings';
 import { BookmarksProvider } from '@/store/bookmarks';
 
@@ -91,4 +102,16 @@ test('phone viewport pins the full-screen root to the viewport height', async ()
     ? Object.assign({}, ...root.props.style.flat())
     : root.props.style;
   expect(flat.height).toBe(844);
+});
+
+
+test.each(['attention', 'sign_in', 'permission'])('empty-queue %s failures expose an actual manual sync action', async (phase) => {
+  mockRecoveryPhase = phase;
+  mockRetrySync.mockClear();
+  try {
+    const screen = await renderSettings();
+    await fireEvent.press(screen.getByLabelText('Sync'));
+    expect(mockRetrySync).toHaveBeenCalledWith({ force: true });
+    await screen.unmount();
+  } finally { mockRecoveryPhase = null; }
 });

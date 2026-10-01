@@ -34,7 +34,7 @@ jest.mock('@/supabase/auth-provider', () => {
     session: null as unknown,
     userId: 'real-user' as string | null,
     message: null as string | null,
-    ensureAnonymousSession: async () => state.session,
+    ensureAnonymousSession: jest.fn(async (): Promise<unknown> => state.session),
   };
   return {
     __setAuth: (next: Partial<typeof state>) => {
@@ -115,6 +115,7 @@ import { makeStoredBookmark, type FakeRepositoryModule } from './helpers/fake-re
 
 const authMock = jest.requireMock('@/supabase/auth-provider') as {
   __setAuth: (next: Record<string, unknown>) => void;
+  useSupabaseAuth: () => { ensureAnonymousSession: jest.Mock };
 };
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
 const apiMock = jest.requireMock('@/api/bookmarks') as {
@@ -243,8 +244,10 @@ test.each([['paused', 'paused'], ['offline', 'offline'], ['session_expired', 'si
     await act(async () => { await jest.advanceTimersByTimeAsync(30000); });
     expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(1);
     if (blocker === 'offline') {
+      await act(async () => { await screen.result.current.syncNow(); });
       await act(async () => { mockNetworkListener({ isConnected: true, isInternetReachable: true }); });
       await waitFor(() => expect(screen.result.current.librarySyncFlow.phase).toBe('idle'));
+      await act(async () => { await jest.advanceTimersByTimeAsync(100); });
       expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(2);
     }
     await screen.unmount();
@@ -258,6 +261,11 @@ test.each([[401, 'sign_in'], [403, 'permission']])('HTTP %s requests user action
   await waitFor(() => expect(screen.result.current.librarySyncFlow.phase).toBe(phase));
   await act(async () => { await jest.advanceTimersByTimeAsync(30000); });
   expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(1);
+  if (status === 401) {
+    await act(async () => { await screen.result.current.syncNow({ force: true }); });
+    expect(authMock.useSupabaseAuth().ensureAnonymousSession).toHaveBeenCalledWith(true);
+    expect(screen.result.current.librarySyncFlow.phase).toBe('idle');
+  }
   await screen.unmount();
 });
 
@@ -274,5 +282,18 @@ test('HTTP 503 keeps recovering after repeated failures instead of asking the us
   apiMock.__listBookmarksUpdatedSinceMock.mockResolvedValue([]);
   await act(async () => { await jest.advanceTimersByTimeAsync(60000); });
   await waitFor(() => expect(screen.result.current.librarySyncFlow.phase).toBe('idle'));
+  await screen.unmount();
+});
+
+
+test('a rejected-token recovery never falls back to the rejected bearer when refresh fails', async () => {
+  apiMock.__listBookmarksUpdatedSinceMock.mockRejectedValueOnce(new SupabaseRequestError('Denied', 401));
+  const screen = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(screen.result.current.librarySyncFlow.phase).toBe('sign_in'));
+  const ensure = authMock.useSupabaseAuth().ensureAnonymousSession as jest.Mock;
+  ensure.mockResolvedValueOnce(null);
+  await act(async () => { expect(await screen.result.current.syncNow({ force: true })).toBe(false); });
+  expect(ensure).toHaveBeenCalledWith(true);
+  expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(1);
   await screen.unmount();
 });

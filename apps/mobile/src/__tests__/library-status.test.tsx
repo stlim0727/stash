@@ -133,3 +133,11 @@ test('paused sync maintains precedence even when failed queue entries exist', as
   await screen.rerender(<LibraryStatus {...props} inline={false} authStatus="authenticated" paused queue={queue} />);
   expect(screen.queryByTestId('library-status')).toBeNull();
 });
+
+
+test('a rejected token with an active provider offers sync recovery rather than an unavailable sign-in action', async () => {
+  const screen = await render(<LibraryStatus {...props} inline={false} authStatus="authenticated" flow={{ phase: 'sign_in', remaining: 0 }} />);
+  expect(screen.queryByText('Sign In')).toBeNull();
+  await fireEvent.press(screen.getByText('View sync details'));
+  expect(props.signIn).toHaveBeenCalledTimes(1);
+});
