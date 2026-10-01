@@ -128,5 +128,56 @@ test('a failed journal write returns an error rather than reporting a durable sa
     await act(async () => {
       expect(await first.result.current.addTagsToBookmark(SYNCED_ID, ['not-saved'])).toContain('Could not save');
     });
+    expect(first.result.current.getTagsForBookmark(SYNCED_ID)).toEqual([]);
+    expect(fakeRepo.__meta('pending_tag_ops')).toBeNull();
+    expect((await fakeRepo.repository.listTagData()).bookmarkTags).toEqual([]);
   } finally { spy.mockRestore(); await first.unmount(); }
+  const second = await renderStore();
+  expect(second.result.current.getTagsForBookmark(SYNCED_ID)).toEqual([]);
+  await second.unmount();
+});
+
+
+test('a failed remove leaves the previous association and journal intact across restart', async () => {
+  const first = await renderStore();
+  await act(async () => { await first.result.current.addTagsToBookmark(SYNCED_ID, ['keep']); });
+  const journal = fakeRepo.__meta('pending_tag_ops');
+  const spy = jest.spyOn(fakeRepo.repository, 'setMeta').mockRejectedValueOnce(new Error('disk full'));
+  try {
+    await act(async () => {
+      expect(await first.result.current.removeTagFromBookmark(SYNCED_ID, 'keep')).toContain('Could not save');
+    });
+    expect(first.result.current.getTagsForBookmark(SYNCED_ID).map((tag) => tag.name)).toEqual(['keep']);
+    expect(fakeRepo.__meta('pending_tag_ops')).toBe(journal);
+  } finally { spy.mockRestore(); await first.unmount(); }
+  const second = await renderStore();
+  expect(second.result.current.getTagsForBookmark(SYNCED_ID).map((tag) => tag.name)).toEqual(['keep']);
+  await second.unmount();
+});
+
+test('overlapping edits compute after persistence and a failed edit cannot leak into a later save', async () => {
+  const store = await renderStore();
+  const write = fakeRepo.repository.setMeta;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const snapshot = jest.spyOn(fakeRepo.repository, 'replaceTagData');
+  const spy = jest.spyOn(fakeRepo.repository, 'setMeta').mockImplementationOnce(async () => {
+    await gate;
+    throw new Error('first edit interrupted');
+  }).mockImplementation(write);
+  let first!: Promise<string | null>;
+  let second!: Promise<string | null>;
+  try {
+    await act(async () => {
+      first = store.result.current.addTagsToBookmark(SYNCED_ID, ['failed']);
+      second = store.result.current.addTagsToBookmark(SYNCED_ID, ['saved']);
+    });
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(store.result.current.getTagsForBookmark(SYNCED_ID)).toEqual([]);
+    await act(async () => { release(); await Promise.all([first, second]); });
+    expect(await first).toContain('Could not save');
+    expect(await second).toBeNull();
+    expect(store.result.current.getTagsForBookmark(SYNCED_ID).map((tag) => tag.name)).toEqual(['saved']);
+    expect(JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]').map((op: { tag_name: string }) => op.tag_name)).toEqual(['saved']);
+  } finally { release(); spy.mockRestore(); snapshot.mockRestore(); await store.unmount(); }
 });

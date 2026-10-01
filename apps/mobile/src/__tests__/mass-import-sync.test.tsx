@@ -1862,3 +1862,107 @@ test("anonymous account carry-over reuploads an already-synced tag under the reh
   await waitFor(() => expect(fakeRepo.__meta("pending_tag_ops")).toBe("[]"));
   await unmount();
 });
+
+
+test.each(['add', 'remove'] as const)('%s tag retries at its backoff deadline without another save or manual sync', async (operation) => {
+  const id = '7e64cf1e-0000-4000-8000-000000000001';
+  fakeRepo.__reset([makeStoredBookmark({ id, user_id: 'real-user' })]);
+  apiMock.__setRemoteRows([{ id, url: 'https://example.com/stored' }]);
+  const store = await renderReadyStore();
+  const remove = jest.fn(async () => undefined);
+  const module = jest.requireMock('@/api/bookmarks');
+  const createApi = module.createBookmarkApi;
+  const spy = jest.spyOn(module, 'createBookmarkApi').mockImplementation((session) => ({
+    ...createApi(session), removeTags: remove,
+  }));
+  const upload = operation === 'add' ? apiMock.__bulkAttachMock : remove;
+  upload.mockRejectedValueOnce(new Error('server unavailable'));
+  jest.useFakeTimers();
+  try {
+    await act(async () => {
+      if (operation === 'add') await store.result.current.addTagsToBookmark(id, ['scheduled']);
+      else await store.result.current.removeTagFromBookmark(id, 'scheduled');
+    });
+    await waitFor(() => expect(JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]')[0]?.retry_count).toBe(1));
+    const op = JSON.parse(fakeRepo.__meta('pending_tag_ops')!)[0];
+    const deadline = Date.parse(op.last_attempt_at) + 5000;
+    await act(async () => { jest.advanceTimersByTime(Math.max(0, deadline - Date.now() - 1)); });
+    expect(upload).toHaveBeenCalledTimes(1);
+    await act(async () => { jest.advanceTimersByTime(1); });
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(fakeRepo.__meta('pending_tag_ops')).toBe('[]'));
+  } finally { await store.unmount(); jest.useRealTimers(); spy.mockRestore(); }
+});
+
+test('a paused failed-tag timer does not retry until sync resumes', async () => {
+  const id = '7e64cf1e-0000-4000-8000-000000000001';
+  fakeRepo.__reset([makeStoredBookmark({ id, user_id: 'real-user' })]);
+  apiMock.__setRemoteRows([{ id, url: 'https://example.com/stored' }]);
+  const store = await renderReadyStore();
+  apiMock.__bulkAttachMock.mockRejectedValueOnce(new Error('server unavailable'));
+  jest.useFakeTimers();
+  try {
+    await act(async () => { await store.result.current.addTagsToBookmark(id, ['paused']); });
+    await waitFor(() => expect(JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]')[0]?.retry_count).toBe(1));
+    await act(async () => { store.result.current.setSyncPaused(true); });
+    await act(async () => { jest.advanceTimersByTime(6000); });
+    expect(apiMock.__bulkAttachMock).toHaveBeenCalledTimes(1);
+    await act(async () => { store.result.current.setSyncPaused(false); });
+    await waitFor(() => expect(apiMock.__bulkAttachMock).toHaveBeenCalledTimes(2));
+  } finally { await store.unmount(); jest.useRealTimers(); }
+});
+
+test('a stalled tag write and another edit during duplicate adoption retain canonical IDs across restart', async () => {
+  const canonical = '7e64cf1e-0000-4000-8000-000000000099';
+  const url = 'https://example.com/rekey-journal-race';
+  const store = await renderReadyStore();
+  const create = deferred<never>();
+  apiMock.__createBookmarkMock.mockImplementationOnce(() => create.promise);
+  apiMock.__setRemoteRows([{ id: canonical, url }]);
+  let localId = '';
+  await act(async () => {
+    const saved = store.result.current.addBookmark({ url });
+    if (saved.status === 'invalid') throw new Error(saved.error);
+    localId = saved.bookmark.id;
+    await saved.persisted;
+  });
+  await waitFor(() => expect(apiMock.__createBookmarkMock).toHaveBeenCalled());
+  const journal = deferred();
+  const write = fakeRepo.repository.setMeta;
+  let stalled = false;
+  const writes = jest.spyOn(fakeRepo.repository, 'setMeta').mockImplementation(async (key, value) => {
+    if (key === 'pending_tag_ops' && value.includes('first') && !stalled) {
+      stalled = true;
+      await journal.promise;
+    }
+    await write(key, value);
+  });
+  const insert = jest.spyOn(fakeRepo.repository, 'insertBookmark');
+  const upload = apiMock.__bulkAttachMock.getMockImplementation()!;
+  apiMock.__bulkAttachMock.mockRejectedValue(new Error('keep journal pending for restart'));
+  let first!: Promise<string | null>;
+  let second!: Promise<string | null>;
+  try {
+    await act(async () => { first = store.result.current.addTagsToBookmark(localId, ['first']); });
+    await waitFor(() => expect(stalled).toBe(true));
+    await act(async () => { create.resolve({ bookmark_id: canonical, status: 'duplicate', metadata_status: 'complete' } as never); });
+    await waitFor(() => expect(insert).toHaveBeenCalledWith(expect.objectContaining({ id: canonical })));
+    await act(async () => { second = store.result.current.addTagsToBookmark(localId, ['second']); });
+    await act(async () => { journal.resolve(); await Promise.all([first, second]); });
+    expect(await first).toBeNull();
+    expect(await second).toBeNull();
+    await waitFor(() => expect(store.result.current.isSyncing).toBe(false));
+    const ops = JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]');
+    expect(ops.map((op: { tag_name: string }) => op.tag_name).sort()).toEqual(['first', 'second']);
+    expect(ops.every((op: { bookmark_id: string }) => op.bookmark_id === canonical)).toBe(true);
+    await store.unmount();
+    authMock.__setAuth({ status: 'not_configured', session: null, userId: null });
+    const restarted = await renderReadyStore();
+    expect(restarted.result.current.getTagsForBookmark(canonical).map((tag) => tag.name).sort()).toEqual(['first', 'second']);
+    await restarted.unmount();
+  } finally {
+    journal.resolve(); create.resolve({ bookmark_id: canonical, status: 'duplicate', metadata_status: 'complete' } as never);
+    writes.mockRestore(); insert.mockRestore(); apiMock.__bulkAttachMock.mockImplementation(upload);
+    await store.unmount();
+  }
+});

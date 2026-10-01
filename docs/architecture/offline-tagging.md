@@ -16,9 +16,10 @@ idempotent name resolution. `remove` represents remove-association.
 Each target (bookmark ID, normalized tag name) keeps its latest intent, with an
 operation UUID, source, confidence and creation time. Opposite edits replace
 rather than cancel: a previous request could already have reached the server.
-Acknowledgements clear only the exact UUID they uploaded. Local edits publish
-immediately and await serialized journal writes before reporting success or
-starting upload. Failed journal writes return an error and prevent upload.
+Acknowledgements clear only the exact UUID they uploaded. Local edits compute against the latest state inside the serialized journal queue.
+They persist the journal before publishing or writing the derived snapshot and
+before starting upload. Failed writes return an error without changing the queue
+or the visible/cached association.
 The tag snapshot is derived data: startup replays the journal over the cached
 snapshot, including if a crash interrupted the snapshot write.
 
@@ -29,12 +30,14 @@ Associations wait for `hasSyncedOnce`; the bookmark's UUID alone is not evidence
 of remote existence. Local-only images keep tags locally until image/create sync
 becomes available. Pause blocks upload. Changes made during an upload request a
 follow-up sync. Responses from a departed identity or reset epoch are discarded.
-Reset refuses while a tag upload is in flight.
+Reset refuses while a tag upload or serialized tag mutation is in flight.
 
 Failures retain the operation and persist retry count, attempt time and error
 kind. Automatic retries use the bookmark queue's exponential schedule (5, 15,
 30, 60, 120, 300 seconds, capped), with its 3x network/DNS multiplier. Manual
-Sync now bypasses backoff. One durable health marker escalates at attempt 3 for
+Sync now bypasses backoff. A cancellable timer wakes sync at the earliest eligible
+failed-operation deadline, including after restart. Pause, auth/cache ownership,
+bookmark creation, and storage health gate automatic retry. One durable health marker escalates at attempt 3 for
 ordinary errors or 6 for network/DNS errors through existing observability.
 
 A successful remove becomes a confirmed tombstone. Pull still replays it, so a
@@ -45,8 +48,10 @@ assignment retains the catalog tag, matching the existing backend semantics.
 
 ## Account changes
 
-Existing atomic identity replacement carries bookmark, queue, tag links and
-journal together. Carry-over queues already-synced links as well as pending
+Identity rekeys occupy the same serial journal queue as local edits. Account
+transitions hold that queue through the atomic bookmark/queue/tag-state commit,
+so edits arriving during a rekey resolve their IDs afterwards. Existing atomic
+identity replacement carries bookmark, queue, tag links and journal together. Carry-over queues already-synced links as well as pending
 operations under the new bookmark IDs, dedupes by target, and resets retry state
 for the new account. Pending removes stay removes. Duplicate adoption rekeys
 existing operations without treating it as an account migration. A real-account
@@ -56,8 +61,10 @@ cache isolation behavior.
 ## Evidence and limits
 
 Regression checks cover offline edits and provider restart, journal-only recovery,
-write failures, create-before-association ordering, persisted retry backoff and
-manual retry, in-flight add/remove acknowledgement, and anonymous carry-over.
+write failures (including restart and overlapping edits), create-before-association
+ordering, persisted retry backoff, automatic deadline retries and pause/resume,
+manual retry, in-flight add/remove acknowledgement, anonymous carry-over, and
+a stalled journal write racing duplicate adoption and a second edit.
 The real web repository also verifies metadata survives reinitialization.
 Existing native SQLite metadata writes are awaited; this change adds no schema or
 backend deployment. Physical-device process termination, the full UX matrix and
