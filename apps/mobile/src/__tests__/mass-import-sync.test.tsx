@@ -2115,3 +2115,58 @@ test.each(['manual', 'automatic'] as const)('%s retry repairs failed journal boo
     await waitFor(() => expect(fakeRepo.__meta('pending_tag_ops')).toBe('[]'));
   } finally { spy.mockRestore(); await store.unmount(); jest.useRealTimers(); }
 });
+
+test('suggested tag acceptance waits for a manual journal commit and preserves both intents after restart', async () => {
+  const id = '7e64cf1e-0000-4000-8000-000000000001';
+  fakeRepo.__reset([makeStoredBookmark({ id, user_id: 'real-user' })]);
+  apiMock.__setRemoteRows([{ id, url: 'https://example.com/stored' }]);
+  const store = await renderReadyStore();
+  await act(async () => { store.result.current.setSyncPaused(true); });
+  const gate = deferred();
+  const write = fakeRepo.repository.setMeta;
+  let held = false;
+  const spy = jest.spyOn(fakeRepo.repository, 'setMeta').mockImplementation(async (key, value) => {
+    if (key === 'pending_tag_ops' && value.includes('manual-first') && !held) { held = true; await gate.promise; }
+    await write(key, value);
+  });
+  let manual!: Promise<string | null>;
+  let suggested!: Promise<string | null>;
+  try {
+    await act(async () => { manual = store.result.current.addTagsToBookmark(id, ['manual-first']); });
+    await waitFor(() => expect(held).toBe(true));
+    await act(async () => { suggested = store.result.current.acceptSuggestedTags(id, [{ name: 'suggested', confidence: 0.91 }]); });
+    expect(store.result.current.getTagsForBookmark(id)).toEqual([]);
+    await act(async () => { gate.resolve(); await manual; await suggested; });
+    expect(await suggested).toBeNull();
+    const ops = JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]');
+    expect(ops.map((op: { tag_name: string }) => op.tag_name).sort()).toEqual(['manual-first', 'suggested']);
+    expect(ops.find((op: { tag_name: string }) => op.tag_name === 'suggested')).toMatchObject({ source: 'ai', confidence: 0.91 });
+    await store.unmount();
+    authMock.__setAuth({ status: 'not_configured', session: null, userId: null });
+    const restarted = await renderReadyStore();
+    expect(restarted.result.current.getTagsForBookmark(id).map((tag) => tag.name).sort()).toEqual(['manual-first', 'suggested']);
+    await restarted.unmount();
+  } finally { gate.resolve(); spy.mockRestore(); await store.unmount(); }
+});
+
+test('a suggested tag journal failure leaves tags and review state unchanged', async () => {
+  const id = '7e64cf1e-0000-4000-8000-000000000001';
+  fakeRepo.__reset([makeStoredBookmark({ id, user_id: 'real-user' })]);
+  apiMock.__setRemoteRows([{ id, url: 'https://example.com/stored' }]);
+  const store = await renderReadyStore();
+  await act(async () => { store.result.current.setSyncPaused(true); });
+  const write = fakeRepo.repository.setMeta;
+  const spy = jest.spyOn(fakeRepo.repository, 'setMeta').mockImplementation(async (key, value) => {
+    if (key === 'pending_tag_ops' && value.includes('suggested-failure')) throw new Error('disk full');
+    await write(key, value);
+  });
+  try {
+    await act(async () => {
+      expect(await store.result.current.acceptSuggestedTags(id, [{ name: 'suggested-failure', confidence: 0.8 }])).toMatch(/Could not save/);
+    });
+    expect(store.result.current.getTagsForBookmark(id)).toEqual([]);
+    expect(fakeRepo.__bookmarks()[0].dismissed_suggested_tags ?? []).toEqual([]);
+    expect(fakeRepo.__meta('pending_tag_ops') ?? '[]').toBe('[]');
+    expect(apiMock.__bulkAttachMock).not.toHaveBeenCalled();
+  } finally { spy.mockRestore(); await store.unmount(); }
+});

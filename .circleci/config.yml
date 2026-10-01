@@ -136,7 +136,14 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
-      - run: pnpm test:components
+      - run:
+          name: Component tests
+          command: |
+            set -o pipefail
+            pnpm test:components 2>&1 | tee /tmp/component-tests.log
+      - store_artifacts:
+          path: /tmp/component-tests.log
+          destination: component-tests.log
       # Guard the web target: the static export must keep building so a change
       # can't silently break web (the /add capture route, the PWA manifest, the
       # web-only Settings section). Headless — no emulator needed. dist/ is

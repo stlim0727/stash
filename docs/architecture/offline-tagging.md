@@ -76,7 +76,8 @@ ordering, persisted retry backoff, automatic deadline retries and pause/resume,
 manual retry, in-flight add/remove acknowledgement, anonymous carry-over, and
 a stalled journal write racing duplicate adoption and a second edit, batch and
 fallback imports racing edits, deferred forced retries, and journal repair after
-temporary storage failure without a new edit.
+temporary storage failure without a new edit, and AI suggestion acceptance racing
+manual edits (including journal failure without marking the suggestion reviewed).
 The real web repository also verifies metadata survives reinitialization.
 Existing native SQLite metadata writes are awaited; this change adds no schema or
 backend deployment. Physical-device process termination, the full UX matrix and

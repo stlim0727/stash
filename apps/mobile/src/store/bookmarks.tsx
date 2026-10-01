@@ -4654,7 +4654,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // journal first, then publish/persist its derived snapshot. A failed journal
   // changes neither memory nor the cache, and overlapping edits cannot clobber.
   const commitTagEdit = useCallback(
-    (bookmarkId: string, names: string[], operation: "add" | "remove"): Promise<string | null> => {
+    (bookmarkId: string, names: Array<string | SuggestedTag>, operation: "add" | "remove"): Promise<string | null> => {
       tagEditsPending.current += 1;
       return serializeTagWork(async () => {
         bookmarkId = resolveAliasedId(bookmarkId, idAliases.current);
@@ -4666,16 +4666,19 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         if (!(await repository.getBookmark(bookmarkId))) {
           return "This bookmark is still being saved. Please retry.";
         }
-        const cleaned = names.map((name) => name.trim()).filter(Boolean);
+        const cleaned = names.map((value) => typeof value === "string"
+          ? { name: value.trim(), source: "user" as const, confidence: null }
+          : { name: value.name.trim(), source: "ai" as const, confidence: value.confidence }
+        ).filter((value) => value.name.length > 0);
         if (cleaned.length === 0) return "Enter a tag name.";
         const userId = authRef.current.userId ?? mockUserId;
         const now = new Date().toISOString();
         let nextData = tagDataRef.current;
         let nextOps = pendingTagOpsRef.current;
-        for (const name of cleaned) {
+        for (const { name, source, confidence } of cleaned) {
           const op: PendingTagOp = {
             id: makeUuid(), bookmark_id: bookmarkId, tag_name: name,
-            op: operation, source: "user", confidence: null, created_at: now,
+            op: operation, source, confidence, created_at: now,
           };
           nextData = applyTagOp(nextData, op, userId);
           nextOps = enqueueTagOp(nextOps, op);
@@ -5326,25 +5329,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (valid.length === 0) {
         return null;
       }
-      const userId = auth.userId ?? mockUserId;
-      const now = new Date().toISOString();
-      let nextData = tagDataRef.current;
-      let nextOps = pendingTagOpsRef.current;
-      for (const suggestion of valid) {
-        const op: PendingTagOp = {
-          id: makeUuid(),
-          bookmark_id: bookmarkId,
-          tag_name: suggestion.name,
-          op: "add",
-          source: "ai",
-          confidence: suggestion.confidence,
-          created_at: now,
-        };
-        nextData = applyTagOp(nextData, op, userId);
-        nextOps = enqueueTagOp(nextOps, op);
-      }
-      applyTagData(nextData);
-      applyTagOps(nextOps);
+      const error = await commitTagEdit(bookmarkId, valid, "add");
+      if (error) return error;
       // Accepting a suggestion counts as reviewing it, so removing the tag later
       // won't bring the "✨" badge back for a name the user already decided on.
       markSuggestionsReviewed(
@@ -5354,14 +5340,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       void syncTagOps();
       return null;
     },
-    [
-      auth.userId,
-      applyTagData,
-      applyTagOps,
-      markSuggestionsReviewed,
-      syncTagOps,
-      hasSyncedOnce,
-    ],
+    [commitTagEdit, markSuggestionsReviewed, syncTagOps],
   );
 
   const assignCollection = useCallback(
