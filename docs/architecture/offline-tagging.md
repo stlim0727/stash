@@ -22,8 +22,10 @@ before starting upload. Failed writes return an error without changing the queue
 or the visible/cached association.
 Import batch and fallback writes occupy that same queue, so edits made while an
 import is saving wait for its durable bookmark and journal. Import refuses while
-a manual edit is pending rather than capturing an incomplete journal. A manual
-edit also checks that its bookmark exists in durable storage before accepting it.
+any serialized tag work (including an identity commit) is pending rather than
+capturing an incomplete journal. A manual edit also checks that its bookmark
+exists in durable storage before accepting it; storage-read failures return the
+same handled error as journal failures so controls can recover.
 The tag snapshot is derived data: startup replays the journal over the cached
 snapshot, including if a crash interrupted the snapshot write.
 
@@ -49,6 +51,8 @@ the journal immediately. Upload resumes only after that repair succeeds, and
 unrelated successful queued work cannot clear the journal failure state.
 One durable health marker escalates at attempt 3 for
 ordinary errors or 6 for network/DNS errors through existing observability.
+If writing that marker fails, its pending report survives in memory until a
+successful journal repair, which sends the report before attempting upload.
 
 A successful remove becomes a confirmed tombstone. Pull still replays it, so a
 stale remote snapshot cannot resurrect the association. The tombstone is retired
@@ -78,6 +82,9 @@ a stalled journal write racing duplicate adoption and a second edit, batch and
 fallback imports racing edits, deferred forced retries, and journal repair after
 temporary storage failure without a new edit, and AI suggestion acceptance racing
 manual edits (including journal failure without marking the suggestion reviewed).
+Further checks cover paused account commits blocking imports, storage failure at
+both escalation thresholds, and recoverable bookmark-preflight failures for
+manual additions/removals and suggested tags.
 The real web repository also verifies metadata survives reinitialization.
 Existing native SQLite metadata writes are awaited; this change adds no schema or
 backend deployment. Physical-device process termination, the full UX matrix and

@@ -1014,7 +1014,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const tagSyncPendingForce = useRef(false);
   const tagOpsWriteRef = useRef(Promise.resolve(true));
   const tagWorkPending = useRef(0);
-  const tagEditsPending = useRef(0);
+  const pendingTagHealthReportsRef = useRef(new Map<string, PendingTagOp>());
   const tagJournalRetryAtRef = useRef(0);
   const tagJournalHealthyRef = useRef(true);
   const [tagJournalRetryAt, setTagJournalRetryAt] = useState(0);
@@ -3269,7 +3269,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // rows and durably re-creates every one of them as a fresh duplicate —
       // this is the exact "561 -> 1122" doubling reported twice. Refuse
       // outright rather than risk it; the caller asks the user to retry.
-      if (bookmarksRef.current === null || isSyncingState || tagEditsPending.current > 0) {
+      if (bookmarksRef.current === null || isSyncingState || tagWorkPending.current > 0) {
         recordLog(
           "warn",
           `import: refused (not ready) items=${items.length} loaded=${bookmarksRef.current !== null} isSyncing=${isSyncingState}`,
@@ -4481,6 +4481,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       const isCurrentUser = () => authRef.current.session?.user.id === userId &&
         reconciledCacheUserIdRef.current === userId && resetEpoch.current === epoch;
       if (!isCurrentUser()) return false;
+      const reportPendingHealth = () => {
+        if (!isCurrentUser()) return;
+        for (const [id, op] of pendingTagHealthReportsRef.current) {
+          const current = pendingTagOpsRef.current.find((entry) => entry.id === id);
+          if (current?.health_escalated_at === op.health_escalated_at) {
+            reportSyncQueueHealthEscalation({
+              operation: op.op === "add" ? "assign_tag" : "remove_tag", retryCount: op.retry_count!,
+              lastError: op.last_error!, errorKind: op.last_error_kind,
+            });
+          }
+          pendingTagHealthReportsRef.current.delete(id);
+        }
+      };
+      // A repaired journal may contain an escalation whose original write failed.
+      reportPendingHealth();
       const ops = pendingTagOpsRef.current.filter((op) => {
         if (op.confirmed) return false;
         return force || Date.now() >= tagRetryReadyAt(op);
@@ -4509,12 +4524,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           if (!op.health_escalated_at && failed.health_escalated_at) escalated.push(failed);
           return failed;
         });
-        if (await applyTagOps(next)) {
-          for (const op of escalated) reportSyncQueueHealthEscalation({
-            operation: op.op === "add" ? "assign_tag" : "remove_tag", retryCount: op.retry_count!,
-            lastError: op.last_error!, errorKind: op.last_error_kind,
-          });
-        }
+        for (const op of escalated) pendingTagHealthReportsRef.current.set(op.id, op);
+        if (await applyTagOps(next)) reportPendingHealth();
       };
 
       // The bookmark must exist remotely before its tags can be linked. Group
@@ -4655,16 +4666,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // changes neither memory nor the cache, and overlapping edits cannot clobber.
   const commitTagEdit = useCallback(
     (bookmarkId: string, names: Array<string | SuggestedTag>, operation: "add" | "remove"): Promise<string | null> => {
-      tagEditsPending.current += 1;
       return serializeTagWork(async () => {
         bookmarkId = resolveAliasedId(bookmarkId, idAliases.current);
         if (!hasRemoteIdentity(bookmarkId) || !bookmarksRef.current?.some((bookmark) =>
           resolveAliasedId(bookmark.id, idAliases.current) === bookmarkId)) {
           return "This bookmark cannot be tagged.";
         }
-        await ensureRepositoryReady();
-        if (!(await repository.getBookmark(bookmarkId))) {
-          return "This bookmark is still being saved. Please retry.";
+        try {
+          await ensureRepositoryReady();
+          if (!(await repository.getBookmark(bookmarkId))) {
+            return "This bookmark is still being saved. Please retry.";
+          }
+        } catch (error) {
+          logStorageError("tag edit bookmark", error);
+          return "Could not save tags on this device. Please retry.";
         }
         const cleaned = names.map((value) => typeof value === "string"
           ? { name: value.trim(), source: "user" as const, confidence: null }
@@ -4696,7 +4711,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         applyTagOps(nextOps, { persist: false });
         applyTagData(nextData);
         return null;
-      }).finally(() => { tagEditsPending.current -= 1; });
+      });
     },
     [serializeTagWork, applyTagOps, applyTagData],
   );
