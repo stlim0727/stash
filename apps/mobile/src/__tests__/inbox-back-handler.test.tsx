@@ -125,7 +125,8 @@ test('hardware back clears an active facet instead of exiting the app', async ()
   await waitFor(() => expect(screen.getByText('Work doc')).toBeTruthy());
 
   // Narrow to the Work collection — the loose bookmark drops out.
-  await fireEvent.press(screen.getByText('Work'));
+  await fireEvent.press(screen.getByTestId('inbox-scope-picker'));
+  await fireEvent.press(screen.getByRole('button', { name: 'Work' }));
   expect(screen.queryByText('Loose link')).toBeNull();
 
   // Back peels the facet (returns to All) and consumes the press.

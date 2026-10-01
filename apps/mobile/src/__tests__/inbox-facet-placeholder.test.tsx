@@ -101,10 +101,8 @@ test('the placeholder scopes to the active facet and reverts to the default on A
   // so always tap the chip *inside* the browse shelf. The chip lives on the
   // shelf, which is only visible while search is CLOSED.
   const tapBrowseChip = async (label: string) => {
-    const shelf = await waitFor(() => screen.getByTestId('browse-shelf'));
-    await act(async () => {
-      fireEvent.press(within(shelf).getByText(label));
-    });
+    await fireEvent.press(screen.getByTestId('inbox-scope-picker'));
+    await fireEvent.press(screen.getByRole('button', { name: label }));
   };
   // Search is tap-to-open: the field (and its facet-scoped placeholder) only
   // exists while open. Open, assert the placeholder, then close (which clears
@@ -149,10 +147,8 @@ test('the search banner names the facet the search is scoped to', async () => {
   const tapBrowseChip = async (label: string) => {
     // The browse shelf only shows while search is CLOSED (it folds away when the
     // search UI is open), so each facet switch happens between searches.
-    const shelf = await waitFor(() => screen.getByTestId('browse-shelf'));
-    await act(async () => {
-      fireEvent.press(within(shelf).getByText(label));
-    });
+    await fireEvent.press(screen.getByTestId('inbox-scope-picker'));
+    await fireEvent.press(screen.getByRole('button', { name: label }));
   };
   // Open the tap-to-open field, type, then blur to reach the "results, keyboard
   // down" state where the pinned scope (filter) bar names the search scope.
@@ -202,9 +198,8 @@ test('the scoped placeholder coexists with the focus-empty suggestion shelf', as
   await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
 
   // Narrow to the Work folder so the placeholder is scoped.
-  await act(async () => {
-    fireEvent.press(within(screen.getByTestId('browse-shelf')).getByText('Work'));
-  });
+  await fireEvent.press(screen.getByTestId('inbox-scope-picker'));
+  await fireEvent.press(screen.getByRole('button', { name: 'Work' }));
   // Open the tap-to-open field; it auto-focuses on open, so the scoped
   // placeholder and the focus-empty suggestion shelf are up together.
   await act(async () => {
