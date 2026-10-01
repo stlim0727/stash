@@ -310,7 +310,7 @@ export type QueueOperation = 'create' | 'update' | 'delete';
  * (STASH-4Z) — split out so the UI can tell a repeated, likely device/network
  * DNS problem apart from an ordinary transport blip; both are still "transient"
  * for retry/backoff and health-escalation purposes. */
-export type SyncErrorKind = 'transient_dns' | 'transient_network' | 'other';
+export type SyncErrorKind = 'transient_dns' | 'transient_network' | 'auth' | 'permission' | 'other';
 
 export type SyncChangeSource = 'capture' | 'import' | 'account_rehome' | 'user_edit'
   | 'metadata_fetch' | 'preview_refresh' | 'ai_apply' | 'suggestion_review'

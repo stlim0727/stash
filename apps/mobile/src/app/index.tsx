@@ -428,6 +428,7 @@ export default function InboxScreen() {
     isSyncing,
     syncNow,
     syncPaused,
+    librarySyncFlow,
     loadError,
     getBookmark,
     getTagsForBookmark,
@@ -2251,8 +2252,9 @@ export default function InboxScreen() {
               menuOpen={homeMenuOpen} disabled={capturing} onTop={scrollToTop}
               onMenu={() => setHomeMenuOpen(true)}
               status={<LibraryStatus inline bookmarks={inbox} queue={queue} authStatus={auth.status}
+                flow={librarySyncFlow} scopeKey={auth.userId}
                 loading={isLoading} loadError={loadError} syncing={isSyncing} paused={syncPaused}
-                retry={() => { void syncNow({ force: true }); }} signIn={() => router.push('/settings')} />} />
+                signIn={() => router.push('/settings')} />} />
       )}
         </View>
         {/* Everything below the hero — error/session banners, search, sort/
@@ -2551,8 +2553,9 @@ export default function InboxScreen() {
         ListHeaderComponent={
           <>
             <LibraryStatus bookmarks={inbox} queue={queue} authStatus={auth.status}
+              flow={librarySyncFlow} scopeKey={auth.userId}
               loading={isLoading} loadError={loadError} syncing={isSyncing} paused={syncPaused}
-              retry={() => { void syncNow({ force: true }); }} signIn={() => router.push('/settings')}
+              signIn={() => router.push('/settings')}
               />
             <AnonymousNudgeBanner
               isAnonymous={auth.status === 'anonymous'}

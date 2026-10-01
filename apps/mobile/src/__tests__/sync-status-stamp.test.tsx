@@ -1,5 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
+import type { NetworkState } from 'expo-network';
 
 // GH #687 follow-up: syncNow fires a fire-and-forget stamp into
 // user_sync_status once a full sync pass (upload + pull) actually completes.
@@ -10,6 +11,14 @@ import type { ReactNode } from 'react';
 jest.mock('@/storage/repository', () =>
   require('./helpers/fake-repository').createFakeRepositoryModule(),
 );
+let mockNetworkListener: (state: NetworkState) => void;
+jest.mock('expo-network', () => ({
+  getNetworkStateAsync: async () => ({ isConnected: true, isInternetReachable: true }),
+  addNetworkStateListener: (listener: typeof mockNetworkListener) => {
+    mockNetworkListener = listener;
+    return { remove: jest.fn() };
+  },
+}));
 
 const mockRealSession = {
   access_token: 'real-token',
@@ -101,9 +110,16 @@ jest.mock('@/supabase/client', () => {
 });
 
 import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
+import { SupabaseRequestError } from '@/supabase/client';
+import { makeStoredBookmark, type FakeRepositoryModule } from './helpers/fake-repository';
 
 const authMock = jest.requireMock('@/supabase/auth-provider') as {
   __setAuth: (next: Record<string, unknown>) => void;
+};
+const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
+const apiMock = jest.requireMock('@/api/bookmarks') as {
+  __createBookmarkMock: jest.Mock;
+  __listBookmarksUpdatedSinceMock: jest.Mock;
 };
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -111,10 +127,14 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 beforeEach(() => {
+  fakeRepo.__reset();
+  apiMock.__createBookmarkMock.mockClear();
+  apiMock.__listBookmarksUpdatedSinceMock.mockClear();
   mockUpsertSyncStatus.mockClear();
   mockUpsertSyncStatus.mockImplementation(async () => {});
   authMock.__setAuth({ status: 'authenticated', session: mockRealSession, userId: 'real-user' });
 });
+afterEach(() => jest.useRealTimers());
 
 test('a completed sync pass (upload + pull) stamps user_sync_status', async () => {
   const { result } = await renderHook(() => useBookmarks(), { wrapper });
@@ -167,4 +187,76 @@ test('a failing/throwing stamp write does not propagate and does not fail syncNo
   expect(outcome).toBe(false);
   expect(result.current.isSyncing).toBe(false);
   await waitFor(() => expect(mockUpsertSyncStatus).toHaveBeenCalledTimes(2));
+});
+
+test('a restored failed upload retries at its backoff deadline without another save', async () => {
+  jest.useFakeTimers();
+  const id = '1a2b3c4d-0000-4000-8000-00000000abcd';
+  fakeRepo.__reset([makeStoredBookmark({ id, sync_status: 'failed', ever_synced: false })]);
+  fakeRepo.__setMeta('synced_user_id', 'real-user');
+  const at = new Date().toISOString();
+  await fakeRepo.repository.enqueue({
+    local_id: id, remote_id: null, operation: 'create', payload: { url: 'https://example.com/retry' },
+    sync_status: 'failed', retry_count: 1, last_error: 'Network request failed', last_error_kind: 'transient_network',
+    created_at: at, updated_at: at, last_attempt_at: at,
+  });
+  const screen = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(screen.result.current.isLoading).toBe(false));
+  await waitFor(() => expect(screen.result.current.isSyncing).toBe(false));
+  expect(apiMock.__createBookmarkMock).not.toHaveBeenCalled();
+  expect(screen.result.current.librarySyncFlow.phase).toBe('retrying');
+  await act(async () => { await jest.advanceTimersByTimeAsync(14999); });
+  expect(apiMock.__createBookmarkMock).not.toHaveBeenCalled();
+  await act(async () => { await jest.advanceTimersByTimeAsync(1); });
+  await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(0));
+  expect(apiMock.__createBookmarkMock).toHaveBeenCalledTimes(1);
+  await screen.unmount();
+});
+
+test('a failed pull prevents completion and quietly retries without pending bookmark uploads', async () => {
+  jest.useFakeTimers();
+  apiMock.__listBookmarksUpdatedSinceMock.mockRejectedValueOnce(new Error('Network request failed'));
+  const screen = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(screen.result.current.librarySyncFlow.phase).toBe('retrying'));
+  expect(screen.result.current.librarySyncFlow.remaining).toBe(0);
+  await act(async () => { await jest.advanceTimersByTimeAsync(14999); });
+  expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(1);
+  await act(async () => { await jest.advanceTimersByTimeAsync(1); });
+  await waitFor(() => expect(screen.result.current.librarySyncFlow.phase).toBe('idle'));
+  expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(2);
+  await screen.unmount();
+});
+
+test.each([['paused', 'paused'], ['offline', 'offline'], ['session_expired', 'sign_in']])(
+  '%s blocks a scheduled retry, and a reconnect resumes the normal sync path', async (blocker, phase) => {
+    jest.useFakeTimers();
+    apiMock.__listBookmarksUpdatedSinceMock.mockRejectedValueOnce(new Error('Network request failed'));
+    const screen = await renderHook(() => useBookmarks(), { wrapper });
+    await waitFor(() => expect(screen.result.current.librarySyncFlow.phase).toBe('retrying'));
+    await act(async () => {
+      if (blocker === 'paused') screen.result.current.setSyncPaused(true);
+      else if (blocker === 'offline') mockNetworkListener({ isConnected: false });
+      else authMock.__setAuth({ status: 'session_expired', session: null, userId: null });
+    });
+    await screen.rerender(undefined);
+    expect(screen.result.current.librarySyncFlow.phase).toBe(phase);
+    await act(async () => { await jest.advanceTimersByTimeAsync(30000); });
+    expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(1);
+    if (blocker === 'offline') {
+      await act(async () => { mockNetworkListener({ isConnected: true, isInternetReachable: true }); });
+      await waitFor(() => expect(screen.result.current.librarySyncFlow.phase).toBe('idle'));
+      expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(2);
+    }
+    await screen.unmount();
+  },
+);
+
+test.each([[401, 'sign_in'], [403, 'permission']])('HTTP %s requests user action instead of auto-retrying', async (status, phase) => {
+  jest.useFakeTimers();
+  apiMock.__listBookmarksUpdatedSinceMock.mockRejectedValueOnce(new SupabaseRequestError('Denied', status as number));
+  const screen = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(screen.result.current.librarySyncFlow.phase).toBe(phase));
+  await act(async () => { await jest.advanceTimersByTimeAsync(30000); });
+  expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(1);
+  await screen.unmount();
 });

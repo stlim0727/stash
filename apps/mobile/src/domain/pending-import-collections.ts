@@ -1,4 +1,5 @@
 /** Durable collection assignments created by bookmark imports. */
+import type { SyncErrorKind } from '@/domain/types';
 
 export const PENDING_IMPORT_COLLECTIONS_KEY = 'pending_import_collections';
 
@@ -7,6 +8,9 @@ export interface PendingImportCollection {
   collection_name: string;
   status: 'pending' | 'failed';
   last_error: string | null;
+  last_error_kind?: SyncErrorKind;
+  retry_count?: number;
+  last_attempt_at?: string;
   created_at: string;
 }
 

@@ -42,5 +42,5 @@ const styles = StyleSheet.create({
   wordmark: { fontSize: 28, fontWeight: '800', flexShrink: 1 },
   menu: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   dot: { position: 'absolute', width: 7, height: 7, borderRadius: 4, right: 9, top: 10 },
-  status: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
+  status: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 20 },
 });

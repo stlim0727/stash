@@ -1366,6 +1366,8 @@ test('syncErrorKind preserves transport-vs-HTTP provenance before persistence', 
   assert.equal(syncErrorKind(dnsError), 'transient_dns');
   assert.equal(syncErrorKind(timeoutError), 'transient_network');
   assert.equal(syncErrorKind(responseError), 'other');
+  assert.equal(syncErrorKind(new SupabaseRequestError('Session required', 401)), 'auth');
+  assert.equal(syncErrorKind(new SupabaseRequestError('Access denied', 403)), 'permission');
 });
 
 test('update: sends the LATEST user-editable fields and leaves the queue', async () => {

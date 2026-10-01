@@ -1,0 +1,42 @@
+import type { LocalPendingBookmark, SyncErrorKind } from '@/domain/types';
+import { isPermanentlyUnsyncableUrl, uploadRetryBackoffMs, UPLOAD_RETRY_BACKOFF_MS } from '@/sync/sync-bookmarks';
+
+export interface SyncRunFailure { kind: SyncErrorKind; at: number; attempts: number; }
+export interface RetryableFollowup {
+  status: 'pending' | 'failed'; last_error_kind?: SyncErrorKind;
+  retry_count?: number; last_attempt_at?: string;
+}
+export function canAutomaticallyRetry(kind: SyncErrorKind | null | undefined, attempts: number): boolean {
+  return kind !== 'auth' && kind !== 'permission' &&
+    (kind === 'transient_dns' || kind === 'transient_network' || attempts < 3);
+}
+
+/** Use upload backoff, including the network multiplier; never force retries. */
+export function nextAutomaticSyncRetryAt(input: {
+  queue: readonly LocalPendingBookmark[];
+  runFailure: SyncRunFailure | null;
+  followups?: readonly RetryableFollowup[];
+  now: number;
+}): number | null {
+  if (input.runFailure?.kind === 'auth' || input.runFailure?.kind === 'permission') return null;
+  const deadlines: number[] = [];
+  for (const entry of input.queue) {
+    if (entry.sync_status !== 'failed' || isPermanentlyUnsyncableUrl(entry) ||
+        !canAutomaticallyRetry(entry.last_error_kind, entry.retry_count)) continue;
+    const attemptedAt = Date.parse(entry.last_attempt_at ?? '');
+    deadlines.push((Number.isFinite(attemptedAt) ? attemptedAt : input.now) + Math.max(5_000, uploadRetryBackoffMs(entry)));
+  }
+  const failure = input.runFailure;
+  if (failure && canAutomaticallyRetry(failure.kind, failure.attempts)) {
+    const base = UPLOAD_RETRY_BACKOFF_MS[Math.min(Math.max(0, failure.attempts - 1), UPLOAD_RETRY_BACKOFF_MS.length - 1)]!;
+    deadlines.push(failure.at + base * (failure.kind === 'transient_dns' || failure.kind === 'transient_network' ? 3 : 1));
+  }
+  for (const item of input.followups ?? []) {
+    if (item.status !== 'failed' || !canAutomaticallyRetry(item.last_error_kind, item.retry_count ?? 0)) continue;
+    const at = Date.parse(item.last_attempt_at ?? '');
+    if (!Number.isFinite(at)) { deadlines.push(input.now + 30_000); continue; }
+    const base = UPLOAD_RETRY_BACKOFF_MS[Math.min(Math.max(0, (item.retry_count ?? 1) - 1), UPLOAD_RETRY_BACKOFF_MS.length - 1)]!;
+    deadlines.push(at + base * (item.last_error_kind === 'transient_dns' || item.last_error_kind === 'transient_network' ? 3 : 1));
+  }
+  return deadlines.length ? Math.min(...deadlines) : null;
+}

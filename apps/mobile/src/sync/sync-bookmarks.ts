@@ -106,6 +106,8 @@ function errorMessage(error: unknown): string {
  * broader transient-network signatures (STASH-4Z). */
 export function syncErrorKind(error: unknown): SyncErrorKind {
   if (error instanceof SupabaseRequestError) {
+    if (error.status === 401) return 'auth';
+    if (error.status === 403) return 'permission';
     return 'other';
   }
   if (isDnsResolutionFailure(error)) {
