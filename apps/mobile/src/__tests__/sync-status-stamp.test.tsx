@@ -335,3 +335,28 @@ test('a retained provider error turns an empty-outbox pull failure into actionab
   expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(1);
   await screen.unmount();
 });
+
+
+test.each(['auth', 'permission', 'other'] as const)('%s bookmark failures remain blocked on ordinary passes after backoff, but recover on explicit manual sync', async (kind) => {
+  jest.useFakeTimers();
+  const id = '1a2b3c4d-0000-4000-8000-00000000abcd';
+  fakeRepo.__reset([makeStoredBookmark({ id, sync_status: 'failed', ever_synced: false })]);
+  fakeRepo.__setMeta('synced_user_id', 'real-user');
+  const at = new Date(Date.now() - 3600000).toISOString();
+  await fakeRepo.repository.enqueue({
+    local_id: id, remote_id: null, operation: 'create', payload: { url: 'https://example.com/blocked' },
+    sync_status: 'failed', retry_count: kind === 'other' ? 3 : 1, last_error: 'Requires recovery', last_error_kind: kind,
+    created_at: at, updated_at: at, last_attempt_at: at,
+  });
+  const screen = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(screen.result.current.isLoading).toBe(false));
+  await waitFor(() => expect(screen.result.current.isSyncing).toBe(false));
+  expect(apiMock.__createBookmarkMock).not.toHaveBeenCalled();
+  await act(async () => { await jest.advanceTimersByTimeAsync(30000); await screen.result.current.syncNow(); });
+  expect(apiMock.__createBookmarkMock).not.toHaveBeenCalled();
+  expect(fakeRepo.__queue()).toHaveLength(1);
+  await act(async () => { await screen.result.current.syncNow({ force: true }); });
+  expect(apiMock.__createBookmarkMock).toHaveBeenCalledTimes(1);
+  expect(fakeRepo.__queue()).toHaveLength(0);
+  await screen.unmount();
+});

@@ -59,7 +59,7 @@ available even when a failed pull has an empty bookmark queue or only other
 cloud channels remain. For a rejected session it forces refresh first; a null
 refresh result never falls back to the rejected bearer token. Actual expiry
 then exposes the provider's sign-in UI. Ordinary sync triggers retain their
-existing upload policy. Both followup drivers and the tag journal enforce
+existing upload backoff. Bookmark selection, both followup drivers, and the tag journal enforce
 retry-kind eligibility and per-item ready-at deadlines on ordinary passes;
 only an explicit manual force overrides them. Legacy failed followups without
 a timestamp share a stable hydration anchor for their initial 30-second wait.

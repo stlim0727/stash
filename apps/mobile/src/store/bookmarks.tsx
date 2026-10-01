@@ -6185,13 +6185,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // Defer creates whose metadata is still fetching, so that metadata rides
         // along with the create payload instead of syncing twice.
         const syncable = durableQueue.filter((entry) => {
-          // `force` (Settings' manual "Sync now" tap, or a test simulating it)
-          // bypasses the retry backoff so an explicit user request always
-          // attempts a failed entry immediately, matching the existing "Failed
-          // entries are retried on the next save or via the manual Sync now
-          // action" contract below. Every OTHER call to syncNow (auto-sync
-          // effect, realtime nudge, a save) must leave force unset, or the
-          // backoff it's gated by never actually throttles anything.
+          // Only an explicit manual request bypasses retry eligibility and
+          // backoff. Unrelated saves/nudges/reconnects must not retry terminal
+          // auth, permission, or exhausted ordinary failures.
+          if (!force && entry.sync_status === "failed" &&
+              !canAutomaticallyRetry(entry.last_error_kind, entry.retry_count)) {
+            return false;
+          }
           if (!isSyncable(entry, { ignoreBackoff: force })) {
             return false;
           }
@@ -8468,9 +8468,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   }, [fetchAiServerQueueSnapshot]);
 
   // Background sync: upload as soon as auth and local data are ready, and
-  // whenever a new pending entry appears. Failed entries are retried on the
-  // next save or scheduled retry (once its own backoff window elapses — see isSyncable in
-  // sync/sync-bookmarks.ts) or immediately via the manual Sync now action
+  // whenever a new pending entry appears. Eligible failed entries retry on a
+  // later save or scheduled wake-up once their own backoff elapses. Auth,
+  // permission, and exhausted ordinary failures require manual recovery
   // (syncNow({ force: true }), which bypasses backoff), not in a hot loop.
   //
   // `signed_out` is deliberately EXCLUDED here: with no session, syncNow can't
