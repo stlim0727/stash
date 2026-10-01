@@ -103,14 +103,6 @@ jest.mock('expo-router', () => {
     }),
     useLocalSearchParams: () => ({ id: mockRouteId }),
     useFocusEffect: (cb: () => void | (() => void)) => useEffect(cb, []),
-    useNavigation: () => ({
-      addListener: jest.fn((event: string, callback: (e: any) => void) => {
-        if (event === 'transitionEnd') {
-          callback({ data: { closing: false } });
-        }
-        return jest.fn();
-      }),
-    }),
   };
 });
 

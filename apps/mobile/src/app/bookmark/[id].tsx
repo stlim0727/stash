@@ -83,6 +83,17 @@ interface BookmarkDetailScreenProps {
   hidePreviewHero?: boolean;
 }
 
+function useOptionalNavigation(): any {
+  if (typeof useNavigation !== 'function') {
+    return null;
+  }
+  try {
+    return useNavigation();
+  } catch {
+    return null;
+  }
+}
+
 export default function BookmarkDetailScreen({
   inlineId,
   onInlineClose,
@@ -92,7 +103,7 @@ export default function BookmarkDetailScreen({
   const palette = usePalette();
   const { t, formatDate } = useI18n();
   const router = useRouter();
-  const navigation = useNavigation();
+  const navigation = useOptionalNavigation();
   const { show: showToast } = useCaptureToast();
   const { id: routeId } = useLocalSearchParams<{ id: string }>();
   const {
@@ -255,9 +266,9 @@ export default function BookmarkDetailScreen({
   // Avoid running global store mutations and background SQLite writes while the
   // native stack transition animation is in progress. Listen for transitionEnd,
   // falling back after 250ms for web/inline/test environments.
-  const [transitionSettled, setTransitionSettled] = useState(inline);
+  const [transitionSettled, setTransitionSettled] = useState(inline || !navigation);
   useEffect(() => {
-    if (inline) {
+    if (inline || !navigation) {
       setTransitionSettled(true);
       return;
     }
