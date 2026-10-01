@@ -115,6 +115,7 @@ import InboxScreen from '@/app/index';
 import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
 import { CaptureToastProvider } from '@/ui/capture-toast';
 import { resetPreviewImageFailuresForTest } from '@/domain/preview-image-cache';
+import { notifyDetailMounted } from '@/domain/detail-navigation-signal';
 import { INBOX_VIEW_PREF_KEY } from '@/domain/view-mode';
 import type { Collection, Tag } from '@/domain/types';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
@@ -189,7 +190,7 @@ test('renders stored bookmarks with their titles', async () => {
   expect(screen.getByText('Raindrop review')).toBeTruthy();
 });
 
-test('shows immediate progress feedback while opening a bookmark detail screen', async () => {
+test('navigates immediately on tap and shows progress feedback only when delayed', async () => {
   const id = '7e64cf1e-0000-4000-8000-00000000000c';
   fakeRepo.__reset([
     makeStoredBookmark({
@@ -201,30 +202,71 @@ test('shows immediate progress feedback while opening a bookmark detail screen',
   ]);
 
   const screen = await renderInbox();
-  const title = await screen.findByRole('button', { name: 'Slow detail' });
-  let openFrame: FrameRequestCallback | null = null;
-  const requestFrame = jest
-    .spyOn(global, 'requestAnimationFrame')
-    .mockImplementation((callback) => {
-      openFrame = callback;
-      return 1;
+  await waitFor(() => expect(screen.getByText('Slow detail')).toBeTruthy());
+  const title = screen.getByRole('button', { name: 'Slow detail' });
+
+  jest.useFakeTimers();
+  try {
+    await fireEvent.press(title);
+
+    // Navigation starts immediately with zero intended delay
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/bookmark/[id]',
+      params: { id },
+    });
+    // Spinner is not shown immediately for fast transitions
+    expect(screen.queryByTestId('inbox-bookmark-opening')).toBeNull();
+
+    // If there is a real delay (>150ms), the progress overlay appears
+    await act(async () => {
+      jest.advanceTimersByTime(150);
+    });
+    const overlay = screen.getByTestId('inbox-bookmark-opening');
+    expect(overlay.props.pointerEvents).toBe('auto');
+  } finally {
+    jest.clearAllTimers();
+    jest.useRealTimers();
+  }
+});
+
+test('cancels the delayed progress overlay if Detail mounts before 150ms', async () => {
+  const id = '7e64cf1e-0000-4000-8000-00000000000c';
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id,
+      title: 'Fast detail',
+      url: 'https://example.com/fast-detail',
+      url_hash: 'https://example.com/fast-detail',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Fast detail')).toBeTruthy());
+  const title = screen.getByRole('button', { name: 'Fast detail' });
+
+  jest.useFakeTimers();
+  try {
+    await fireEvent.press(title);
+
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/bookmark/[id]',
+      params: { id },
     });
 
-  await fireEvent.press(title);
+    // Detail mounts before 150ms elapsed
+    await act(async () => {
+      notifyDetailMounted(id);
+    });
 
-  const overlay = screen.getByTestId('inbox-bookmark-opening');
-  expect(overlay.props.pointerEvents).toBe('auto');
-  expect(mockPush).not.toHaveBeenCalled();
-
-  await act(async () => {
-    openFrame?.(performance.now());
-  });
-
-  expect(mockPush).toHaveBeenCalledWith({
-    pathname: '/bookmark/[id]',
-    params: { id },
-  });
-  requestFrame.mockRestore();
+    // Advancing past 150ms does not show the overlay because it was canceled
+    await act(async () => {
+      jest.advanceTimersByTime(200);
+    });
+    expect(screen.queryByTestId('inbox-bookmark-opening')).toBeNull();
+  } finally {
+    jest.clearAllTimers();
+    jest.useRealTimers();
+  }
 });
 
 test('renders Markdown memos with a plain preview and memo metadata', async () => {

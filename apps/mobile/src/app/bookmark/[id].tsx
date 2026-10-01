@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -71,6 +71,7 @@ import {
 } from '@/domain/preview-image-cache';
 import { isYoutubeAvailabilityCandidate } from '@/domain/page-metadata';
 import { hasRemoteIdentity, isLocalOnlyBookmark } from '@/sync/sync-bookmarks';
+import { notifyDetailMounted } from '@/domain/detail-navigation-signal';
 
 // Lines of title shown before collapsing behind a "Show more" toggle.
 const TITLE_COLLAPSED_LINES = 4;
@@ -83,6 +84,17 @@ interface BookmarkDetailScreenProps {
   hidePreviewHero?: boolean;
 }
 
+function useOptionalNavigation(): any {
+  if (typeof useNavigation !== 'function') {
+    return null;
+  }
+  try {
+    return useNavigation();
+  } catch {
+    return null;
+  }
+}
+
 export default function BookmarkDetailScreen({
   inlineId,
   onInlineClose,
@@ -92,6 +104,7 @@ export default function BookmarkDetailScreen({
   const palette = usePalette();
   const { t, formatDate } = useI18n();
   const router = useRouter();
+  const navigation = useOptionalNavigation();
   const { show: showToast } = useCaptureToast();
   const { id: routeId } = useLocalSearchParams<{ id: string }>();
   const {
@@ -251,28 +264,87 @@ export default function BookmarkDetailScreen({
   // point at a row that no longer exists.
   const resolvedId = bookmark?.id;
   const reportEnrichment = resolvedId ? getEnrichment(resolvedId) : undefined;
+  // Notify that Detail has mounted so any pending delayed spinner timer in Inbox
+  // is canceled immediately, preventing unnecessary background re-renders.
   useEffect(() => {
     if (resolvedId) {
-      markSuggestionsSeen(resolvedId);
+      notifyDetailMounted(resolvedId);
     }
-  }, [resolvedId, reportEnrichment, markSuggestionsSeen]);
+  }, [resolvedId]);
+
+  // Avoid running global store mutations and background SQLite writes while the
+  // native stack transition animation is in progress. Listen for transitionEnd,
+  // falling back after a generous safety timeout for environments where no
+  // transition listener is available or fires.
+  const hasTransitionListener = !inline && typeof (navigation as any)?.addListener === 'function';
+  const [transitionSettled, setTransitionSettled] = useState(!hasTransitionListener);
+  useEffect(() => {
+    if (!hasTransitionListener) {
+      setTransitionSettled(true);
+      return;
+    }
+    let settled = false;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    const markSettled = () => {
+      if (!settled) {
+        settled = true;
+        setTransitionSettled(true);
+      }
+      if (fallbackTimer !== null) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+    };
+    const unsubscribe = (navigation as any)?.addListener?.('transitionEnd', (event: any) => {
+      if (!event?.data?.closing) {
+        markSettled();
+      }
+    });
+    // Safety fallback: if transitionEnd never fires (e.g. edge cases), settle after
+    // 1200ms, which is safely longer than standard native stack animations (350-500ms).
+    fallbackTimer = setTimeout(markSettled, 1200);
+    return () => {
+      settled = true;
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+      if (fallbackTimer !== null) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+    };
+  }, [hasTransitionListener, navigation]);
+
+  useEffect(() => {
+    if (!transitionSettled || !resolvedId) {
+      return;
+    }
+    markSuggestionsSeen(resolvedId);
+  }, [transitionSettled, resolvedId, reportEnrichment, markSuggestionsSeen]);
+
   // Viewing a bookmark's Detail counts as opening it — record the access so the
   // "Recently opened" Inbox sort reflects it. Once per id (a re-open remounts).
+  // Run only after the navigation transition has settled so the global store
+  // mutation does not cause a re-render storm across the background stack while
+  // the screen transition is animating.
   useEffect(() => {
-    if (markAccessOnMount && resolvedId) {
-      markBookmarkAccessed(resolvedId);
+    if (!transitionSettled || !markAccessOnMount || !resolvedId) {
+      return;
     }
-  }, [markAccessOnMount, resolvedId, markBookmarkAccessed]);
+    markBookmarkAccessed(resolvedId);
+  }, [transitionSettled, markAccessOnMount, resolvedId, markBookmarkAccessed]);
+
   // STASH-61: opening Detail is also the one on-demand moment we check whether
   // a saved YouTube video is still available — never background polling. The
   // store no-ops for a non-YouTube bookmark, so this is safe to call for every
   // bookmark opened. Once per id (a re-open remounts), mirroring the access
-  // tracking above.
+  // tracking above. Run after transition settles to keep the animation smooth.
   useEffect(() => {
-    if (resolvedId) {
-      checkVideoAvailability(resolvedId, bookmark?.url);
+    if (!transitionSettled || !resolvedId) {
+      return;
     }
-  }, [resolvedId, bookmark?.url, checkVideoAvailability]);
+    checkVideoAvailability(resolvedId, bookmark?.url);
+  }, [transitionSettled, resolvedId, bookmark?.url, checkVideoAvailability]);
   // One breadcrumb on first mount so a freeze right after opening a
   // freshly-shared bookmark (Sentry STASH-H) places the Detail screen on the
   // event timeline. Coarse only: whether the row resolved from local state — a
