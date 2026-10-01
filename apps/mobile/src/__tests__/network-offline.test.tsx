@@ -34,3 +34,16 @@ test('a late initial observation cannot overwrite a more recent disconnect event
   await act(async () => { settle({ isConnected: true, isInternetReachable: true }); });
   expect(screen.result.current).toBe(true);
 });
+
+
+test('unknown events neither supersede initial connectivity nor erase a known disconnect', async () => {
+  let settle!: (state: NetworkState) => void;
+  mockGet.mockImplementation(() => new Promise((resolve) => { settle = resolve; }));
+  const screen = await renderHook(() => useNetworkOffline());
+  await act(async () => { mockListener({}); });
+  await act(async () => { settle({ isConnected: false }); });
+  expect(screen.result.current).toBe(true);
+  await act(async () => { mockListener({}); });
+  expect(screen.result.current).toBe(true);
+  await screen.unmount();
+});

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { nextAutomaticSyncRetryAt } from '@/sync/automatic-retry';
+import { isFollowupReady, nextAutomaticSyncRetryAt } from '@/sync/automatic-retry';
 import type { LocalPendingBookmark } from '@/domain/types';
 const failed = (patch: Partial<LocalPendingBookmark> = {}): LocalPendingBookmark => ({
   local_id: 'a', remote_id: 'a', operation: 'update', payload: {}, sync_status: 'failed',
@@ -33,4 +33,21 @@ test('pull failures and legacy followup outboxes have bounded quiet retries', ()
   assert.equal(nextAutomaticSyncRetryAt({ ...input, followups: [{ status: 'failed', last_error_kind: 'transient_network', retry_count: 2, last_attempt_at: new Date(now).toISOString() }] }), now + 45000);
   assert.equal(nextAutomaticSyncRetryAt({ ...input, queue: [failed({ retry_count: 0, last_attempt_at: undefined })] }), now + 5000);
   assert.equal(nextAutomaticSyncRetryAt(input), null);
+});
+
+
+test('each followup enforces its own kind and deadline while manual force can recover it', () => {
+  const at = new Date(now).toISOString();
+  const early = { status: 'failed' as const, retry_count: 1, last_error_kind: 'retryable_http' as const, last_attempt_at: at };
+  const later = { ...early, retry_count: 2 };
+  assert.equal(isFollowupReady(early, now + 5000, now), true);
+  assert.equal(isFollowupReady(later, now + 5000, now), false);
+  assert.equal(isFollowupReady(later, now + 15000, now), true);
+  for (const blocked of [{ ...early, last_error_kind: 'auth' as const }, { ...early, last_error_kind: 'permission' as const }, { ...early, last_error_kind: 'other' as const, retry_count: 3 }]) {
+    assert.equal(isFollowupReady(blocked, now + 900000, now), false);
+    assert.equal(isFollowupReady(blocked, now, now, true), true);
+  }
+  assert.equal(isFollowupReady({ status: 'failed' }, now + 29999, now), false);
+  assert.equal(isFollowupReady({ status: 'failed' }, now + 30000, now), true);
+  assert.equal(isFollowupReady({ status: 'pending' }, now, now), true);
 });

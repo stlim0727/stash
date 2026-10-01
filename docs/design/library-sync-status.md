@@ -58,7 +58,12 @@ available even when a failed pull has an empty bookmark queue or only other
 cloud channels remain. For a rejected session it forces refresh first; a null
 refresh result never falls back to the rejected bearer token. Actual expiry
 then exposes the provider's sign-in UI. Ordinary sync triggers retain their
-existing upload policy.
+existing upload policy. Both followup drivers and the tag journal enforce
+retry-kind eligibility and per-item ready-at deadlines on ordinary passes;
+only an explicit manual force overrides them. Legacy failed followups without
+a timestamp share a stable hydration anchor for their initial 30-second wait.
+Tag health alerts retain the ordinary three-failure threshold for HTTP/API
+errors; only DNS/network failures use six.
 
 Retry timers are cancelled while offline, paused, busy, without an active
 session, or before local cache ownership has been reconciled. Reconnecting
@@ -70,7 +75,8 @@ requests are not cancelled or assumed to have failed by a connectivity event.
 
 Connectivity uses the SDK-compatible `expo-network` observer, with cleanup,
 unknown-state fallback, and protection against a late initial observation
-overwriting a newer event. A new native build is needed for the added module.
+overwriting a newer event. Uninformative listener events do not supersede
+authoritative observations or erase known connectivity. A new native build is needed for the added module.
 See the [Expo Network documentation](https://docs.expo.dev/versions/v56.0.0/sdk/network/).
 
 Tests cover transition sequences, all cloud channels, HTTP provenance,

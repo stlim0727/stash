@@ -285,6 +285,7 @@ jest.mock("@/domain/enrichment", () => ({
   })),
 }));
 
+import { SupabaseRequestError } from "@/supabase/client";
 import { BookmarksProvider, useBookmarks } from "@/store/bookmarks";
 import { type FakeRepositoryModule, makeStoredBookmark } from "./helpers/fake-repository";
 
@@ -554,7 +555,7 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     );
 
     await act(async () => {
-      await result.current.syncNow();
+      await result.current.syncNow({ force: true });
     });
 
     await waitFor(() =>
@@ -779,7 +780,7 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     });
 
     await act(async () => {
-      await result.current.syncNow();
+      await result.current.syncNow({ force: true });
     });
 
     await waitFor(() =>
@@ -1186,8 +1187,8 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
       userId: "real-user",
     });
 
-    // The account transition will immediately trigger syncNow(), which will
-    // consume the carried-over pending_enrichment_restore and upload it.
+    // Account carry-over preserves failed followups and their backoff.
+    // Explicit manual retry below overrides that wait under the new identity.
     apiMock.__bulkRestoreAIEnrichmentMock.mockImplementationOnce(async (payloads) => {
       return payloads.map((p: any) => ({
         id: "enrichment-id",
@@ -1202,6 +1203,8 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     const newId = result.current.inbox[0]?.id;
     expect(newId).toBeDefined();
     expect(newId).not.toBe(oldId);
+    await waitFor(() => expect(result.current.isSyncing).toBe(false));
+    await act(async () => { await result.current.syncNow({ force: true }); });
 
     await waitFor(() =>
       expect(fakeRepo.__meta("pending_enrichment_restore")).toBe("[]"),
@@ -2209,9 +2212,9 @@ test('imports refuse while a paused logout identity commit is pending', async ()
   } finally { gate.resolve(); spy.mockRestore(); await store.unmount(); }
 });
 
-test.each(['ordinary', 'transport'] as const)('%s tag escalation survives a failed threshold journal write and reports once after repair', async (kind) => {
+test.each(['ordinary', 'transport', 'http'] as const)('%s tag escalation survives a failed threshold journal write and reports once after repair', async (kind) => {
   const id = '7e64cf1e-0000-4000-8000-000000000001';
-  const threshold = kind === 'ordinary' ? 3 : 6;
+  const threshold = kind === 'transport' ? 6 : 3;
   fakeRepo.__reset([makeStoredBookmark({ id, user_id: 'real-user' })]);
   apiMock.__setRemoteRows([{ id, url: 'https://example.com/stored' }]);
   await fakeRepo.repository.setMeta('pending_tag_ops', JSON.stringify([{
@@ -2230,7 +2233,8 @@ test.each(['ordinary', 'transport'] as const)('%s tag escalation survives a fail
     }
     await write(key, value);
   });
-  apiMock.__bulkAttachMock.mockRejectedValue(new Error(kind === 'ordinary' ? 'server unavailable' : 'Network request failed'));
+  const originalAttach = apiMock.__bulkAttachMock.getMockImplementation()!;
+  apiMock.__bulkAttachMock.mockRejectedValue(kind === 'http' ? new SupabaseRequestError('Unavailable', 503) : new Error(kind === 'ordinary' ? 'server unavailable' : 'Network request failed'));
   jest.useFakeTimers();
   try {
     await act(async () => { await store.result.current.syncNow({ force: true }); });
@@ -2242,7 +2246,7 @@ test.each(['ordinary', 'transport'] as const)('%s tag escalation survives a fail
     expect(JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]')[0].health_escalated_at).toBeDefined();
     await act(async () => { await store.result.current.syncNow({ force: true }); });
     expect(report).toHaveBeenCalledTimes(1);
-  } finally { spy.mockRestore(); report.mockRestore(); await store.unmount(); jest.useRealTimers(); }
+  } finally { apiMock.__bulkAttachMock.mockImplementation(originalAttach); spy.mockRestore(); report.mockRestore(); await store.unmount(); jest.useRealTimers(); }
 });
 
 test.each(['add', 'remove', 'suggested'] as const)('%s tagging returns a handled error on bookmark preflight read failure and can retry', async (kind) => {
@@ -2261,4 +2265,44 @@ test.each(['add', 'remove', 'suggested'] as const)('%s tagging returns a handled
     await act(async () => { expect(await edit()).toBeNull(); });
     expect(JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]')).toHaveLength(1);
   } finally { spy.mockRestore(); await store.unmount(); }
+});
+
+
+test.each(['collection', 'enrichment'] as const)('%s followups enforce individual backoff and exclusions during unrelated sync, with a manual override', async (channel) => {
+  jest.useFakeTimers();
+  const ids = [1, 2, 3, 4, 5].map((n) => `7e64cf1e-0000-4000-8000-${String(n).padStart(12, '0')}`);
+  fakeRepo.__reset(ids.map((id) => makeStoredBookmark({ id, user_id: 'real-user', ever_synced: true })));
+  apiMock.__setRemoteRows(ids.map((id) => ({ id, url: `https://example.com/${id}` })));
+  await fakeRepo.repository.setMeta('synced_user_id', 'real-user');
+  const at = new Date(Date.now() - 5000).toISOString();
+  const enrichment = { summary: 'restore', topics: [], suggested_tags: [], status: 'complete', model: null, confidence: null };
+  const items = ids.map((id, index) => ({ bookmark_id: id, collection_name: `Folder ${index}`, enrichment,
+    status: 'failed', last_error: 'previous failure', created_at: at, last_attempt_at: at,
+    retry_count: index === 1 ? 2 : index === 4 ? 3 : 1,
+    last_error_kind: index === 2 ? 'auth' : index === 3 ? 'permission' : index === 4 ? 'other' : 'retryable_http',
+  }));
+  const key = channel === 'collection' ? 'pending_import_collections' : 'pending_enrichment_restore';
+  await fakeRepo.repository.setMeta(key, JSON.stringify(items));
+  const request = channel === 'collection' ? apiMock.__bulkAttachMock : apiMock.__bulkRestoreAIEnrichmentMock;
+  const store = await renderReadyStore();
+  const authModule = jest.requireMock("@/supabase/auth-provider");
+  const originalEnsure = authModule.useSupabaseAuth().ensureAnonymousSession;
+  const apiModule = jest.requireMock("@/api/bookmarks");
+  const apiSessions = jest.spyOn(apiModule, "createBookmarkApi");
+  try {
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0][0].map((item: { bookmark_id: string }) => item.bookmark_id)).toEqual([ids[0]]);
+    await act(async () => { await store.result.current.syncNow(); });
+    expect(request).toHaveBeenCalledTimes(1);
+    const refreshed = { ...mockRealSession, access_token: "refreshed-token" };
+    const ensure = jest.fn(async () => refreshed);
+    authMock.__setAuth({ ensureAnonymousSession: ensure });
+    await store.rerender(undefined);
+    apiSessions.mockClear();
+    await act(async () => { await store.result.current.syncNow({ force: true }); });
+    expect(ensure).toHaveBeenCalledWith(true);
+    expect(apiSessions.mock.calls.every(([session]) => (session as typeof refreshed)?.access_token === "refreshed-token")).toBe(true);
+    expect(request.mock.calls[1][0].map((item: { bookmark_id: string }) => item.bookmark_id)).toEqual(ids.slice(1));
+    expect(fakeRepo.__meta(key)).toBe('[]');
+  } finally { authMock.__setAuth({ ensureAnonymousSession: originalEnsure }); apiSessions.mockRestore(); await store.unmount(); jest.useRealTimers(); }
 });

@@ -94,7 +94,7 @@ import {
   type ProcessingStats,
 } from "@/domain/processing-status";
 import { buildLibrarySyncFlow, type LibrarySyncFlow } from "@/domain/library-sync-status";
-import { canAutomaticallyRetry, nextAutomaticSyncRetryAt } from "@/sync/automatic-retry";
+import { canAutomaticallyRetry, isFollowupReady, nextAutomaticSyncRetryAt } from "@/sync/automatic-retry";
 import { useNetworkOffline } from "@/ui/use-network-offline";
 import {
   applyPendingTagOps,
@@ -1046,6 +1046,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   >(new Set());
   const unseenSuggestionIdsRef = useRef<ReadonlySet<string>>(new Set());
   const [lastPulledAt, setLastPulledAt] = useState<string | null>(null);
+  const legacyFollowupAttemptAt = useRef(Date.now());
   const offline = useNetworkOffline();
   const offlineRef = useRef(offline);
   offlineRef.current = offline;
@@ -4509,8 +4510,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // bookmark used to mean 3,000+ sequential round trips for 1,000 bookmarks
   // (Sentry STASH-5F/5G/5D). "remove" ops stay one-per-op, unchanged: imports
   // never enqueue removes, and removes are always low-volume interactive edits.
-  const syncTagOps = useCallback(async (force = false): Promise<boolean> => {
-    if (!auth.session) {
+  const syncTagOps = useCallback(async (force = false, session: SupabaseAuthSession | null = auth.session): Promise<boolean> => {
+    if (!session) {
       return false;
     }
     // Tag adds/removes call this directly (not just syncNow's own call site
@@ -4533,7 +4534,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         if (!force && Date.now() < tagJournalRetryAtRef.current) return false;
         if (!(await applyTagOps(pendingTagOpsRef.current))) return false;
       }
-      const userId = auth.session.user.id;
+      const userId = session.user.id;
       const epoch = resetEpoch.current;
       const isCurrentUser = () => authRef.current.session?.user.id === userId &&
         reconciledCacheUserIdRef.current === userId && resetEpoch.current === epoch;
@@ -4555,14 +4556,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       reportPendingHealth();
       const ops = pendingTagOpsRef.current.filter((op) => {
         if (op.confirmed) return false;
-        return force || Date.now() >= tagRetryReadyAt(op);
+        return force || (canAutomaticallyRetry(op.last_error_kind, op.retry_count ?? 0) && Date.now() >= tagRetryReadyAt(op));
       });
 
       if (ops.length === 0) {
         return false;
       }
       let mutationsPushed = false;
-      const api = createSyncApi(auth.session);
+      const api = createSyncApi(session);
 
       const recordFailure = async (failedOps: PendingTagOp[], error: unknown) => {
         if (!isCurrentUser()) return;
@@ -4573,7 +4574,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const next = pendingTagOpsRef.current.map((op) => {
           if (!failedIds.has(op.id)) return op;
           const retryCount = (op.retry_count ?? 0) + 1;
-          const threshold = kind === "other" ? 3 : 6;
+          const threshold = kind === "transient_dns" || kind === "transient_network" ? 6 : 3;
           const failed = { ...op, retry_count: retryCount, last_attempt_at: now,
             last_error: String(error), last_error_kind: kind,
             ...(retryCount >= threshold && !op.health_escalated_at ? { health_escalated_at: now } : {}),
@@ -5471,18 +5472,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // collection server-side in one call per chunk instead of one
   // `createCollection`/`updateBookmark` round trip per bookmark.
   const syncPendingImportCollections =
-    useCallback(async (): Promise<boolean> => {
-      if (!auth.session || syncPausedRef.current) {
+    useCallback(async (force = false, session: SupabaseAuthSession | null = auth.session): Promise<boolean> => {
+      if (!session || syncPausedRef.current) {
         return false;
       }
       const eligible = pendingImportCollectionsRef.current.filter((item) =>
-        hasSyncedOnce(item.bookmark_id),
+        hasSyncedOnce(item.bookmark_id) && isFollowupReady(item, Date.now(), legacyFollowupAttemptAt.current, force),
       );
       if (eligible.length === 0) {
         return false;
       }
 
-      const api = createSyncApi(auth.session);
+      const api = createSyncApi(session);
       let mutationsPushed = false;
 
       // Local fast-path: an import re-run, a restore, or a manual move that
@@ -5659,18 +5660,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // per-chunk-failure precedent as syncPendingImportCollections's #713 fix:
   // one SQLite persist for the whole drive, not one per item.
   const syncPendingEnrichmentRestores =
-    useCallback(async (): Promise<boolean> => {
-      if (!auth.session || syncPausedRef.current) {
+    useCallback(async (force = false, session: SupabaseAuthSession | null = auth.session): Promise<boolean> => {
+      if (!session || syncPausedRef.current) {
         return false;
       }
       const eligible = pendingEnrichmentRestoresRef.current.filter((item) =>
-        hasSyncedOnce(item.bookmark_id),
+        hasSyncedOnce(item.bookmark_id) && isFollowupReady(item, Date.now(), legacyFollowupAttemptAt.current, force),
       );
       if (eligible.length === 0) {
         return false;
       }
 
-      const api = createSyncApi(auth.session);
+      const api = createSyncApi(session);
       let mutationsPushed = false;
 
       for (
@@ -7563,21 +7564,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
         // Imported collection names are a separate durable outbox because a
         // bookmark must exist remotely before it can reference a cloud collection.
-        const importCollectionsSynced = await syncPendingImportCollections();
+        const importCollectionsSynced = await syncPendingImportCollections(force, session);
         if (importCollectionsSynced) {
           mutationsPushed = true;
         }
 
         // Same reasoning, same seam: a restored AI enrichment snapshot (#671)
         // needs its bookmark's remote id resolved first too.
-        const enrichmentRestoresSynced = await syncPendingEnrichmentRestores();
+        const enrichmentRestoresSynced = await syncPendingEnrichmentRestores(force, session);
         if (enrichmentRestoresSynced) {
           mutationsPushed = true;
         }
 
         // Upload any queued local-first tag ops before pulling, so the pull's
         // server snapshot already reflects them.
-        const tagsSynced = await syncTagOps(force);
+        const tagsSynced = await syncTagOps(force, session);
         if (tagsSynced) {
           mutationsPushed = true;
         }
@@ -8599,7 +8600,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     const deadline = nextAutomaticSyncRetryAt({
       queue, runFailure: syncRunFailure,
       followups: [...pendingImportCollections, ...pendingEnrichmentRestores].filter((item) => hasSyncedOnce(item.bookmark_id)),
-      now: Date.now(),
+      now: Date.now(), legacyFollowupAttemptAt: legacyFollowupAttemptAt.current,
     });
     if (deadline === null) return;
     const timer = setTimeout(() => { void syncNowRef.current?.().catch(() => {}); }, Math.max(5_000, deadline - Date.now()));

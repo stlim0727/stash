@@ -9,10 +9,12 @@ export function useNetworkOffline(): boolean {
     let observedEvent = false;
     let subscription: ReturnType<typeof addNetworkStateListener> | undefined;
     const accept = (state: NetworkState | undefined) => {
-      if (active && state) setOffline(state.isConnected === false || state.isInternetReachable === false);
+      const definite = typeof state?.isConnected === 'boolean' || typeof state?.isInternetReachable === 'boolean';
+      if (active && definite) setOffline(state?.isConnected === false || state?.isInternetReachable === false);
+      return definite;
     };
     try {
-      subscription = addNetworkStateListener((state) => { observedEvent = true; accept(state); });
+      subscription = addNetworkStateListener((state) => { observedEvent = accept(state) || observedEvent; });
       void Promise.resolve(getNetworkStateAsync()).then((state) => {
         if (!observedEvent) accept(state);
       }).catch(() => {});

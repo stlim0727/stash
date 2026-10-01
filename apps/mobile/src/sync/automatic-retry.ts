@@ -11,12 +11,26 @@ export function canAutomaticallyRetry(kind: SyncErrorKind | null | undefined, at
     (kind === 'transient_dns' || kind === 'transient_network' || kind === 'retryable_http' || attempts < 3);
 }
 
+/** A stable hydration anchor gives legacy failures without timestamps one quiet wait. */
+export function followupRetryReadyAt(item: RetryableFollowup, legacyAttemptAt: number): number {
+  const at = Date.parse(item.last_attempt_at ?? '');
+  if (!Number.isFinite(at)) return legacyAttemptAt + 30_000;
+  const base = UPLOAD_RETRY_BACKOFF_MS[Math.min(Math.max(0, (item.retry_count ?? 1) - 1), UPLOAD_RETRY_BACKOFF_MS.length - 1)]!;
+  return at + base * (item.last_error_kind === 'transient_dns' || item.last_error_kind === 'transient_network' ? 3 : 1);
+}
+
+export function isFollowupReady(item: RetryableFollowup, now: number, legacyAttemptAt: number, force = false): boolean {
+  return force || item.status === 'pending' ||
+    (canAutomaticallyRetry(item.last_error_kind, item.retry_count ?? 0) && now >= followupRetryReadyAt(item, legacyAttemptAt));
+}
+
 /** Use upload backoff, including the network multiplier; never force retries. */
 export function nextAutomaticSyncRetryAt(input: {
   queue: readonly LocalPendingBookmark[];
   runFailure: SyncRunFailure | null;
   followups?: readonly RetryableFollowup[];
   now: number;
+  legacyFollowupAttemptAt?: number;
 }): number | null {
   if (input.runFailure?.kind === 'auth' || input.runFailure?.kind === 'permission') return null;
   const deadlines: number[] = [];
@@ -33,10 +47,7 @@ export function nextAutomaticSyncRetryAt(input: {
   }
   for (const item of input.followups ?? []) {
     if (item.status !== 'failed' || !canAutomaticallyRetry(item.last_error_kind, item.retry_count ?? 0)) continue;
-    const at = Date.parse(item.last_attempt_at ?? '');
-    if (!Number.isFinite(at)) { deadlines.push(input.now + 30_000); continue; }
-    const base = UPLOAD_RETRY_BACKOFF_MS[Math.min(Math.max(0, (item.retry_count ?? 1) - 1), UPLOAD_RETRY_BACKOFF_MS.length - 1)]!;
-    deadlines.push(at + base * (item.last_error_kind === 'transient_dns' || item.last_error_kind === 'transient_network' ? 3 : 1));
+    deadlines.push(followupRetryReadyAt(item, input.legacyFollowupAttemptAt ?? input.now));
   }
   return deadlines.length ? Math.min(...deadlines) : null;
 }
