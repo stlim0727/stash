@@ -36,7 +36,8 @@ Failures retain the operation and persist retry count, attempt time and error
 kind. Automatic retries use the bookmark queue's exponential schedule (5, 15,
 30, 60, 120, 300 seconds, capped), with its 3x network/DNS multiplier. Manual
 Sync now bypasses backoff. A cancellable timer wakes sync at the earliest eligible
-failed-operation deadline, including after restart. Pause, auth/cache ownership,
+failed-operation deadline, including after restart. Cleanup also cancels a wake-up
+already waiting for journal persistence, so it cannot start sync after unmount. Pause, auth/cache ownership,
 bookmark creation, and storage health gate automatic retry. One durable health marker escalates at attempt 3 for
 ordinary errors or 6 for network/DNS errors through existing observability.
 

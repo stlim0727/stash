@@ -1966,3 +1966,31 @@ test('a stalled tag write and another edit during duplicate adoption retain cano
     await store.unmount();
   }
 });
+
+test('a retry waiting for journal persistence is cancelled when the provider unmounts', async () => {
+  const id = '7e64cf1e-0000-4000-8000-000000000001';
+  fakeRepo.__reset([makeStoredBookmark({ id, user_id: 'real-user' })]);
+  apiMock.__setRemoteRows([{ id, url: 'https://example.com/stored' }]);
+  const store = await renderReadyStore();
+  const gate = deferred();
+  const write = fakeRepo.repository.setMeta;
+  let held = false;
+  const spy = jest.spyOn(fakeRepo.repository, 'setMeta').mockImplementation(async (key, value) => {
+    if (key === 'pending_tag_ops' && JSON.parse(value).some((op: { retry_count?: number }) => op.retry_count === 1)) {
+      held = true;
+      await gate.promise;
+    }
+    await write(key, value);
+  });
+  apiMock.__bulkAttachMock.mockRejectedValueOnce(new Error('server unavailable'));
+  jest.useFakeTimers();
+  try {
+    await act(async () => { await store.result.current.addTagsToBookmark(id, ['cancelled']); });
+    await waitFor(() => expect(held).toBe(true));
+    await act(async () => { jest.advanceTimersByTime(5100); });
+    expect(apiMock.__bulkAttachMock).toHaveBeenCalledTimes(1);
+    await store.unmount();
+    await act(async () => { gate.resolve(); });
+    expect(apiMock.__bulkAttachMock).toHaveBeenCalledTimes(1);
+  } finally { gate.resolve(); spy.mockRestore(); await store.unmount(); jest.useRealTimers(); }
+});

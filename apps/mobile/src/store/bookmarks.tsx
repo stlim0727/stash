@@ -8462,13 +8462,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       .filter((op) => !op.confirmed && (op.retry_count ?? 0) > 0 && hasSyncedOnce(op.bookmark_id))
       .map(tagRetryReadyAt).filter(Number.isFinite);
     if (deadlines.length === 0) return;
+    let cancelled = false;
     const timer = setTimeout(() => {
       // A failed storage write must not create a 100ms retry loop.
       void tagOpsWriteRef.current.then((healthy) => {
-        if (healthy) void syncNowRef.current?.().catch(() => {});
+        if (!cancelled && healthy) void syncNowRef.current?.().catch(() => {});
       });
     }, Math.max(100, Math.min(...deadlines) - Date.now()));
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [pendingTagOps, bookmarks, auth.userId, auth.status, reconciledCacheUserId,
     syncPaused, isSyncingState, hasSyncedOnce]);
 
