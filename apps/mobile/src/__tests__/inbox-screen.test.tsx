@@ -105,6 +105,14 @@ jest.mock('expo-router', () => {
     }),
     useLocalSearchParams: () => mockParams,
     usePathname: () => '/',
+    useNavigation: () => ({
+      addListener: jest.fn((event: string, callback: (e: any) => void) => {
+        if (event === 'transitionEnd') {
+          callback({ data: { closing: false } });
+        }
+        return jest.fn();
+      }),
+    }),
     // Run the focus callback as a mount effect (the screen is always focused in
     // these tests); honours the returned cleanup like the real hook.
     useFocusEffect: (cb: () => void | (() => void)) => useEffect(cb, []),

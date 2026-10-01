@@ -635,8 +635,9 @@ export default function InboxScreen() {
   const isNavigatingRef = useRef(false);
   // Detail navigation is triggered immediately on tap to eliminate artificial
   // frame delays. If opening experiences a real delay (>150ms), show the busy
-  // indicator on the card. When returning to the Inbox or on blur, clear the
-  // timer and reset the busy state.
+  // indicator on the card. When returning to the Inbox (gaining focus), clear the
+  // timer and reset the busy state. Do not cancel on blur, so slow transitions
+  // still display progress feedback while the Inbox remains visible.
   useFocusEffect(
     useCallback(() => {
       if (openingBookmarkTimerRef.current !== null) {
@@ -645,12 +646,6 @@ export default function InboxScreen() {
       }
       setOpeningBookmarkId(null);
       isNavigatingRef.current = false;
-      return () => {
-        if (openingBookmarkTimerRef.current !== null) {
-          clearTimeout(openingBookmarkTimerRef.current);
-          openingBookmarkTimerRef.current = null;
-        }
-      };
     }, []),
   );
   useEffect(

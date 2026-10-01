@@ -1,13 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Image,
   type ImageLoadEventData,
-  InteractionManager,
   Linking,
   type NativeSyntheticEvent,
   Platform,
@@ -93,6 +92,7 @@ export default function BookmarkDetailScreen({
   const palette = usePalette();
   const { t, formatDate } = useI18n();
   const router = useRouter();
+  const navigation = useNavigation();
   const { show: showToast } = useCaptureToast();
   const { id: routeId } = useLocalSearchParams<{ id: string }>();
   const {
@@ -252,48 +252,77 @@ export default function BookmarkDetailScreen({
   // point at a row that no longer exists.
   const resolvedId = bookmark?.id;
   const reportEnrichment = resolvedId ? getEnrichment(resolvedId) : undefined;
+  // Avoid running global store mutations and background SQLite writes while the
+  // native stack transition animation is in progress. Listen for transitionEnd,
+  // falling back after 250ms for web/inline/test environments.
+  const [transitionSettled, setTransitionSettled] = useState(inline);
   useEffect(() => {
-    if (!resolvedId) {
+    if (inline) {
+      setTransitionSettled(true);
       return;
     }
-    const handle = InteractionManager.runAfterInteractions(() => {
-      markSuggestionsSeen(resolvedId);
-    });
-    return () => {
-      handle.cancel();
+    let settled = false;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    const markSettled = () => {
+      if (!settled) {
+        settled = true;
+        setTransitionSettled(true);
+      }
+      if (fallbackTimer !== null) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
     };
-  }, [resolvedId, reportEnrichment, markSuggestionsSeen]);
+    const unsubscribe = (navigation as any)?.addListener?.('transitionEnd', (event: any) => {
+      if (!event?.data?.closing) {
+        markSettled();
+      }
+    });
+    if (!settled) {
+      fallbackTimer = setTimeout(markSettled, 250);
+    }
+    return () => {
+      settled = true;
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+      if (fallbackTimer !== null) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+    };
+  }, [inline, navigation]);
+
+  useEffect(() => {
+    if (!transitionSettled || !resolvedId) {
+      return;
+    }
+    markSuggestionsSeen(resolvedId);
+  }, [transitionSettled, resolvedId, reportEnrichment, markSuggestionsSeen]);
+
   // Viewing a bookmark's Detail counts as opening it — record the access so the
   // "Recently opened" Inbox sort reflects it. Once per id (a re-open remounts).
-  // Run after interactions so the global store mutation does not cause a re-render
-  // storm across the background stack while navigation is transitioning.
+  // Run only after the navigation transition has settled so the global store
+  // mutation does not cause a re-render storm across the background stack while
+  // the screen transition is animating.
   useEffect(() => {
-    if (!markAccessOnMount || !resolvedId) {
+    if (!transitionSettled || !markAccessOnMount || !resolvedId) {
       return;
     }
-    const handle = InteractionManager.runAfterInteractions(() => {
-      markBookmarkAccessed(resolvedId);
-    });
-    return () => {
-      handle.cancel();
-    };
-  }, [markAccessOnMount, resolvedId, markBookmarkAccessed]);
+    markBookmarkAccessed(resolvedId);
+  }, [transitionSettled, markAccessOnMount, resolvedId, markBookmarkAccessed]);
+
   // STASH-61: opening Detail is also the one on-demand moment we check whether
   // a saved YouTube video is still available — never background polling. The
   // store no-ops for a non-YouTube bookmark, so this is safe to call for every
   // bookmark opened. Once per id (a re-open remounts), mirroring the access
-  // tracking above. Run after interactions to keep the transition smooth.
+  // tracking above. Run after transition settles to keep the animation smooth.
   useEffect(() => {
-    if (!resolvedId) {
+    if (!transitionSettled || !resolvedId) {
       return;
     }
-    const handle = InteractionManager.runAfterInteractions(() => {
-      checkVideoAvailability(resolvedId, bookmark?.url);
-    });
-    return () => {
-      handle.cancel();
-    };
-  }, [resolvedId, bookmark?.url, checkVideoAvailability]);
+    checkVideoAvailability(resolvedId, bookmark?.url);
+  }, [transitionSettled, resolvedId, bookmark?.url, checkVideoAvailability]);
   // One breadcrumb on first mount so a freeze right after opening a
   // freshly-shared bookmark (Sentry STASH-H) places the Detail screen on the
   // event timeline. Coarse only: whether the row resolved from local state — a
