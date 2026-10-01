@@ -1,7 +1,22 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 
-jest.mock('react-native-safe-area-context', () => ({
+// Native focus is imperative; record it while preserving real input rendering.
+const mockInputFocus = jest.fn();
+jest.mock('react-native', () => {
+  const native = jest.requireActual('react-native');
+  const React = require('react');
+  const module = Object.create(native);
+  Object.defineProperty(module, 'TextInput', {
+    value: React.forwardRef((props: { accessibilityLabel?: string }, ref: unknown) => {
+      React.useImperativeHandle(ref, () => ({ focus: () => mockInputFocus(props.accessibilityLabel) }));
+      return React.createElement(native.TextInput, props);
+    }),
+  });
+  return module;
+});
+
+jest.mock('react-native-safe-area-context' , () => ({
   SafeAreaProvider: ({ children }: { children: ReactNode }) => children,
   useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
 }));
@@ -390,4 +405,17 @@ test('manual Link mode rejects invalid and oversized URLs even with note content
     expect(screen.getByTestId('add-save').props.accessibilityState.disabled).toBe(true);
   }
   expect(fakeRepo.__bookmarks()).toHaveLength(0);
+});
+
+test('keyboard Next focuses the title after mounting collapsed link details and when already open', async () => {
+  fakeRepo.__reset([]);
+  const screen = await renderAddScreen();
+  const urlInput = screen.getByPlaceholderText('https://');
+  expect(screen.queryByLabelText('Title (optional)')).toBeNull();
+  await fireEvent(urlInput, 'submitEditing');
+  expect(screen.getByLabelText('Title (optional)')).toBeTruthy();
+  expect(mockInputFocus).toHaveBeenLastCalledWith('Title (optional)');
+  expect(mockInputFocus).toHaveBeenCalledTimes(1);
+  await fireEvent(urlInput, 'submitEditing');
+  expect(mockInputFocus).toHaveBeenCalledTimes(2);
 });

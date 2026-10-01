@@ -69,10 +69,11 @@ function renderInbox() {
   );
 }
 
+// These onboarding captures are local: the auth mock has no reconciled session.
 function twoBookmarks() {
   return [
-    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000a1', title: 'First save' }),
-    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000a2', title: 'Second save' }),
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000a1', title: 'First save', sync_status: 'pending', ever_synced: false }),
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000a2', title: 'Second save', sync_status: 'pending', ever_synced: false }),
   ];
 }
 
@@ -155,7 +156,7 @@ test('the anonymous nudge does not show for a signed-in (authenticated) user, ev
 
 test('the anonymous nudge does not show until the 2nd save (1 bookmark stays quiet)', async () => {
   fakeRepo.__reset([
-    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000b1', title: 'Only one' }),
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000b1', title: 'Only one', sync_status: 'pending', ever_synced: false }),
   ]);
 
   const screen = await renderInbox();

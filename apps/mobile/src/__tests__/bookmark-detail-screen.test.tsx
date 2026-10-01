@@ -1641,3 +1641,19 @@ test('URL-less Note has sharing and text copy without website-only actions', asy
   expect(screen.queryByText('Copy link')).toBeNull();
   expect(screen.queryByText('Refresh preview')).toBeNull();
 });
+
+test.each(['image', 'url'] as const)('%s content keeps its intended reading order', async (contentType) => {
+  fakeRepo.__reset([makeStoredBookmark({ id: mockRouteId, title: 'Reading order',
+    content_type: contentType, url: contentType === 'image' ? null : 'https://example.com/read',
+    local_image_uri: contentType === 'image' ? 'file:///captured.jpg' : null,
+    preview_image_url: 'https://example.com/preview.jpg' })]);
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByTestId('bookmark-detail-preview')).toBeTruthy());
+  // Query order reflects the rendered tree, not source-code placement.
+  const tree = JSON.stringify(screen.toJSON());
+  const previewIndex = tree.indexOf('"testID":"bookmark-detail-preview"');
+  const notesIndex = tree.indexOf('"Note"');
+  expect(previewIndex).toBeGreaterThanOrEqual(0);
+  expect(notesIndex).toBeGreaterThanOrEqual(0);
+  expect(previewIndex < notesIndex).toBe(contentType === 'image');
+});

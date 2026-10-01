@@ -1225,6 +1225,7 @@ export default function InboxScreen() {
   const sortLoaded = useRef(false);
   const folderSortLoaded = useRef(false);
   const viewLoaded = useRef(false);
+  const [viewOptionsReady, setViewOptionsReady] = useState(false);
   // Mirror the sort-pref guard: don't let the initial empty default clobber the
   // stored recents before they load.
   const recentsLoaded = useRef(false);
@@ -1247,7 +1248,7 @@ export default function InboxScreen() {
         recentsLoaded.current = true;
         if (active) setRecentsReady(true);
       });
-    getPreference(INBOX_SORT_PREF_KEY)
+    const sortRead = getPreference(INBOX_SORT_PREF_KEY)
       .then((raw) => {
         if (active) {
           setSort(parseSort(raw));
@@ -1257,7 +1258,7 @@ export default function InboxScreen() {
       .finally(() => {
         sortLoaded.current = true;
       });
-    getPreference(FOLDER_SORT_PREF_KEY)
+    const folderSortRead = getPreference(FOLDER_SORT_PREF_KEY)
       .then((raw) => {
         if (active) {
           setFolderSort(parseFolderSort(raw));
@@ -1267,7 +1268,7 @@ export default function InboxScreen() {
       .finally(() => {
         folderSortLoaded.current = true;
       });
-    getPreference(INBOX_VIEW_PREF_KEY)
+    const viewRead = getPreference(INBOX_VIEW_PREF_KEY)
       .then((raw) => {
         if (!active) {
           return;
@@ -1279,6 +1280,9 @@ export default function InboxScreen() {
       .finally(() => {
         viewLoaded.current = true;
       });
+    void Promise.all([sortRead, folderSortRead, viewRead]).then(() => {
+      if (active) setViewOptionsReady(true);
+    });
     return () => {
       active = false;
     };
@@ -2562,6 +2566,19 @@ export default function InboxScreen() {
           {/* Search and secondary navigation. Reporting captures the screen
               after this menu has been dismissed. */}
           <View style={styles.heroActions}>
+            {isWeb ? (
+              <Pressable
+                testID="inbox-hero-search"
+                accessibilityRole="button"
+                accessibilityLabel={searchOpen ? t('inbox.searchCloseA11y') : t('inbox.searchOpenA11y')}
+                disabled={selectionMode || !recentsReady}
+                onPress={() => (searchOpen ? closeSearch() : openSearch())}
+                style={{ minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' }}
+                {...preventMouseDownFocusSteal}
+              >
+                <Ionicons name={searchOpen ? 'close' : 'search'} size={24} color={palette.text} />
+              </Pressable>
+            ) : null}
             <Pressable
               testID="inbox-menu-open"
               accessibilityRole="button"
@@ -2720,8 +2737,8 @@ export default function InboxScreen() {
             testID="inbox-view-options"
             accessibilityRole="button"
             accessibilityLabel={t('inbox.viewOptions')}
-            accessibilityState={{ disabled: isLoading }}
-            disabled={isLoading}
+            accessibilityState={{ disabled: isLoading || !viewOptionsReady }}
+            disabled={isLoading || !viewOptionsReady}
             onPress={() => setSortMenuOpen(true)}
             style={[styles.viewOptions, { borderColor: palette.controlBorder }]}
           >
@@ -3608,8 +3625,11 @@ export default function InboxScreen() {
                 </View>
                 {item.url ? (
                   <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={t('common.openLink')}
+                    accessibilityRole={selectionMode ? 'checkbox' : 'link'}
+                    accessibilityLabel={selectionMode
+                      ? t(isSelected ? 'inbox.deselectItemA11y' : 'inbox.selectItemA11y', { title: displayTitle(item) ?? t('common.untitled') })
+                      : t('common.openLink')}
+                    accessibilityState={selectionMode ? { checked: isSelected } : undefined}
                     onPress={selectionMode ? () => toggleSelect(item.id) : openLink}
                     onLongPress={handleItemLongPress}
                     style={{ minHeight: uiMetrics.touchTarget, justifyContent: 'center' }}

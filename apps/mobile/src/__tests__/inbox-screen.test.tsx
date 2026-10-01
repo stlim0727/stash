@@ -2598,3 +2598,59 @@ test('List results retain the collection that matched a search', async () => {
   await waitFor(() => expect(screen.getByText('in Work')).toBeTruthy());
   expect(screen.getByTestId('inbox-list-title')).toBeTruthy();
 });
+
+test('View options waits for all three preference reads before accepting choices', async () => {
+  const keys = ['pref.inbox.sort', 'pref.folder.sort', INBOX_VIEW_PREF_KEY];
+  const releases: Array<() => void> = [];
+  const original = fakeRepo.repository.getMeta.bind(fakeRepo.repository);
+  const spy = jest.spyOn(fakeRepo.repository, 'getMeta').mockImplementation(async (key) => {
+    if (keys.includes(key)) await new Promise<void>((resolve) => releases.push(resolve));
+    return original(key);
+  });
+  fakeRepo.__reset([makeStoredBookmark({ title: 'Preferences pending' })]);
+  try {
+    const screen = await renderInbox();
+    await waitFor(() => expect(screen.getByText('Preferences pending')).toBeTruthy());
+    await waitFor(() => expect(releases).toHaveLength(3));
+    expect(screen.getByTestId('inbox-view-options').props.accessibilityState.disabled).toBe(true);
+    await fireEvent.press(screen.getByTestId('inbox-view-options'));
+    expect(screen.queryByTestId('inbox-view-list')).toBeNull();
+    for (const release of releases.slice(0, 2)) await act(async () => release());
+    expect(screen.getByTestId('inbox-view-options').props.accessibilityState.disabled).toBe(true);
+    await act(async () => releases[2]());
+    await waitFor(() => expect(screen.getByTestId('inbox-view-options').props.accessibilityState.disabled).toBe(false));
+    await chooseLayout(screen, 'list');
+    await waitFor(() => expect(fakeRepo.__meta(INBOX_VIEW_PREF_KEY)).toBe('list'));
+  } finally {
+    releases.forEach((release) => release());
+    spy.mockRestore();
+  }
+});
+
+test('web hero search stays outside the collapsing header and reopens search after scrolling', async () => {
+  Object.defineProperty(Platform, 'OS', { configurable: true, get: () => 'web' });
+  fakeRepo.__reset([makeStoredBookmark({ title: 'Pinned search' })]);
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Pinned search')).toBeTruthy());
+  const collapsible = screen.getByTestId('inbox-collapsible-header');
+  expect(within(collapsible).queryByTestId('inbox-hero-search')).toBeNull();
+  await fireEvent(collapsible, 'layout', { nativeEvent: { layout: { height: 150, width: 390, x: 0, y: 0 } } });
+  await fireEvent(screen.getByTestId('inbox-list'), 'scroll', { nativeEvent: { contentOffset: { x: 0, y: 600 }, contentSize: { width: 390, height: 2000 }, layoutMeasurement: { width: 390, height: 844 } } });
+  await fireEvent.press(screen.getByTestId('inbox-hero-search'));
+  expect(screen.getByTestId('inbox-search-input')).toBeTruthy();
+  expect(screen.getByTestId('inbox-hero-search').props.accessibilityLabel).toBe('Close search');
+});
+
+test('card source announces and toggles selection instead of opening the URL', async () => {
+  fakeRepo.__reset([makeStoredBookmark({ id: 'source-selection', title: 'Source selection', url: 'https://example.com/select' })]);
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByTestId('inbox-card-title')).toBeTruthy());
+  await fireEvent(screen.getByTestId('inbox-card-title'), 'longPress');
+  const checked = screen.getAllByRole('checkbox', { checked: true });
+  const source = checked.find((node) => within(node).queryByText('example.com'));
+  expect(source).toBeDefined();
+  expect(source!.props.accessibilityLabel).toContain('Source selection');
+  await fireEvent.press(source!);
+  const unchecked = screen.getAllByRole('checkbox', { checked: false });
+  expect(unchecked.some((node) => within(node).queryByText('example.com'))).toBe(true);
+});
