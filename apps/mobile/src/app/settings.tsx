@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Application from "expo-application";
 import Constants from "expo-constants";
+import * as Clipboard from "expo-clipboard";
 import { useRouter } from "expo-router";
 import { useOpenReport } from "@/feedback/open-report";
 import { useFloatingReportPreference } from "@/feedback/floating-report-preference";
@@ -64,6 +65,7 @@ import { useI18n, SUPPORTED_LOCALES, type LocalePreference } from "@/i18n";
 import type { MessageKey } from "@/i18n/messages";
 import { getPreference, setPreference } from "@/storage/preferences";
 import { getPullDiagnostics } from "@/sync/pull-diagnostics";
+import { SyncDiagnostics } from "@/ui/SyncDiagnostics";
 import { ResetLibraryDialog } from "@/ui/ResetLibraryDialog";
 import { TutorialModal } from "@/ui/TutorialModal";
 import { deliverExport, saveExportToDevice } from "@/share/export-data";
@@ -194,6 +196,9 @@ export default function SettingsScreen() {
   } = useBookmarks();
   const [aiSuggestionsSheetOpen, setAiSuggestionsSheetOpen] = useState(false);
   const [processingDetailsOpen, setProcessingDetailsOpen] = useState(false);
+  const [processingStagesOpen, setProcessingStagesOpen] = useState(false);
+  const [diagnosticCountsOpen, setDiagnosticCountsOpen] = useState(false);
+  const [appInfoCopied, setAppInfoCopied] = useState(false);
   const auth = useSupabaseAuth();
   const offline = useNetworkOffline();
   const analytics = useAnalytics();
@@ -1351,71 +1356,25 @@ export default function SettingsScreen() {
 
       {developerMode ? (
         <>
-          {/* The four raw pipeline stages, relocated from the Activity
-              section (STASH counter refactor) — everyday Settings shows only
-              the one-line summary there; this expanded breakdown is for
-              debugging. One group, one data source (`processingStats`): a
-              second "Pipeline: todo/done" group used to sit here with its own
-              independently-computed numbers, some of them exact duplicates
-              (e.g. metadata todo === the pending count below) — merged away,
-              keeping only the figures `details` doesn't already show
-              (sync-lifecycle once/twice, and the AI/metadata completed
-              totals). */}
-          <Group
-            styles={styles}
-            title={t("settings.diagnostics.title")}
-            footnote={t("settings.diagnostics.footnote")}
-          >
-            <InfoRow
-              styles={styles}
-              label={t("settings.diagnostics.supabaseAuth")}
-              value={auth.status}
+          <SyncDiagnostics
+            status={!cloudAvailable && librarySyncFlow?.phase !== "sign_in" ? t("settings.sync.localOnly")
+              : incompleteSyncSummary ?? t("settings.diagnostics.noCloudWork")}
+            lastPulledAt={lastPulledAt}
+            remaining={librarySyncFlow?.remaining ?? waiting}
+            recentPulls={recentPulls}
+            reporting={capturing}
+            attention={["attention", "sign_in", "permission"].includes(librarySyncFlow?.phase ?? "idle")}
+            onReport={() => void openReport()}
+          />
+          <Group styles={styles} title={t("settings.diagnostics.workTitle")}>
+            <Row styles={styles} palette={palette} icon="layers-outline"
+              label={t("settings.diagnostics.workTitle")}
+              value={processingStats.remaining === 0 ? t("settings.diagnostics.noWork") : processingSummary}
+              onPress={() => setProcessingStagesOpen(open => !open)}
+              expanded={processingStagesOpen}
+              right={<Ionicons name={processingStagesOpen ? "chevron-up" : "chevron-down"} size={18} color={palette.textSecondary} />}
             />
-            <InfoRow
-              styles={styles}
-              label={t("settings.diagnostics.lastPulled")}
-              value={
-                lastPulledAt
-                  ? formatDate(lastPulledAt)
-                  : t("settings.diagnostics.lastPulledNever")
-              }
-            />
-            {recentPulls.length > 0 ? (
-              recentPulls.map((attempt, index) => (
-                <InfoRow
-                  key={attempt.timestamp}
-                  styles={styles}
-                  label={t("settings.diagnostics.recentPulls.entryLabel", {
-                    index: index + 1,
-                  })}
-                  value={
-                    attempt.outcome === "success"
-                      ? t("settings.diagnostics.recentPulls.success", {
-                          time: formatDate(attempt.timestamp, {
-                            hour: "numeric",
-                            minute: "2-digit",
-                          }),
-                          rows: t("settings.diagnostics.recentPulls.rows", {
-                            count: attempt.remoteRowCount,
-                          }),
-                        })
-                      : t("settings.diagnostics.recentPulls.failure", {
-                          time: formatDate(attempt.timestamp, {
-                            hour: "numeric",
-                            minute: "2-digit",
-                          }),
-                          error: attempt.errorMessage ?? "?",
-                        })
-                  }
-                />
-              ))
-            ) : (
-              <InfoRow
-                styles={styles}
-                label={t("settings.diagnostics.recentPulls.label")}
-                value={t("settings.diagnostics.recentPulls.none")}
-              />
-            )}
+            {processingStagesOpen ? <>
             <Row
               styles={styles}
               palette={palette}
@@ -1478,6 +1437,7 @@ export default function SettingsScreen() {
             />
             {processingDetailsOpen ? (
               <>
+                <InfoRow styles={styles} label={t("settings.diagnostics.supabaseAuth")} value={auth.status} />
                 <InfoRow
                   styles={styles}
                   label={t("settings.processing.details.syncStates.label")}
@@ -1543,11 +1503,23 @@ export default function SettingsScreen() {
                 />
               </>
             ) : null}
+            </> : null}
+          </Group>
+          <Group styles={styles} title={t("settings.diagnostics.countsTitle")}
+            footnote={diagnosticCountsOpen ? t("settings.diagnostics.countsScope") : undefined}>
+            <Row styles={styles} palette={palette} icon="stats-chart-outline"
+              label={t("settings.diagnostics.countsTitle")}
+              value={t("settings.diagnostics.countsHint")}
+              onPress={() => setDiagnosticCountsOpen(open => !open)}
+              expanded={diagnosticCountsOpen}
+              right={<Ionicons name={diagnosticCountsOpen ? "chevron-up" : "chevron-down"} size={18} color={palette.textSecondary} />}
+            />
+            {diagnosticCountsOpen ? <>
             <InfoRow
               styles={styles}
               label={t("settings.diagnostics.syncLifecycle.label")}
               value={t("settings.diagnostics.syncLifecycle.value", {
-                once: processingStats.diagnostics.sync.syncedOnce,
+                once: processingStats.diagnostics.sync.done,
                 twice: processingStats.diagnostics.sync.syncingTwice,
               })}
             />
@@ -1565,6 +1537,9 @@ export default function SettingsScreen() {
                 done: processingStats.diagnostics.ai.done,
               })}
             />
+            </> : null}
+          </Group>
+          <Group styles={styles} title={t("settings.diagnostics.appInfo")}>
             <InfoRow
               styles={styles}
               label={t("settings.diagnostics.appVersion")}
@@ -1576,13 +1551,16 @@ export default function SettingsScreen() {
               icon="git-commit-outline"
               label={t("settings.diagnostics.build")}
               value={describeBuild(build)}
-              last
               onPress={
                 build.commitUrl
                   ? () => void Linking.openURL(build.commitUrl!)
                   : undefined
               }
             />
+            <Row styles={styles} palette={palette} icon="copy-outline"
+              label={t(appInfoCopied ? "settings.diagnostics.copied" : "settings.diagnostics.copyAppInfo")}
+              onPress={() => void Clipboard.setStringAsync(`${appVersion}\n${describeBuild(build)}`).then(() => setAppInfoCopied(true)).catch(() => setAppInfoCopied(false))}
+              last />
           </Group>
         </>
       ) : null}
@@ -1838,6 +1816,7 @@ function Row({
   last,
   disabled,
   accessibilityLabel,
+  expanded,
   testID,
 }: {
   styles: ReturnType<typeof makeStyles>;
@@ -1854,6 +1833,7 @@ function Row({
    *  dims the row and announces a disabled button to assistive tech. */
   disabled?: boolean;
   accessibilityLabel?: string;
+  expanded?: boolean;
   testID?: string;
 }) {
   const rowStyle: StyleProp<ViewStyle> = [styles.row, !last && styles.divider];
@@ -1931,6 +1911,7 @@ function Row({
       testID={testID}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityState={expanded === undefined ? undefined : { expanded }}
       onPress={onPress}
       style={({ pressed }) => [rowStyle, pressed && { opacity: 0.6 }]}
     >
@@ -1954,7 +1935,7 @@ function InfoRow({
   return (
     <View style={[styles.infoRow, !last && styles.divider]}>
       <Text style={styles.infoLabel}>{label}</Text>
-      <Text style={styles.infoValue} numberOfLines={2}>
+      <Text selectable style={styles.infoValue}>
         {value}
       </Text>
     </View>
@@ -2111,13 +2092,14 @@ const makeStyles = (palette: AppPalette) =>
       gap: 3,
     },
     infoLabel: {
-      fontSize: 13,
+      fontSize: 14,
       fontWeight: "600",
       color: palette.text,
     },
     infoValue: {
-      fontSize: 13,
-      color: palette.textSecondary,
+      fontSize: 15,
+      lineHeight: 22,
+      color: palette.text,
     },
     sectionLabel: {
       fontSize: 13,

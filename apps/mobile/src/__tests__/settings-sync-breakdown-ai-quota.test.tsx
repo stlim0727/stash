@@ -139,6 +139,8 @@ test('AI quota is a modifier on the exclusive AI count and includes its reset ti
   // screen shows just the one-line Activity summary (STASH counter refactor).
   await waitFor(() => screen.getByLabelText('Developer mode'));
   fireEvent(screen.getByLabelText('Developer mode'), 'valueChange', true);
+  await waitFor(() => screen.getByLabelText('Pending processing'));
+  await fireEvent.press(screen.getByLabelText('Pending processing'));
   await waitFor(() => screen.getByTestId('processing-stage-ai'));
 
   const resetTime = expectedResetTime(storeRef.current!.aiQuotaExceeded!.retryAt);
