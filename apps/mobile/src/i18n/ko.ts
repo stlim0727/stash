@@ -166,6 +166,15 @@ export const ko: Catalog = {
   },
   'inbox.bulkRefresh': '새로고침',
   'inbox.bulkRefreshA11y': '선택한 북마크의 미리보기 새로고침',
+  'inbox.bulkTag': '태그',
+  'inbox.bulkTagA11y': '선택한 북마크에 태그 추가',
+  'inbox.bulkTagTitle': {
+    other: '북마크 {count}개에 태그 추가',
+  },
+  'inbox.bulkTagPlaceholder': '태그 이름 입력',
+  'inbox.bulkTagExistingTags': '기존 태그',
+  'inbox.bulkTagApplyA11y': '#{name} 태그 추가',
+  'inbox.bulkTagSubmit': '추가',
   'inbox.selectItemA11y': '{title} 선택',
   'inbox.deselectItemA11y': '{title} 선택 해제',
   'inbox.moveToCollectionAction': '컬렉션으로 이동…',
@@ -283,6 +292,9 @@ export const ko: Catalog = {
     other: '미리보기 {count}개를 새로고침했습니다',
   },
   'toast.noPreviewsToRefresh': '미리보기를 새로고침할 URL이 없습니다',
+  'toast.tagsAdded': {
+    other: '북마크 {count}개에 #{tag} 태그를 추가했습니다',
+  },
 
   'settings.section.account': '계정',
   'settings.section.activity': '활동 상태',

@@ -230,6 +230,16 @@ export const en = {
   },
   'inbox.bulkRefresh': 'Refresh',
   'inbox.bulkRefreshA11y': 'Refresh preview for selected bookmarks',
+  'inbox.bulkTag': 'Tag',
+  'inbox.bulkTagA11y': 'Add tag to selected bookmarks',
+  'inbox.bulkTagTitle': {
+    one: 'Add tag to 1 bookmark',
+    other: 'Add tag to {count} bookmarks',
+  },
+  'inbox.bulkTagPlaceholder': 'Enter tag name',
+  'inbox.bulkTagExistingTags': 'Existing tags',
+  'inbox.bulkTagApplyA11y': 'Add tag #{name}',
+  'inbox.bulkTagSubmit': 'Add',
   'inbox.selectItemA11y': 'Select {title}',
   'inbox.deselectItemA11y': 'Deselect {title}',
   'inbox.moveToCollectionAction': 'Move to collection…',
@@ -402,6 +412,10 @@ export const en = {
     other: 'Refreshed {count} previews',
   },
   'toast.noPreviewsToRefresh': 'No URLs to refresh preview',
+  'toast.tagsAdded': {
+    one: 'Added #{tag} to 1 bookmark',
+    other: 'Added #{tag} to {count} bookmarks',
+  },
 
   // Settings.
   'settings.section.account': 'Account',

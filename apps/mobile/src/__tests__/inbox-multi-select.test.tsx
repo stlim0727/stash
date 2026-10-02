@@ -177,9 +177,11 @@ test('enters selection mode via long-press on a bookmark and shows BulkActionBar
   // Bulk actions should be disabled with 0 selected
   const refreshBtn = screen.getByTestId('inbox-bulk-refresh');
   const moveBtn = screen.getByTestId('inbox-bulk-move');
+  const tagBtn = screen.getByTestId('inbox-bulk-tag');
   const deleteBtn = screen.getByTestId('inbox-bulk-delete');
   expect(refreshBtn.props.accessibilityState?.disabled).toBe(true);
   expect(moveBtn.props.accessibilityState?.disabled).toBe(true);
+  expect(tagBtn.props.accessibilityState?.disabled).toBe(true);
   expect(deleteBtn.props.accessibilityState?.disabled).toBe(true);
 
   // Close selection mode via hero close button
@@ -453,6 +455,137 @@ test('bulk move with New Collection dialog creates collection and assigns select
   const secondCol = stored.find((b) => b.id === '7e64cf1e-0000-4000-8000-000000000002')?.collection_id;
   expect(firstCol).toBeTruthy();
   expect(firstCol).toBe(secondCol);
+});
+
+test('bulk tag assigns new tag to all selected bookmarks via BulkTagDialog', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000001',
+      title: 'First bookmark',
+    }),
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000002',
+      title: 'Second bookmark',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('First bookmark')).toBeTruthy());
+
+  // Enter selection mode and select all
+  await fireEvent(screen.getByText('First bookmark'), 'longPress');
+  await fireEvent.press(screen.getByTestId('inbox-selection-select-all'));
+  expect(screen.getByText('2 selected')).toBeTruthy();
+
+  // Tap Tag button to open BulkTagDialog
+  await fireEvent.press(screen.getByTestId('inbox-bulk-tag'));
+  await waitFor(() => expect(screen.getByTestId('bulk-tag-dialog')).toBeTruthy());
+  expect(screen.getByText('Add tag to 2 bookmarks')).toBeTruthy();
+
+  // Type tag name
+  const input = screen.getByTestId('bulk-tag-input');
+  await fireEvent.changeText(input, 'reading');
+
+  // Submit tag
+  await fireEvent.press(screen.getByTestId('bulk-tag-submit'));
+
+  // Exits selection mode
+  await waitFor(() => {
+    expect(screen.queryByTestId('inbox-bulk-action-bar')).toBeNull();
+  });
+
+  const rawOps = fakeRepo.__meta('pending_tag_ops');
+  expect(rawOps).toBeTruthy();
+  const ops = JSON.parse(rawOps!);
+  expect(ops).toHaveLength(2);
+  expect(ops.map((o: { bookmark_id: string }) => o.bookmark_id).sort()).toEqual([
+    '7e64cf1e-0000-4000-8000-000000000001',
+    '7e64cf1e-0000-4000-8000-000000000002',
+  ]);
+  expect(ops[0].tag_name).toBe('reading');
+});
+
+test('bulk tag with existing tag chip assigns tag directly to selected bookmarks', async () => {
+  const existingTag = {
+    id: 'tag-work',
+    user_id: 'user-test',
+    name: 'work',
+    slug: 'work',
+    source: 'user' as const,
+    created_at: '2026-06-12T00:00:00.000Z',
+  };
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-000000000001',
+        title: 'First bookmark',
+      }),
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-000000000002',
+        title: 'Second bookmark',
+      }),
+    ],
+    {
+      tags: [existingTag],
+      bookmarkTags: [
+        {
+          bookmark_id: '7e64cf1e-0000-4000-8000-000000000001',
+          tag_id: 'tag-work',
+          source: 'user',
+          confidence: null,
+          created_at: '2026-06-12T00:00:00.000Z',
+        },
+      ],
+      collections: [],
+    },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('First bookmark')).toBeTruthy());
+
+  // Enter selection mode and select all
+  await fireEvent(screen.getByText('First bookmark'), 'longPress');
+  await fireEvent.press(screen.getByTestId('inbox-selection-select-all'));
+
+  // Tap Tag button
+  await fireEvent.press(screen.getByTestId('inbox-bulk-tag'));
+  await waitFor(() => expect(screen.getByTestId('bulk-tag-chip-work')).toBeTruthy());
+
+  // Tap the existing tag chip
+  await fireEvent.press(screen.getByTestId('bulk-tag-chip-work'));
+
+  // Exits selection mode
+  await waitFor(() => {
+    expect(screen.queryByTestId('inbox-bulk-action-bar')).toBeNull();
+  });
+
+  const rawOps = fakeRepo.__meta('pending_tag_ops');
+  expect(rawOps).toBeTruthy();
+  const ops = JSON.parse(rawOps!);
+  expect(ops).toHaveLength(2);
+  expect(ops.every((o: { tag_name: string }) => o.tag_name === 'work')).toBe(true);
+});
+
+test('exiting selection dismisses a pending bulk tag dialog', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000001',
+      title: 'First bookmark',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('First bookmark')).toBeTruthy());
+
+  await fireEvent(screen.getByText('First bookmark'), 'longPress');
+  await fireEvent.press(screen.getByTestId('inbox-bulk-tag'));
+  await waitFor(() => expect(screen.getByTestId('bulk-tag-dialog')).toBeTruthy());
+
+  // Exit selection via cancel/close button in header
+  await fireEvent.press(screen.getByTestId('inbox-selection-close'));
+  await waitFor(() => {
+    expect(screen.queryByTestId('bulk-tag-dialog')).toBeNull();
+  });
 });
 
 test('bulk refresh triggers preview refresh on selected URL items and shows feedback toast', async () => {

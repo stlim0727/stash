@@ -114,12 +114,14 @@ import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { ActionSheet, type SheetAction } from '@/ui/ActionSheet';
 import { BulkActionBar } from '@/ui/BulkActionBar';
+import { BulkTagDialog } from '@/ui/BulkTagDialog';
 import { CreateCollectionDialog } from '@/ui/CreateCollectionDialog';
 import { TutorialModal } from '@/ui/TutorialModal';
 import { HighlightedText } from '@/ui/HighlightedText';
 import { overlayLayer } from '@/ui/layering';
 import { useCaptureToast } from '@/ui/capture-toast';
 import type { Bookmark } from '@/domain/types';
+import { countTagsForBookmarks } from '@/domain/tag-counts';
 import { isYoutubeAvailabilityCandidate } from '@/domain/page-metadata';
 import BookmarkDetailScreen from '@/app/bookmark/[id]';
 import {
@@ -444,6 +446,7 @@ export default function InboxScreen() {
     restoreBookmark,
     deleteBookmark,
     assignCollection,
+    addTagsToBookmarks,
     markBookmarkAccessed,
     createCollection,
     refreshBookmarkPreview,
@@ -844,6 +847,9 @@ export default function InboxScreen() {
   const [bulkRefreshing, setBulkRefreshing] = useState(false);
   const [bulkMoveSheetOpen, setBulkMoveSheetOpen] = useState(false);
   const [bulkMoveFolderCreateTarget, setBulkMoveFolderCreateTarget] = useState<string[] | null>(null);
+  const [bulkTagDialogOpen, setBulkTagDialogOpen] = useState(false);
+  const [bulkTagBusy, setBulkTagBusy] = useState(false);
+  const [bulkTagError, setBulkTagError] = useState<string | null>(null);
 
   // Collapsing header: the top cluster (hero + search + controls + browse
   // shelf) slides up out of view as the list scrolls down and slides back on
@@ -1386,6 +1392,8 @@ export default function InboxScreen() {
     setBulkMoveSheetOpen(false);
     setNewFolderDialogOpen(false);
     setBulkMoveFolderCreateTarget(null);
+    setBulkTagDialogOpen(false);
+    setBulkTagError(null);
   }, []);
 
   const enterSelectionMode = useCallback(
@@ -1566,6 +1574,47 @@ export default function InboxScreen() {
       }
     },
     [selectedIds, assignCollection, exitSelectionMode, showToast, collections, t],
+  );
+
+  const existingTagsForBulk = useMemo(() => {
+    const counts = countTagsForBookmarks(
+      inbox.map((b) => b.id),
+      getTagsForBookmark,
+    );
+    return counts.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  }, [inbox, getTagsForBookmark]);
+
+  const handleOpenBulkTag = useCallback(() => {
+    if (selectedIds.size === 0) {
+      return;
+    }
+    setBulkTagError(null);
+    setBulkTagDialogOpen(true);
+  }, [selectedIds]);
+
+  const handleBulkApplyTag = useCallback(
+    async (tagName: string) => {
+      const clean = tagName.trim().replace(/^#+/, '');
+      if (!clean) {
+        return;
+      }
+      const ids = Array.from(selectedIds);
+      if (ids.length === 0) {
+        return;
+      }
+      setBulkTagBusy(true);
+      setBulkTagError(null);
+      const error = await addTagsToBookmarks(ids, [clean]);
+      setBulkTagBusy(false);
+      if (error) {
+        setBulkTagError(error);
+        return;
+      }
+      setBulkTagDialogOpen(false);
+      exitSelectionMode();
+      showToast(t('toast.tagsAdded', { count: ids.length, tag: clean }));
+    },
+    [selectedIds, addTagsToBookmarks, exitSelectionMode, showToast, t],
   );
   // In a multi-column card grid, pad rows with lightweight placeholders so real
   // cards keep their column width (flex: 1). When an inline detail is open on
@@ -3413,6 +3462,7 @@ export default function InboxScreen() {
           isRefreshing={bulkRefreshing}
           onRefresh={handleBulkRefresh}
           onMove={handleOpenBulkMove}
+          onTag={handleOpenBulkTag}
           onDelete={handleBulkDelete}
           maxWidth={contentMaxWidth}
           bottomInset={insets.bottom}
@@ -3532,6 +3582,18 @@ export default function InboxScreen() {
               }))),
         ]}
         onClose={() => setSortMenuOpen(false)}
+      />
+      <BulkTagDialog
+        visible={bulkTagDialogOpen}
+        selectedCount={selectedIds.size}
+        existingTags={existingTagsForBulk}
+        busy={bulkTagBusy}
+        error={bulkTagError}
+        onApplyTag={handleBulkApplyTag}
+        onClose={() => {
+          setBulkTagDialogOpen(false);
+          setBulkTagError(null);
+        }}
       />
       <CreateCollectionDialog
         visible={newFolderDialogOpen}
