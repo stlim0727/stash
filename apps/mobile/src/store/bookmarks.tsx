@@ -5639,16 +5639,24 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         );
         for (const bookmark of affected) {
           if (action === "trash") {
-            if (bookmark.deleted_at === null) {
-              trashBookmark(bookmark.id);
-            }
+            applyBookmarkUpdate(
+              bookmark.id,
+              {
+                deleted_at: bookmark.deleted_at ?? new Date().toISOString(),
+                collection_id: null,
+              },
+              "trash",
+            );
+            clearAiRetry(bookmark.id);
+            syncAiRetryIds();
+            clearAiServerQueued(bookmark.id);
           } else {
             assignCollection(bookmark.id, null);
           }
         }
 
         const api = createSyncApi(auth.session);
-        await api.deleteCollections(collectionIds);
+        await api.deleteCollections(collectionIds, action);
 
         const current = tagDataRef.current;
         applyTagData({
@@ -5666,7 +5674,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         };
       }
     },
-    [auth, applyTagData, trashBookmark, assignCollection],
+    [
+      auth,
+      applyTagData,
+      applyBookmarkUpdate,
+      assignCollection,
+      clearAiRetry,
+      syncAiRetryIds,
+      clearAiServerQueued,
+    ],
   );
 
   const deleteCollection = useCallback(
@@ -5712,7 +5728,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         }
 
         const api = createSyncApi(auth.session);
-        await api.deleteCollections(sources);
+        await api.mergeCollections(sources, targetCollectionId);
 
         const current = tagDataRef.current;
         applyTagData({

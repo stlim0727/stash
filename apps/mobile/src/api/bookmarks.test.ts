@@ -1044,7 +1044,7 @@ test('updateCollection patches collection name and returns updated collection', 
   assert.equal(result.name, 'Renamed Col');
 });
 
-test('deleteCollection and deleteCollections issue DELETE requests for target collections', async () => {
+test('deleteCollection and deleteCollections patch remote bookmarks before deleting collections', async () => {
   const calls: Array<{ path: string; options: Record<string, unknown> }> = [];
   const client = {
     request: async (path: string, options: Record<string, unknown> = {}) => {
@@ -1053,13 +1053,57 @@ test('deleteCollection and deleteCollections issue DELETE requests for target co
     },
   };
   const api = new BookmarkApi(SESSION, client as never);
-  await api.deleteCollection('col-1');
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].options.method, 'DELETE');
-  assert.ok(calls[0].path.includes('id=eq.col-1'));
 
-  await api.deleteCollections(['col-2', 'col-3']);
-  assert.equal(calls.length, 3);
-  assert.ok(calls.some((c) => c.options.method === 'DELETE' && c.path.includes('id=eq.col-2')));
-  assert.ok(calls.some((c) => c.options.method === 'DELETE' && c.path.includes('id=eq.col-3')));
+  // Uncategorize mode
+  await api.deleteCollection('col-1', 'uncategorize');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].options.method, 'PATCH');
+  assert.ok(calls[0].path.includes('/rest/v1/bookmarks'));
+  assert.ok(decodeURIComponent(calls[0].path).includes('collection_id=in.("col-1")'));
+  assert.deepEqual(calls[0].options.body, {
+    collection_id: null,
+    updated_at: (calls[0].options.body as Record<string, unknown>).updated_at,
+  });
+  assert.equal(calls[1].options.method, 'DELETE');
+  assert.ok(calls[1].path.includes('/rest/v1/collections'));
+  assert.ok(decodeURIComponent(calls[1].path).includes('id=in.("col-1")'));
+
+  // Trash mode
+  calls.length = 0;
+  await api.deleteCollections(['col-2', 'col-3'], 'trash');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].options.method, 'PATCH');
+  assert.ok(calls[0].path.includes('/rest/v1/bookmarks'));
+  assert.ok(decodeURIComponent(calls[0].path).includes('collection_id=in.("col-2","col-3")'));
+  const trashBody = calls[0].options.body as Record<string, unknown>;
+  assert.equal(trashBody.collection_id, null);
+  assert.ok(trashBody.deleted_at);
+  assert.ok(trashBody.updated_at);
+  assert.equal(calls[1].options.method, 'DELETE');
+  assert.ok(calls[1].path.includes('/rest/v1/collections'));
+  assert.ok(decodeURIComponent(calls[1].path).includes('id=in.("col-2","col-3")'));
+});
+
+test('mergeCollections reassigns remote bookmarks to target collection before deleting source collections', async () => {
+  const calls: Array<{ path: string; options: Record<string, unknown> }> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      calls.push({ path, options });
+      return [];
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  await api.mergeCollections(['col-a', 'col-b'], 'col-target');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].options.method, 'PATCH');
+  assert.ok(calls[0].path.includes('/rest/v1/bookmarks'));
+  assert.ok(decodeURIComponent(calls[0].path).includes('collection_id=in.("col-a","col-b")'));
+  const patchBody = calls[0].options.body as Record<string, unknown>;
+  assert.equal(patchBody.collection_id, 'col-target');
+  assert.ok(patchBody.updated_at);
+
+  assert.equal(calls[1].options.method, 'DELETE');
+  assert.ok(calls[1].path.includes('/rest/v1/collections'));
+  assert.ok(decodeURIComponent(calls[1].path).includes('id=in.("col-a","col-b")'));
 });

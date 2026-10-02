@@ -26,6 +26,7 @@ jest.mock('@/supabase/auth-provider', () => ({
 const mockUpdateCollection = jest.fn();
 const mockDeleteCollection = jest.fn();
 const mockDeleteCollections = jest.fn();
+const mockMergeCollections = jest.fn();
 
 jest.mock('@/api/bookmarks', () => {
   const actual = jest.requireActual('@/api/bookmarks');
@@ -35,6 +36,7 @@ jest.mock('@/api/bookmarks', () => {
       updateCollection: (...args: unknown[]) => mockUpdateCollection(...args),
       deleteCollection: (...args: unknown[]) => mockDeleteCollection(...args),
       deleteCollections: (...args: unknown[]) => mockDeleteCollections(...args),
+      mergeCollections: (...args: unknown[]) => mockMergeCollections(...args),
       listBookmarksUpdatedSince: async () => [],
       listBookmarkIds: async () => [],
       listEnrichmentsUpdatedSince: async () => [],
@@ -68,6 +70,7 @@ beforeEach(() => {
   mockUpdateCollection.mockReset();
   mockDeleteCollection.mockReset();
   mockDeleteCollections.mockReset();
+  mockMergeCollections.mockReset();
 });
 
 test('renameCollection updates collection name locally and calls API', async () => {
@@ -141,10 +144,10 @@ test('deleteCollection with uncategorize removes collection and sets bookmark co
   expect(result.current.collections).toHaveLength(0);
   expect(result.current.inbox.find((b) => b.id === 'b1')?.collection_id).toBeNull();
   expect(result.current.inbox.find((b) => b.id === 'b1')?.deleted_at).toBeNull();
-  expect(mockDeleteCollections).toHaveBeenCalledWith(['col-1']);
+  expect(mockDeleteCollections).toHaveBeenCalledWith(['col-1'], 'uncategorize');
 });
 
-test('deleteCollection with trash moves contained bookmarks to trash', async () => {
+test('deleteCollection with trash moves contained bookmarks to trash and clears collection_id', async () => {
   const col: Collection = {
     id: 'col-1',
     user_id: 'user-1',
@@ -154,7 +157,15 @@ test('deleteCollection with trash moves contained bookmarks to trash', async () 
     updated_at: '2026-06-12T00:00:00.000Z',
   };
   fakeRepo.__reset(
-    [makeStoredBookmark({ id: 'b1', collection_id: 'col-1', title: 'Article 1' })],
+    [
+      makeStoredBookmark({ id: 'b1', collection_id: 'col-1', title: 'Article 1' }),
+      makeStoredBookmark({
+        id: 'b2',
+        collection_id: 'col-1',
+        title: 'Already Trashed',
+        deleted_at: '2026-06-12T00:00:00.000Z',
+      }),
+    ],
     {
       tags: [],
       bookmarkTags: [],
@@ -171,7 +182,14 @@ test('deleteCollection with trash moves contained bookmarks to trash', async () 
 
   expect(result.current.collections).toHaveLength(0);
   expect(result.current.inbox.find((b) => b.id === 'b1')).toBeUndefined();
-  expect(result.current.trash.find((b) => b.id === 'b1')).toBeDefined();
+  const trashed1 = result.current.trash.find((b) => b.id === 'b1');
+  expect(trashed1).toBeDefined();
+  expect(trashed1?.collection_id).toBeNull();
+
+  const trashed2 = result.current.trash.find((b) => b.id === 'b2');
+  expect(trashed2).toBeDefined();
+  expect(trashed2?.collection_id).toBeNull();
+  expect(mockDeleteCollections).toHaveBeenCalledWith(['col-1'], 'trash');
 });
 
 test('mergeCollections reassigns bookmarks and removes source collections', async () => {
@@ -202,7 +220,7 @@ test('mergeCollections reassigns bookmarks and removes source collections', asyn
       collections: [colA, colB],
     },
   );
-  mockDeleteCollections.mockResolvedValue(undefined);
+  mockMergeCollections.mockResolvedValue(undefined);
 
   const { result } = await renderStore();
 
@@ -218,7 +236,7 @@ test('mergeCollections reassigns bookmarks and removes source collections', asyn
   // Both bookmarks are now in col-b
   expect(result.current.inbox.find((b) => b.id === 'b1')?.collection_id).toBe('col-b');
   expect(result.current.inbox.find((b) => b.id === 'b2')?.collection_id).toBe('col-b');
-  expect(mockDeleteCollections).toHaveBeenCalledWith(['col-a']);
+  expect(mockMergeCollections).toHaveBeenCalledWith(['col-a'], 'col-b');
 });
 
 test('deleteCollections bulk deletes multiple collections', async () => {
@@ -261,5 +279,5 @@ test('deleteCollections bulk deletes multiple collections', async () => {
   expect(result.current.collections).toHaveLength(0);
   expect(result.current.inbox.find((b) => b.id === 'b1')?.collection_id).toBeNull();
   expect(result.current.inbox.find((b) => b.id === 'b2')?.collection_id).toBeNull();
-  expect(mockDeleteCollections).toHaveBeenCalledWith(['col-a', 'col-b']);
+  expect(mockDeleteCollections).toHaveBeenCalledWith(['col-a', 'col-b'], 'uncategorize');
 });
