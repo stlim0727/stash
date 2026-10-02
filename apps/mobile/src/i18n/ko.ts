@@ -202,7 +202,10 @@ export const ko: Catalog = {
   'folder.mergeA11y': '컬렉션 합치기',
   'folder.mergeTitle': '컬렉션 합치기',
   'folder.mergePrompt': '합칠 대상 컬렉션을 선택하세요:',
+  'folder.mergeMultiPrompt': '선택한 컬렉션 중 남겨둘 컬렉션을 선택하세요:',
+  'folder.mergeMultiNotice': '“{target}” 컬렉션으로 북마크가 이동하고, 나머지 선택된 컬렉션은 삭제됩니다. 북마크는 안전하게 보존됩니다.',
   'folder.mergeConfirm': '합치기',
+  'folder.mergeIntoConfirm': '“{target}” 컬렉션으로 합치기',
   'folder.selectAction': '컬렉션 선택…',
   'folder.selectedCount': {
     other: '컬렉션 {count}개 선택됨',

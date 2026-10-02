@@ -233,4 +233,47 @@ describe('MergeCollectionsDialog', () => {
     });
     expect(onClose).toHaveBeenCalled();
   });
+
+  it('shows multi-source prompt, notice and contextual confirm label when multiple sources provided', async () => {
+    const onMerge = jest.fn();
+    const onClose = jest.fn();
+
+    const screen = await render(
+      <MergeCollectionsDialog
+        visible={true}
+        busy={false}
+        error={null}
+        sourceCollections={dummyCollections}
+        availableTargets={dummyCollections}
+        onMerge={onMerge}
+        onClose={onClose}
+      />,
+    );
+
+    expect(screen.getByText('Select the collection to keep:')).toBeTruthy();
+    expect(screen.getByTestId('merge-collections-notice')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Bookmarks will move into “Design”, and the other selected collections will be removed. All bookmarks are safely preserved.',
+      ),
+    ).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('merge-target-col-2'));
+    });
+
+    expect(
+      screen.getByText(
+        'Bookmarks will move into “Engineering”, and the other selected collections will be removed. All bookmarks are safely preserved.',
+      ),
+    ).toBeTruthy();
+
+    expect(screen.getByText('Merge into “Engineering”')).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('merge-collections-submit'));
+    });
+
+    expect(onMerge).toHaveBeenCalledWith('col-2');
+  });
 });
