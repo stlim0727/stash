@@ -72,6 +72,7 @@ jest.mock('@/api/bookmarks', () => {
       }),
       deleteCollection: async () => ({ success: true }),
       deleteCollections: async () => ({ success: true }),
+      mergeCollections: async () => ({ success: true }),
     }),
   };
 });
@@ -295,6 +296,86 @@ describe('Folder View & Collection Management', () => {
     await waitFor(() => {
       expect(screen.getByText('Delete collection')).toBeTruthy();
       expect(screen.getByText('Rename collection')).toBeTruthy();
+    });
+  });
+
+  test('restricts merge target choices strictly to selected collections in bulk merge dialog', async () => {
+    const colA = makeCollection('col-a', 'Engineering');
+    const colB = makeCollection('col-b', 'Design');
+    const colC = makeCollection('col-c', 'Marketing');
+
+    fakeRepo.__reset(
+      [
+        makeStoredBookmark({
+          id: '7e64cf1e-0000-4000-8000-000000000001',
+          title: 'React Native Docs',
+          collection_id: 'col-a',
+        }),
+      ],
+      { tags: [], bookmarkTags: [], collections: [colA, colB, colC] },
+    );
+
+    const screen = await renderInbox();
+    await waitFor(() => expect(screen.getByText('React Native Docs')).toBeTruthy());
+
+    // Switch to folder view
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('inbox-view-options'));
+    });
+    await waitFor(() => expect(screen.getByTestId('inbox-view-folder')).toBeTruthy());
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('inbox-view-folder'));
+    });
+
+    // Enter selection mode
+    await waitFor(() => expect(screen.getByTestId('folder-select-button')).toBeTruthy());
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('folder-select-button'));
+    });
+
+    // Select Engineering (col-a) and Design (col-b), leave Marketing (col-c) unselected
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('folder-tile-__folder-c:col-a'));
+    });
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('folder-tile-__folder-c:col-b'));
+    });
+
+    expect(screen.getByText('2 collections selected')).toBeTruthy();
+    const mergeBtn = screen.getByTestId('folder-bulk-merge');
+    expect(mergeBtn).toBeTruthy();
+
+    // Trigger merge dialog from bulk action bar
+    await act(async () => {
+      fireEvent.press(mergeBtn);
+    });
+
+    // MergeCollectionsDialog is visible
+    await waitFor(() => {
+      expect(screen.getByTestId('merge-target-col-a')).toBeTruthy();
+      expect(screen.getByTestId('merge-target-col-b')).toBeTruthy();
+    });
+
+    // Marketing (col-c) was NOT selected, so it MUST NOT be an available target
+    expect(screen.queryByTestId('merge-target-col-c')).toBeNull();
+
+    // Multi-source prompt and notice are present
+    expect(screen.getByText('Select the collection to keep:')).toBeTruthy();
+    expect(screen.getByTestId('merge-collections-notice')).toBeTruthy();
+
+    // Select Design as target
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('merge-target-col-b'));
+    });
+
+    // Submit merge
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('merge-collections-submit'));
+    });
+
+    // Dialog closes and selection mode exits
+    await waitFor(() => {
+      expect(screen.queryByTestId('folder-bulk-action-bar')).toBeNull();
     });
   });
 });

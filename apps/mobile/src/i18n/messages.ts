@@ -273,7 +273,10 @@ export const en = {
   'folder.mergeA11y': 'Merge collections',
   'folder.mergeTitle': 'Merge collections',
   'folder.mergePrompt': 'Select the destination collection:',
+  'folder.mergeMultiPrompt': 'Select the collection to keep:',
+  'folder.mergeMultiNotice': 'Bookmarks will move into “{target}”, and the other selected collections will be removed. All bookmarks are safely preserved.',
   'folder.mergeConfirm': 'Merge',
+  'folder.mergeIntoConfirm': 'Merge into “{target}”',
   'folder.selectAction': 'Select collections…',
   'folder.selectedCount': {
     one: '{count} collection selected',

@@ -39,17 +39,27 @@ export function MergeCollectionsDialog({
   const insets = useSafeAreaInsets();
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
 
+  const isMultiSource = sourceCollections.length > 1;
+
   useEffect(() => {
     if (visible && availableTargets.length > 0) {
-      // Default to the first available target
-      setSelectedTargetId(availableTargets[0]?.id ?? null);
+      if (!selectedTargetId || !availableTargets.some((c) => c.id === selectedTargetId)) {
+        setSelectedTargetId(availableTargets[0]?.id ?? null);
+      }
     }
-  }, [visible, availableTargets]);
+  }, [visible, availableTargets, selectedTargetId]);
+
+  const selectedTarget = availableTargets.find((col) => col.id === selectedTargetId);
 
   const submit = () => {
     if (!selectedTargetId || busy) return;
     onMerge(selectedTargetId);
   };
+
+  const confirmLabel =
+    isMultiSource && selectedTarget
+      ? t('folder.mergeIntoConfirm', { target: selectedTarget.name })
+      : t('folder.mergeConfirm');
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -72,7 +82,7 @@ export function MergeCollectionsDialog({
           </View>
 
           <Text style={[styles.body, { color: palette.textSecondary }]}>
-            {t('folder.mergePrompt')}
+            {isMultiSource ? t('folder.mergeMultiPrompt') : t('folder.mergePrompt')}
           </Text>
 
           <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
@@ -115,6 +125,15 @@ export function MergeCollectionsDialog({
             })}
           </ScrollView>
 
+          {isMultiSource && selectedTarget ? (
+            <Text
+              testID="merge-collections-notice"
+              style={[styles.notice, { color: palette.textSecondary }]}
+            >
+              {t('folder.mergeMultiNotice', { target: selectedTarget.name })}
+            </Text>
+          ) : null}
+
           {error ? (
             <Text style={[styles.error, { color: palette.danger }]}>{error}</Text>
           ) : null}
@@ -132,7 +151,7 @@ export function MergeCollectionsDialog({
             <Pressable
               testID="merge-collections-submit"
               accessibilityRole="button"
-              accessibilityLabel={t('folder.mergeConfirm')}
+              accessibilityLabel={confirmLabel}
               disabled={busy || !selectedTargetId}
               onPress={submit}
               style={[
@@ -148,7 +167,7 @@ export function MergeCollectionsDialog({
                 <ActivityIndicator color={palette.accentForeground} size="small" />
               ) : (
                 <Text style={[styles.buttonLabel, { color: palette.accentForeground }]}>
-                  {t('folder.mergeConfirm')}
+                  {confirmLabel}
                 </Text>
               )}
             </Pressable>
@@ -212,6 +231,10 @@ const styles = StyleSheet.create({
   error: {
     fontSize: 13,
     fontWeight: '500',
+  },
+  notice: {
+    fontSize: 12,
+    lineHeight: 17,
   },
   actions: {
     flexDirection: 'row',

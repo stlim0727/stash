@@ -1662,7 +1662,10 @@ export default function InboxScreen() {
     if (mergeSources.length === 1) {
       return collections.filter((c) => c.id !== mergeSources[0].id);
     }
-    return collections;
+    if (mergeSources.length > 1) {
+      return mergeSources;
+    }
+    return [];
   }, [mergeSources, collections]);
 
   const folderMenuActions = useMemo<SheetAction[]>(() => {
