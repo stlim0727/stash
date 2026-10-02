@@ -1325,9 +1325,27 @@ export default function SettingsScreen() {
           palette={palette}
           icon="chatbubble-ellipses-outline"
           label={t("settings.report.label")}
-          last
+          value={t("settings.report.value")}
           testID="settings-report-row"
           onPress={capturing ? undefined : () => void openReport()}
+        />
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="chatbubbles-outline"
+          label={t("settings.floatingReport.label")}
+          value={t("settings.floatingReport.value")}
+          last
+          testID="settings-floating-report-row"
+          right={
+            <Switch
+              accessibilityLabel={t("settings.floatingReport.label")}
+              value={floatingReport}
+              onValueChange={setFloatingReport}
+              trackColor={{ true: palette.accent, false: palette.border }}
+              thumbColor="#ffffff"
+            />
+          }
         />
       </Group>
 
@@ -1339,29 +1357,12 @@ export default function SettingsScreen() {
           icon="construct-outline"
           label={t("settings.developer.label")}
           value={t("settings.developer.value")}
+          last
           right={
             <Switch
               accessibilityLabel={t("settings.developer.label")}
               value={developerMode}
               onValueChange={setDeveloperMode}
-              trackColor={{ true: palette.accent, false: palette.border }}
-              thumbColor="#ffffff"
-            />
-          }
-        />
-        <Row
-          styles={styles}
-          palette={palette}
-          icon="chatbubble-ellipses-outline"
-          label={t("settings.floatingReport.label")}
-          value={t("settings.floatingReport.value")}
-          last
-          testID="settings-floating-report-row"
-          right={
-            <Switch
-              accessibilityLabel={t("settings.floatingReport.label")}
-              value={floatingReport}
-              onValueChange={setFloatingReport}
               trackColor={{ true: palette.accent, false: palette.border }}
               thumbColor="#ffffff"
             />
