@@ -567,6 +567,8 @@ export const en = {
   'settings.trash.value': '{count} items',
   'settings.report.label': 'Report a problem',
   'settings.report.value': 'Send a bug or idea',
+  'settings.floatingReport.label': 'Floating report button',
+  'settings.floatingReport.value': 'Show a floating button for quick bug reports',
   'settings.export.label': 'Export my data',
   'settings.export.preparing': 'Preparing export…',
   'settings.export.nothing': 'Nothing to export yet',

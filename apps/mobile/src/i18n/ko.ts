@@ -382,6 +382,8 @@ export const ko: Catalog = {
   'settings.trash.value': '{count}개',
   'settings.report.label': '문제 신고',
   'settings.report.value': '버그나 아이디어 보내기',
+  'settings.floatingReport.label': '플로팅 리포트 버튼',
+  'settings.floatingReport.value': '화면 캡처와 함께 빠르게 버그를 제보할 수 있는 플로팅 버튼 표시',
   'settings.export.label': '내 데이터 내보내기',
   'settings.export.preparing': '내보내기 준비 중…',
   'settings.export.nothing': '아직 내보낼 항목이 없음',
