@@ -43,6 +43,7 @@ export const en = {
 
   // Shared, reused across screens.
   'common.cancel': 'Cancel',
+  'common.select': 'Select',
   'common.delete': 'Delete',
   'common.share': 'Share',
   'common.copyLink': 'Copy link',
@@ -58,6 +59,8 @@ export const en = {
   'common.signOut': 'Sign out',
   'common.untitled': 'Untitled',
   'common.ok': 'OK',
+  'common.error': 'Error',
+  'common.somethingWentWrong': 'Something went wrong. Please try again.',
 
   // Status words (sync/metadata), composed via the prefixes below.
   'status.signInRequired': 'sign-in required',
@@ -258,6 +261,41 @@ export const en = {
   // "New collection" dialog: a single name field plus Cancel/Create.
   'inbox.newCollectionNamePlaceholder': 'Collection name',
   'inbox.newCollectionCreate': 'Create',
+  'folder.menuTitle': 'Collection options',
+  'folder.rename': 'Rename collection',
+  'folder.renameTitle': 'Rename collection',
+  'folder.renameNamePlaceholder': 'Collection name',
+  'folder.renameSave': 'Save',
+  'folder.renameA11y': 'Rename collection',
+  'folder.delete': 'Delete collection',
+  'folder.deleteA11y': 'Delete collection',
+  'folder.merge': 'Merge collections…',
+  'folder.mergeA11y': 'Merge collections',
+  'folder.mergeTitle': 'Merge collections',
+  'folder.mergePrompt': 'Select the destination collection:',
+  'folder.mergeConfirm': 'Merge',
+  'folder.selectAction': 'Select collections…',
+  'folder.selectedCount': {
+    one: '{count} collection selected',
+    other: '{count} collections selected',
+  },
+  'folder.bulkDelete': 'Delete',
+  'folder.bulkDeleteA11y': 'Delete selected collections',
+  'folder.bulkMerge': 'Merge',
+  'folder.bulkMergeA11y': 'Merge selected collections',
+  'folder.deleteConfirmTitle': 'Delete collection',
+  'folder.deleteConfirmMultiTitle': {
+    one: 'Delete {count} collection?',
+    other: 'Delete {count} collections?',
+  },
+  'folder.deleteBody': {
+    one: 'This collection contains {count} item. What would you like to do with the bookmarks inside?',
+    other: 'This collection contains {count} items. What would you like to do with the bookmarks inside?',
+  },
+  'folder.deleteKeepBookmarks': 'Keep bookmarks (Move to Inbox)',
+  'folder.deleteKeepBookmarksDesc': 'Remove collection; bookmarks remain saved in your library.',
+  'folder.deleteTrashBookmarks': 'Move bookmarks to Trash',
+  'folder.deleteTrashBookmarksDesc': 'Move this collection and its bookmarks to Trash.',
   'inbox.aiSuggestionsA11y': { one: '{count} AI suggestion', other: '{count} AI suggestions' },
   'inbox.newSuggestions': {
     one: '✨ {count} new AI suggestion',
@@ -407,6 +445,13 @@ export const en = {
     one: 'Moved 1 bookmark to Inbox',
     other: 'Moved {count} bookmarks to Inbox',
   },
+  'toast.collectionRenamed': 'Collection renamed to “{name}”',
+  'toast.collectionDeleted': 'Collection deleted',
+  'toast.collectionsDeleted': {
+    one: '{count} collection deleted',
+    other: '{count} collections deleted',
+  },
+  'toast.collectionsMerged': 'Merged into “{name}”',
   'toast.previewRefreshedCount': {
     one: 'Refreshed 1 preview',
     other: 'Refreshed {count} previews',

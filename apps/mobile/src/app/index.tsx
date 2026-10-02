@@ -116,11 +116,15 @@ import { ActionSheet, type SheetAction } from '@/ui/ActionSheet';
 import { BulkActionBar } from '@/ui/BulkActionBar';
 import { BulkTagDialog } from '@/ui/BulkTagDialog';
 import { CreateCollectionDialog } from '@/ui/CreateCollectionDialog';
+import { RenameCollectionDialog } from '@/ui/RenameCollectionDialog';
+import { DeleteCollectionDialog } from '@/ui/DeleteCollectionDialog';
+import { MergeCollectionsDialog } from '@/ui/MergeCollectionsDialog';
+import { FolderBulkActionBar } from '@/ui/FolderBulkActionBar';
 import { TutorialModal } from '@/ui/TutorialModal';
 import { HighlightedText } from '@/ui/HighlightedText';
 import { overlayLayer } from '@/ui/layering';
 import { useCaptureToast } from '@/ui/capture-toast';
-import type { Bookmark } from '@/domain/types';
+import type { Bookmark, Collection } from '@/domain/types';
 import { countTagsForBookmarks } from '@/domain/tag-counts';
 import { isYoutubeAvailabilityCandidate } from '@/domain/page-metadata';
 import BookmarkDetailScreen from '@/app/bookmark/[id]';
@@ -347,6 +351,7 @@ type InlineDetailItem = { id: string; __inlineDetail: true; bookmarkId: string; 
 // affordance (`kind: 'new'`, no `filter`).
 type FolderTileItem = {
   id: string;
+  collectionId?: string;
   __folderTile: true;
   kind: 'uncollected' | 'collection' | 'new';
   label?: string;
@@ -449,6 +454,10 @@ export default function InboxScreen() {
     addTagsToBookmarks,
     markBookmarkAccessed,
     createCollection,
+    renameCollection,
+    deleteCollection,
+    deleteCollections,
+    mergeCollections,
     refreshBookmarkPreview,
   } = useBookmarks();
   const { show: showToast } = useCaptureToast();
@@ -850,6 +859,25 @@ export default function InboxScreen() {
   const [bulkTagDialogOpen, setBulkTagDialogOpen] = useState(false);
   const [bulkTagBusy, setBulkTagBusy] = useState(false);
   const [bulkTagError, setBulkTagError] = useState<string | null>(null);
+
+  // Folder View multi-select and collection management states
+  const [folderSelectionMode, setFolderSelectionMode] = useState(false);
+  const [selectedFolderIds, setSelectedFolderIds] = useState<Set<string>>(new Set());
+  const [folderMenuItem, setFolderMenuItem] = useState<Collection | null>(null);
+
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<Collection | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renameBusy, setRenameBusy] = useState(false);
+
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteTargets, setDeleteTargets] = useState<Collection[]>([]);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
+  const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
+  const [mergeSources, setMergeSources] = useState<Collection[]>([]);
+  const [mergeError, setMergeError] = useState<string | null>(null);
+  const [mergeBusy, setMergeBusy] = useState(false);
 
   // Collapsing header: the top cluster (hero + search + controls + browse
   // shelf) slides up out of view as the list scrolls down and slides back on
@@ -1345,6 +1373,7 @@ export default function InboxScreen() {
     for (const { collection, count } of sortedCollections) {
       tiles.push({
         id: `__folder-c:${collection.id}`,
+        collectionId: collection.id,
         __folderTile: true,
         kind: 'collection',
         label: collection.name,
@@ -1450,16 +1479,261 @@ export default function InboxScreen() {
     }
   }, [allVisibleSelected, visible]);
 
+  const exitFolderSelectionMode = useCallback(() => {
+    setFolderSelectionMode(false);
+    setSelectedFolderIds(new Set());
+  }, []);
+
+  const enterFolderSelectionMode = useCallback(
+    (initialId?: string) => {
+      clearBlurHide();
+      setSearchFocused(false);
+      searchRef.current?.blur();
+      if (searchOpen && !searching) {
+        closeSearch();
+      }
+      setFolderSelectionMode(true);
+      setSelectedFolderIds(initialId ? new Set([initialId]) : new Set());
+    },
+    [searchOpen, searching, closeSearch, clearBlurHide],
+  );
+
+  const toggleFolderSelect = useCallback((id: string) => {
+    setSelectedFolderIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const selectableCollectionIds = useMemo(() => {
+    return collections
+      .filter((c) => c.name?.trim())
+      .map((c) => c.id);
+  }, [collections]);
+
+  const allFoldersSelected = useMemo(
+    () =>
+      selectableCollectionIds.length > 0 &&
+      selectableCollectionIds.every((id) => selectedFolderIds.has(id)),
+    [selectableCollectionIds, selectedFolderIds],
+  );
+
+  const toggleSelectAllFolders = useCallback(() => {
+    if (selectableCollectionIds.length === 0) {
+      return;
+    }
+    if (allFoldersSelected) {
+      setSelectedFolderIds(new Set());
+    } else {
+      setSelectedFolderIds(new Set(selectableCollectionIds));
+    }
+  }, [allFoldersSelected, selectableCollectionIds]);
+
+  const openRenameDialog = useCallback((collection: Collection) => {
+    setRenameTarget(collection);
+    setRenameError(null);
+    setRenameDialogOpen(true);
+  }, []);
+
+  const handleRenameFolder = useCallback(
+    async (newName: string) => {
+      if (!renameTarget) {
+        return;
+      }
+      setRenameBusy(true);
+      setRenameError(null);
+      try {
+        const res = await renameCollection(renameTarget.id, newName);
+        if (res.error) {
+          setRenameError(res.error);
+          return;
+        }
+        setRenameDialogOpen(false);
+        setRenameTarget(null);
+        showToast(t('toast.collectionRenamed', { name: newName }));
+      } catch (err: any) {
+        setRenameError(err?.message || t('common.somethingWentWrong'));
+      } finally {
+        setRenameBusy(false);
+      }
+    },
+    [renameTarget, renameCollection, showToast, t],
+  );
+
+  const openDeleteFolderDialog = useCallback((targets: Collection[]) => {
+    setDeleteTargets(targets);
+    setDeleteDialogOpen(true);
+  }, []);
+
+  const handleDeleteFolders = useCallback(
+    async (action: 'uncategorize' | 'trash') => {
+      if (deleteTargets.length === 0) {
+        return;
+      }
+      setDeleteBusy(true);
+      try {
+        if (deleteTargets.length === 1) {
+          const res = await deleteCollection(deleteTargets[0].id, action);
+          if (res.error) {
+            Alert.alert(t('common.error'), res.error);
+            return;
+          }
+          showToast(t('toast.collectionDeleted'));
+        } else {
+          const ids = deleteTargets.map((c) => c.id);
+          const res = await deleteCollections(ids, action);
+          if (res.error) {
+            Alert.alert(t('common.error'), res.error);
+            return;
+          }
+          showToast(t('toast.collectionsDeleted', { count: ids.length }));
+        }
+        setDeleteDialogOpen(false);
+        const deletedIds = new Set(deleteTargets.map((c) => c.id));
+        setDeleteTargets([]);
+        if (folderSelectionMode) {
+          exitFolderSelectionMode();
+        }
+        if (filter.kind === 'collection' && deletedIds.has(filter.id)) {
+          setFilter(ALL_FILTER);
+        }
+      } catch (err: any) {
+        Alert.alert(t('common.error'), err?.message || t('common.somethingWentWrong'));
+      } finally {
+        setDeleteBusy(false);
+      }
+    },
+    [deleteTargets, deleteCollection, deleteCollections, folderSelectionMode, exitFolderSelectionMode, filter, showToast, t],
+  );
+
+  const openMergeFolderDialog = useCallback((sources: Collection[]) => {
+    setMergeSources(sources);
+    setMergeError(null);
+    setMergeDialogOpen(true);
+  }, []);
+
+  const handleMergeFolders = useCallback(
+    async (targetCollectionId: string) => {
+      if (mergeSources.length === 0) {
+        return;
+      }
+      setMergeBusy(true);
+      setMergeError(null);
+      try {
+        const sourceIds = mergeSources.map((c) => c.id);
+        const res = await mergeCollections(sourceIds, targetCollectionId);
+        if (res.error) {
+          setMergeError(res.error);
+          return;
+        }
+        setMergeDialogOpen(false);
+        setMergeSources([]);
+        if (folderSelectionMode) {
+          exitFolderSelectionMode();
+        }
+        const targetCol = collections.find((c) => c.id === targetCollectionId);
+        showToast(t('toast.collectionsMerged', { name: targetCol?.name ?? '' }));
+        if (filter.kind === 'collection' && sourceIds.includes(filter.id)) {
+          setFilter({ kind: 'collection', id: targetCollectionId });
+        }
+      } catch (err: any) {
+        setMergeError(err?.message || t('common.somethingWentWrong'));
+      } finally {
+        setMergeBusy(false);
+      }
+    },
+    [mergeSources, mergeCollections, folderSelectionMode, exitFolderSelectionMode, collections, filter, showToast, t],
+  );
+
+  const deleteBookmarkCount = useMemo(() => {
+    if (deleteTargets.length === 0) {
+      return 0;
+    }
+    const targetIds = new Set(deleteTargets.map((c) => c.id));
+    return inbox.filter((b) => b.collection_id && targetIds.has(b.collection_id)).length;
+  }, [deleteTargets, inbox]);
+
+  const availableMergeTargets = useMemo(() => {
+    if (mergeSources.length === 1) {
+      return collections.filter((c) => c.id !== mergeSources[0].id);
+    }
+    return collections;
+  }, [mergeSources, collections]);
+
+  const folderMenuActions = useMemo<SheetAction[]>(() => {
+    const item = folderMenuItem;
+    if (!item) {
+      return [];
+    }
+    const actions: SheetAction[] = [
+      {
+        key: 'select',
+        label: t('folder.selectAction'),
+        icon: 'checkbox-outline',
+        onPress: () => {
+          setFolderMenuItem(null);
+          enterFolderSelectionMode(item.id);
+        },
+      },
+      {
+        key: 'rename',
+        label: t('folder.rename'),
+        icon: 'pencil-outline',
+        onPress: () => {
+          setFolderMenuItem(null);
+          openRenameDialog(item);
+        },
+      },
+    ];
+    if (collections.length >= 2) {
+      actions.push({
+        key: 'merge',
+        label: t('folder.merge'),
+        icon: 'git-merge-outline',
+        onPress: () => {
+          setFolderMenuItem(null);
+          openMergeFolderDialog([item]);
+        },
+      });
+    }
+    actions.push({
+      key: 'delete',
+      label: t('folder.delete'),
+      icon: 'trash-outline',
+      destructive: true,
+      onPress: () => {
+        setFolderMenuItem(null);
+        openDeleteFolderDialog([item]);
+      },
+    });
+    return actions;
+  }, [folderMenuItem, collections.length, t, enterFolderSelectionMode, openRenameDialog, openMergeFolderDialog, openDeleteFolderDialog]);
+
+  useEffect(() => {
+    if (viewMode !== 'folder' && folderSelectionMode) {
+      exitFolderSelectionMode();
+    }
+    if (viewMode === 'folder' && selectionMode) {
+      exitSelectionMode();
+    }
+  }, [viewMode, folderSelectionMode, selectionMode, exitFolderSelectionMode, exitSelectionMode]);
+
   useEffect(() => {
     if (isResettingLibrary) {
       exitSelectionMode();
+      exitFolderSelectionMode();
     }
-  }, [isResettingLibrary, exitSelectionMode]);
+  }, [isResettingLibrary, exitSelectionMode, exitFolderSelectionMode]);
 
   useEffect(() => {
     if (
       Platform.OS !== 'web' ||
-      !selectionMode ||
+      (!selectionMode && !folderSelectionMode) ||
       typeof window === 'undefined' ||
       typeof window.addEventListener !== 'function'
     ) {
@@ -1467,12 +1741,17 @@ export default function InboxScreen() {
     }
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        exitSelectionMode();
+        if (folderSelectionMode) {
+          exitFolderSelectionMode();
+        }
+        if (selectionMode) {
+          exitSelectionMode();
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [selectionMode, exitSelectionMode]);
+  }, [selectionMode, folderSelectionMode, exitSelectionMode, exitFolderSelectionMode]);
 
   const handleBulkRefresh = useCallback(async () => {
     if (selectedIds.size === 0 || bulkRefreshing) {
@@ -1912,6 +2191,10 @@ export default function InboxScreen() {
         return;
       }
       const onBack = () => {
+        if (folderSelectionMode) {
+          exitFolderSelectionMode();
+          return true;
+        }
         if (selectionMode) {
           exitSelectionMode();
           return true;
@@ -1931,7 +2214,7 @@ export default function InboxScreen() {
       };
       const subscription = BackHandler.addEventListener('hardwareBackPress', onBack);
       return () => subscription.remove();
-    }, [selectionMode, exitSelectionMode, searchOpen, filter.kind, closeSearch]),
+    }, [folderSelectionMode, exitFolderSelectionMode, selectionMode, exitSelectionMode, searchOpen, filter.kind, closeSearch]),
   );
 
   const closeMenu = useCallback(() => {
@@ -2243,7 +2526,60 @@ export default function InboxScreen() {
               stacked tagline + count lines and the "설정" caption were pure
               vertical chrome that pushed the first card down ~40% of the
               screen, so they're folded away here to reclaim that space. */}
-          {selectionMode ? (
+          {folderSelectionMode ? (
+            <View style={styles.selectionHeroRow}>
+              <Pressable
+                testID="folder-selection-select-all"
+                accessibilityRole="button"
+                accessibilityLabel={allFoldersSelected ? t('inbox.deselectAll') : t('inbox.selectAll')}
+                disabled={selectableCollectionIds.length === 0}
+                hitSlop={8}
+                onPress={toggleSelectAllFolders}
+                style={({ pressed }) => [
+                  styles.selectionSelectAllButton,
+                  selectableCollectionIds.length === 0 ? { opacity: 0.4 } : pressed ? { opacity: 0.7 } : null,
+                ]}
+              >
+                <Ionicons
+                  name={allFoldersSelected ? 'checkmark-circle' : 'ellipse-outline'}
+                  size={22}
+                  color={allFoldersSelected ? palette.accent : palette.textSecondary}
+                />
+                <Text
+                  style={[
+                    styles.selectionSelectAllLabel,
+                    { color: allFoldersSelected ? palette.accent : palette.text },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {allFoldersSelected ? t('inbox.deselectAll') : t('inbox.selectAll')}
+                </Text>
+              </Pressable>
+              <Text
+                testID="folder-selection-count"
+                style={[styles.selectionCountText, { color: palette.textSecondary }]}
+                numberOfLines={1}
+              >
+                {t('folder.selectedCount', { count: selectedFolderIds.size })}
+              </Text>
+              <View style={{ flex: 1 }} />
+              <Pressable
+                testID="folder-selection-close"
+                accessibilityRole="button"
+                accessibilityLabel={t('inbox.cancelSelectionA11y')}
+                hitSlop={8}
+                onPress={exitFolderSelectionMode}
+                style={({ pressed }) => [
+                  styles.selectionCancelButton,
+                  { opacity: pressed ? 0.7 : 1 },
+                ]}
+              >
+                <Text style={[styles.selectionCancelLabel, { color: palette.text }]}>
+                  {t('common.cancel')}
+                </Text>
+              </Pressable>
+            </View>
+          ) : selectionMode ? (
             <View style={styles.selectionHeroRow}>
               <Pressable
                 testID="inbox-selection-select-all"
@@ -2443,10 +2779,28 @@ export default function InboxScreen() {
             query={debouncedQuery}
           />
         ) : null}
-        {!selectionMode && !searchFocused && !searchOpen ? (
+        {!selectionMode && !folderSelectionMode && !searchFocused && !searchOpen ? (
         <View testID="inbox-filter-options-row" style={[styles.filterOptionsRow, { maxWidth: contentMaxWidth }]}>
           {viewMode === 'folder' ? (
-            <Text testID="inbox-collections-heading" style={[styles.controlsHeading, { color: palette.text }]}>{t('inbox.collectionsHeading')}</Text>
+            <View style={styles.folderHeaderRow}>
+              <Text testID="inbox-collections-heading" style={[styles.controlsHeading, { color: palette.text }]}>{t('inbox.collectionsHeading')}</Text>
+              {collections.length > 0 ? (
+                <Pressable
+                  testID="folder-select-button"
+                  accessibilityRole="button"
+                  accessibilityLabel={t('folder.selectAction')}
+                  onPress={() => enterFolderSelectionMode()}
+                  style={({ pressed }) => [
+                    styles.folderSelectButton,
+                    { borderColor: palette.controlBorder, opacity: pressed ? 0.7 : 1 },
+                  ]}
+                >
+                  <Text style={[styles.folderSelectButtonText, { color: palette.textSecondary }]}>
+                    {t('common.select')}
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
           ) : (
             <Pressable testID="inbox-scope-picker" accessibilityRole="button"
               accessibilityLabel={t('inbox.scopePickerA11y')} accessibilityState={{ expanded: scopeMenuOpen }}
@@ -2515,6 +2869,26 @@ export default function InboxScreen() {
                 </Text>
               </PostHogMaskView>
             </View>
+            {filter.kind === 'collection' ? (() => {
+              const activeCollection = collections.find((c) => c.id === filter.id);
+              if (!activeCollection) return null;
+              return (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={t('folder.menuTitle')}
+                  testID="inbox-filter-collection-menu"
+                  hitSlop={8}
+                  onPress={() => setFolderMenuItem(activeCollection)}
+                  style={({ pressed }) => [
+                    styles.filterBarAction,
+                    styles.filterBarOptions,
+                    { borderColor: palette.accent, opacity: pressed ? 0.6 : 1 },
+                  ]}
+                >
+                  <Ionicons name="ellipsis-horizontal" size={16} color={palette.accentText} />
+                </Pressable>
+              );
+            })() : null}
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={scope.a11y}
@@ -2796,6 +3170,9 @@ export default function InboxScreen() {
           }
           if ('__folderTile' in item) {
             if (item.kind === 'new') {
+              if (folderSelectionMode) {
+                return null;
+              }
               return (
                 <Pressable
                   testID="folder-tile-new"
@@ -2811,32 +3188,102 @@ export default function InboxScreen() {
                 </Pressable>
               );
             }
-            const tileIcon = item.kind === 'uncollected' ? 'file-tray-outline' : 'folder-outline';
-            const tileColor = item.kind === 'uncollected' ? palette.mutedSurface : palette[item.colorKey ?? 'accentSoft'];
-            return (
-              <Pressable
-                testID={`folder-tile-${item.id}`}
-                accessibilityRole="button"
-                accessibilityLabel={item.label}
-                onPress={() => item.filter && openFolderTile(item.filter)}
-                style={[styles.folderTile, { backgroundColor: tileColor }]}
-              >
-                <Ionicons name={tileIcon} size={26} color={palette.text} />
-                {item.kind === 'collection' ? (
-                  // `folderTileLabel`'s `maxWidth: '100%'` resolves against
-                  // its own immediate parent, which is now this wrapper (not
-                  // the tile) — apply the same constraint here too, or a long
-                  // unbroken name can overflow into the adjacent tile.
-                  <PostHogMaskView style={styles.maskMaxWidth}>
-                    <Text style={[styles.folderTileLabel, { color: palette.text }]} numberOfLines={1}>
-                      {item.label}
-                    </Text>
-                  </PostHogMaskView>
-                ) : (
+            if (item.kind === 'uncollected') {
+              return (
+                <Pressable
+                  testID={`folder-tile-${item.id}`}
+                  accessibilityRole="button"
+                  accessibilityLabel={item.label}
+                  disabled={folderSelectionMode}
+                  onPress={() => item.filter && openFolderTile(item.filter)}
+                  style={[
+                    styles.folderTile,
+                    { backgroundColor: palette.mutedSurface },
+                    folderSelectionMode ? { opacity: 0.4 } : null,
+                  ]}
+                >
+                  <Ionicons name="file-tray-outline" size={26} color={palette.text} />
                   <Text style={[styles.folderTileLabel, { color: palette.text }]} numberOfLines={1}>
                     {item.label}
                   </Text>
+                  <Text style={[styles.folderTileCount, { color: palette.textSecondary }]}>
+                    {t('inbox.collectionTileCount', { count: item.count ?? 0 })}
+                  </Text>
+                </Pressable>
+              );
+            }
+            const collectionId = item.collectionId;
+            const isFolderSelected = Boolean(collectionId && selectedFolderIds.has(collectionId));
+            const collectionObj = collectionId ? collections.find((c) => c.id === collectionId) ?? null : null;
+            const tileColor = palette[item.colorKey ?? 'accentSoft'];
+
+            const handleFolderPress = () => {
+              if (folderSelectionMode) {
+                if (collectionId) {
+                  toggleFolderSelect(collectionId);
+                }
+              } else if (item.filter) {
+                openFolderTile(item.filter);
+              }
+            };
+
+            const handleFolderLongPress = () => {
+              if (folderSelectionMode) {
+                if (collectionId) {
+                  toggleFolderSelect(collectionId);
+                }
+              } else if (collectionObj) {
+                setFolderMenuItem(collectionObj);
+              }
+            };
+
+            return (
+              <Pressable
+                testID={`folder-tile-${item.id}`}
+                accessibilityRole={folderSelectionMode ? 'checkbox' : 'button'}
+                accessibilityState={folderSelectionMode ? { checked: isFolderSelected } : undefined}
+                accessibilityLabel={item.label}
+                onPress={handleFolderPress}
+                onLongPress={handleFolderLongPress}
+                style={[
+                  styles.folderTile,
+                  { backgroundColor: tileColor },
+                  isFolderSelected
+                    ? { borderWidth: 2, borderColor: palette.accent }
+                    : { borderWidth: 2, borderColor: 'transparent' },
+                ]}
+              >
+                {folderSelectionMode ? (
+                  <View style={styles.folderTileSelectBadge}>
+                    <Ionicons
+                      name={isFolderSelected ? 'checkmark-circle' : 'ellipse-outline'}
+                      size={20}
+                      color={isFolderSelected ? palette.accent : palette.textSecondary}
+                    />
+                  </View>
+                ) : (
+                  <Pressable
+                    testID={`folder-more-${item.id}`}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('folder.menuTitle')}
+                    onPress={(e) => {
+                      e.stopPropagation?.();
+                      if (collectionObj) {
+                        setFolderMenuItem(collectionObj);
+                      }
+                    }}
+                    hitSlop={8}
+                    style={styles.folderTileMoreButton}
+                  >
+                    <Ionicons name="ellipsis-horizontal" size={16} color={palette.textSecondary} />
+                  </Pressable>
                 )}
+                <Ionicons name="folder-outline" size={26} color={palette.text} />
+                <PostHogMaskView style={styles.maskMaxWidth}>
+                  <Text style={[styles.folderTileLabel, { color: palette.text }]} numberOfLines={1}>
+                    {item.label}
+                  </Text>
+                </PostHogMaskView>
                 <Text style={[styles.folderTileCount, { color: palette.textSecondary }]}>
                   {t('inbox.collectionTileCount', { count: item.count ?? 0 })}
                 </Text>
@@ -3444,7 +3891,32 @@ export default function InboxScreen() {
           return columns > 1 ? <View style={{ flex: 1 }}>{cardElement}</View> : cardElement;
         }}
       />
-      {!selectionMode ? (
+      {folderSelectionMode ? (
+        <FolderBulkActionBar
+          selectedCount={selectedFolderIds.size}
+          onMerge={() => {
+            const targets = collections.filter((c) => selectedFolderIds.has(c.id));
+            openMergeFolderDialog(targets);
+          }}
+          onDelete={() => {
+            const targets = collections.filter((c) => selectedFolderIds.has(c.id));
+            openDeleteFolderDialog(targets);
+          }}
+          onRename={
+            selectedFolderIds.size === 1
+              ? () => {
+                  const targetId = Array.from(selectedFolderIds)[0];
+                  const targetCol = collections.find((c) => c.id === targetId);
+                  if (targetCol) {
+                    openRenameDialog(targetCol);
+                  }
+                }
+              : undefined
+          }
+          maxWidth={contentMaxWidth}
+          bottomInset={insets.bottom}
+        />
+      ) : !selectionMode ? (
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={t('inbox.addBookmark')}
@@ -3593,6 +4065,57 @@ export default function InboxScreen() {
         onClose={() => {
           setBulkTagDialogOpen(false);
           setBulkTagError(null);
+        }}
+      />
+      <ActionSheet
+        visible={folderMenuItem !== null}
+        title={folderMenuItem?.name ?? t('folder.menuTitle')}
+        titleMask
+        actions={folderMenuActions}
+        onClose={() => setFolderMenuItem(null)}
+      />
+      <RenameCollectionDialog
+        visible={renameDialogOpen}
+        busy={renameBusy}
+        error={renameError}
+        initialName={renameTarget?.name ?? ''}
+        onRename={handleRenameFolder}
+        onClose={() => {
+          if (!renameBusy) {
+            setRenameDialogOpen(false);
+            setRenameTarget(null);
+            setRenameError(null);
+          }
+        }}
+      />
+      <DeleteCollectionDialog
+        visible={deleteDialogOpen}
+        busy={deleteBusy}
+        collectionCount={deleteTargets.length}
+        collectionName={deleteTargets.length === 1 ? deleteTargets[0].name : undefined}
+        bookmarkCount={deleteBookmarkCount}
+        onDeleteKeep={() => handleDeleteFolders('uncategorize')}
+        onDeleteTrash={() => handleDeleteFolders('trash')}
+        onClose={() => {
+          if (!deleteBusy) {
+            setDeleteDialogOpen(false);
+            setDeleteTargets([]);
+          }
+        }}
+      />
+      <MergeCollectionsDialog
+        visible={mergeDialogOpen}
+        busy={mergeBusy}
+        error={mergeError}
+        sourceCollections={mergeSources}
+        availableTargets={availableMergeTargets}
+        onMerge={handleMergeFolders}
+        onClose={() => {
+          if (!mergeBusy) {
+            setMergeDialogOpen(false);
+            setMergeSources([]);
+            setMergeError(null);
+          }
         }}
       />
       <CreateCollectionDialog
@@ -4104,6 +4627,44 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: 10,
     paddingVertical: 16,
+    position: 'relative',
+  },
+  folderTileSelectBadge: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    ...overlayLayer(2),
+  },
+  folderTileMoreButton: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...overlayLayer(2),
+  },
+  folderHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  folderSelectButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  folderSelectButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  filterBarOptions: {
+    padding: 6,
+    borderRadius: 8,
+    marginRight: 2,
   },
   folderTileNew: {
     borderWidth: StyleSheet.hairlineWidth,

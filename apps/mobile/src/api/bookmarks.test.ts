@@ -1015,3 +1015,51 @@ test('createBookmark and createBookmarks pass collection_id in request body', as
   assert.equal(bulkPosts.length, 1);
   assert.equal(bulkPosts[0].collection_id, 'col-2');
 });
+
+test('updateCollection patches collection name and returns updated collection', async () => {
+  const calls: Array<{ path: string; options: Record<string, unknown> }> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      calls.push({ path, options });
+      return [
+        {
+          id: 'col-1',
+          user_id: 'user-1',
+          name: 'Renamed Col',
+          description: null,
+          created_at: '2026-06-12T00:00:00.000Z',
+          updated_at: '2026-10-02T00:00:00.000Z',
+        },
+      ];
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+  const result = await api.updateCollection('col-1', { name: ' Renamed Col ' });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.method, 'PATCH');
+  assert.ok(calls[0].path.includes('id=eq.col-1'));
+  const body = calls[0].options.body as Record<string, unknown>;
+  assert.equal(body.name, 'Renamed Col');
+  assert.equal(result.name, 'Renamed Col');
+});
+
+test('deleteCollection and deleteCollections issue DELETE requests for target collections', async () => {
+  const calls: Array<{ path: string; options: Record<string, unknown> }> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      calls.push({ path, options });
+      return [];
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+  await api.deleteCollection('col-1');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.method, 'DELETE');
+  assert.ok(calls[0].path.includes('id=eq.col-1'));
+
+  await api.deleteCollections(['col-2', 'col-3']);
+  assert.equal(calls.length, 3);
+  assert.ok(calls.some((c) => c.options.method === 'DELETE' && c.path.includes('id=eq.col-2')));
+  assert.ok(calls.some((c) => c.options.method === 'DELETE' && c.path.includes('id=eq.col-3')));
+});

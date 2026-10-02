@@ -913,6 +913,65 @@ export class BookmarkApi {
     return created;
   }
 
+  async updateCollection(
+    collectionId: string,
+    updates: { name?: string; description?: string | null },
+  ): Promise<Collection> {
+    const timestamp = nowIso();
+    const body: Record<string, unknown> = {
+      updated_at: timestamp,
+    };
+    if (updates.name !== undefined) {
+      body.name = normalizeText(updates.name);
+    }
+    if (updates.description !== undefined) {
+      body.description = updates.description?.trim() || null;
+    }
+    const rows = await this.requestArray<Collection>(
+      appendSearchParams(
+        '/rest/v1/collections',
+        new URLSearchParams({
+          id: `eq.${collectionId}`,
+          user_id: `eq.${this.session.user.id}`,
+        }),
+      ),
+      {
+        method: 'PATCH',
+        accessToken: this.session.access_token,
+        headers: { Prefer: 'return=representation' },
+        body,
+      },
+    );
+    const updated = rows[0];
+    if (!updated) {
+      throw new Error('Supabase did not return the updated collection.');
+    }
+    return updated;
+  }
+
+  async deleteCollection(collectionId: string): Promise<void> {
+    await this.client.request(
+      appendSearchParams(
+        '/rest/v1/collections',
+        new URLSearchParams({
+          id: `eq.${collectionId}`,
+          user_id: `eq.${this.session.user.id}`,
+        }),
+      ),
+      {
+        method: 'DELETE',
+        accessToken: this.session.access_token,
+      },
+    );
+  }
+
+  async deleteCollections(collectionIds: string[]): Promise<void> {
+    if (collectionIds.length === 0) {
+      return;
+    }
+    await Promise.all(collectionIds.map((id) => this.deleteCollection(id)));
+  }
+
   private async fetchAllPages<T>(
     path: string,
     configure: (query: URLSearchParams) => void,
