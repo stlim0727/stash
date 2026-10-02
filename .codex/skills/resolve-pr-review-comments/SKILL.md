@@ -13,7 +13,7 @@ When PRs are open or closed, review comment threads need to be addressed, replie
 ## Procedure
 
 ### Step 1 — Find Unresolved Comments
-Run the helper script to scan open PRs or PRs closed in the last 24 hours:
+Use available GitHub review-thread tools, or run the helper script to scan open PRs or PRs closed in the last 24 hours:
 
 ```bash
 # Scan all open PRs and recently closed PRs
@@ -28,13 +28,17 @@ This script will query the GitHub GraphQL API to find:
 - The GraphQL `threadId`, REST reply `Comment ID` (`fullDatabaseId`), comment author, path, line, and body.
 
 ### Step 2 — Fix and Commit
-1. Implement fixes for each unresolved comment.
-2. Validate changes locally:
+1. Group actionable findings by the invariant they violate before implementing fixes. For a sync/retry/auth-state finding, trace the scheduler, actual driver, persisted failure, recovery path, and visible status together; use [the sync change review guide](../../../docs/design/sync-change-review.md).
+   If another review round finds the same mechanism in a sibling channel or lifecycle path, revisit that shared contract before adding another isolated exception. Keep the implementation within the authorized scope; this does not require a broad rewrite.
+2. Implement the fixes and cover the transition that failed. Where channels share a policy, check a representative sibling and an interruption/coalescing path. Prefer observable store behavior over tests that merely reproduce the helper's branches.
+3. Validate changes locally:
    * Run `git diff --check` for scoped whitespace checks.
    * Run `corepack pnpm --filter mobile typecheck` for app TypeScript changes.
    * Run the narrowest relevant test command first, then broaden only when the change warrants it.
    * Use `corepack pnpm lint` only when the branch should absorb whole-repo formatting checks; do not run write-formatters on unrelated files.
-3. Commit the changes and push.
+4. Commit the changes and push.
+
+Passing a large suite is evidence for its covered transitions, not proof that every channel agrees. In the reply, identify the regression exercised and relevant validation rather than relying only on the total test count. Follow the repository's CI/review monitoring requirements after pushing.
 
 ### Step 3 — Post Reply and Resolve on GitHub
 For each addressed thread:
