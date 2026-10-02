@@ -1,5 +1,5 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import type { ReactNode } from 'react';
 
 // Mirrors settings-account.test.tsx's mocking harness.
@@ -103,6 +103,24 @@ test('authenticated, AI suggestions on: row starts Off and the switch is enabled
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('Off')).toBeTruthy());
   expect(screen.getByLabelText('Notify when AI catches up').props.disabled).not.toBe(true);
+});
+
+test('web: row explains unsupported on web and the switch is disabled', async () => {
+  const originalOS = Platform.OS;
+  Object.defineProperty(Platform, 'OS', { configurable: true, get: () => 'web' });
+  try {
+    const screen = await renderSettings();
+    await waitFor(() => expect(screen.getByText('Not supported on web')).toBeTruthy());
+    const toggle = screen.getByLabelText('Notify when AI catches up');
+    expect(toggle.props.disabled).toBe(true);
+
+    await act(async () => {
+      fireEvent(toggle, 'valueChange', true);
+    });
+    expect(mockRequestPushPermissionAndToken).not.toHaveBeenCalled();
+  } finally {
+    Object.defineProperty(Platform, 'OS', { configurable: true, get: () => originalOS });
+  }
 });
 
 test('anonymous: row explains sign-in is required and never requests permission', async () => {

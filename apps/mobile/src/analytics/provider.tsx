@@ -20,6 +20,7 @@ import {
   clearPostHogAnalyticsState,
   createPostHogTransport,
   getPostHogAnalyticsEnabled,
+  isPostHogAnalyticsConfigured,
 } from './posthog.ts';
 import { analyticsScreenForPath } from './route.ts';
 import { AnalyticsRuntime } from './runtime.ts';
@@ -30,6 +31,7 @@ import type { SupabaseAuthStatus } from '@/supabase/auth-provider';
 interface AnalyticsContextValue {
   enabled: boolean;
   ready: boolean;
+  configured: boolean;
   adExperimentEnabled: boolean;
   setEnabled(enabled: boolean): Promise<void>;
   capture(event: unknown): void;
@@ -39,6 +41,7 @@ interface AnalyticsContextValue {
 const disabledAnalyticsContext: AnalyticsContextValue = {
   enabled: false,
   ready: false,
+  configured: false,
   adExperimentEnabled: false,
   setEnabled: async () => {},
   capture: () => {},
@@ -193,9 +196,11 @@ export function AnalyticsProvider({ children }: { children: ReactNode }) {
     await runtime.flush();
   }, [runtime]);
 
+  const configured = useMemo(() => isPostHogAnalyticsConfigured(), []);
+
   const value = useMemo(
-    () => ({ enabled, ready, adExperimentEnabled, setEnabled, capture, flush }),
-    [adExperimentEnabled, enabled, ready, setEnabled, capture, flush],
+    () => ({ enabled, ready, configured, adExperimentEnabled, setEnabled, capture, flush }),
+    [adExperimentEnabled, configured, enabled, ready, setEnabled, capture, flush],
   );
 
   return <AnalyticsContext.Provider value={value}>{children}</AnalyticsContext.Provider>;

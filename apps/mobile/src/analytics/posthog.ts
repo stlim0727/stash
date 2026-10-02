@@ -58,6 +58,10 @@ function approvedOrigin(value: string): string | null {
   }
 }
 
+export function isPostHogAnalyticsConfigured(): boolean {
+  return Boolean(apiKey && host && approvedOrigin(host));
+}
+
 function validInstallationId(value: unknown): value is string {
   return typeof value === 'string' && /^ka_[0-9a-f]{32}$/.test(value);
 }
