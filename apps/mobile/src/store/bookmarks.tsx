@@ -1048,6 +1048,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const [lastPulledAt, setLastPulledAt] = useState<string | null>(null);
   const syncCredentialsRef = useRef(auth.session ? { userId: auth.session.user.id, accessToken: auth.session.access_token } : null);
   const observedCredentialsRef = useRef(syncCredentialsRef.current);
+  const credentialsWereUsedRef = useRef(false);
+  const observedRecoveryVersionRef = useRef(0);
   const authRecoveryPendingRef = useRef(false);
   useEffect(() => {
     if (["signed_out", "session_expired", "error"].includes(auth.status)) {
@@ -1055,14 +1057,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     } else if (auth.session && (auth.status === "authenticated" || auth.status === "anonymous")) {
       const observed = observedCredentialsRef.current;
       const used = syncCredentialsRef.current;
+      const recoveryVersion = auth.credentialRecoveryVersion ?? 0;
+      const serverRefreshed = recoveryVersion > observedRecoveryVersionRef.current;
+      observedRecoveryVersionRef.current = recoveryVersion;
       const changed = !!observed && (observed.userId !== auth.session.user.id || observed.accessToken !== auth.session.access_token);
       // The provider can lag the session returned by ensureAnonymousSession.
       // Observe provider changes once; never compare a stale render against a
       // newer already-used bearer and repeatedly schedule recovery passes.
-      if (changed && (!used || used.userId !== auth.session.user.id || used.accessToken !== auth.session.access_token)) authRecoveryPendingRef.current = true;
+      if ((changed || serverRefreshed) && (!credentialsWereUsedRef.current || !used || used.userId !== auth.session.user.id || used.accessToken !== auth.session.access_token)) authRecoveryPendingRef.current = true;
       observedCredentialsRef.current = { userId: auth.session.user.id, accessToken: auth.session.access_token };
     }
-  }, [auth.status, auth.session]);
+  }, [auth.status, auth.session, auth.credentialRecoveryVersion]);
   const legacyFollowupAttemptAt = useRef(Date.now());
   const offline = useNetworkOffline();
   const offlineRef = useRef(offline);
@@ -1087,6 +1092,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const librarySyncFlowRef = useRef(librarySyncFlow);
   librarySyncFlowRef.current = librarySyncFlow;
   const [isResettingLibrary, setIsResettingLibrary] = useState(false);
+  const libraryResetInFlightRef = useRef(false);
   const [loadError, setLoadError] = useState(false);
   const syncInFlight = useRef(false);
   // The user id the pull effect last fired for. A sign-in (anonymous → real)
@@ -4411,6 +4417,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     // Take the sync-in-flight slot so a background sync can't upload or pull
     // mid-wipe; syncNow calls made meanwhile no-op onto syncPendingRef.
     syncInFlight.current = true;
+    libraryResetInFlightRef.current = true;
     setIsResettingLibrary(true);
     // Snapshot BEFORE the wipe below clears bookmarksRef — used only for the
     // best-effort Storage cleanup once the remote wipe actually succeeds.
@@ -4501,9 +4508,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       setQueue([]);
       setEnrichments([]);
       setLastPulledAt(null);
+      syncRunFailureRef.current = null;
+      setSyncRunFailure(null);
+      syncPendingRef.current = false;
+      syncPendingForceRef.current = false;
+      authRecoveryPendingRef.current = false;
       return { ok: true };
     } finally {
       syncInFlight.current = false;
+      libraryResetInFlightRef.current = false;
       setIsResettingLibrary(false);
     }
   }, [
@@ -6104,6 +6117,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const syncNow = useCallback(
     async (options?: { force?: boolean }): Promise<boolean> => {
       const force = options?.force === true;
+      if (libraryResetInFlightRef.current) return false;
       if (syncInFlight.current) {
         syncPendingRef.current = true;
         syncPendingForceRef.current ||= force;
@@ -6190,7 +6204,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const priorCredentials = syncCredentialsRef.current;
         const recoverAuth = !!restoredSession && (recoveryRequested ||
           (!!priorCredentials && (priorCredentials.userId !== session.user.id || priorCredentials.accessToken !== session.access_token)));
-        if (restoredSession) syncCredentialsRef.current = { userId: session.user.id, accessToken: session.access_token };
+        if (restoredSession) {
+          syncCredentialsRef.current = { userId: session.user.id, accessToken: session.access_token };
+          credentialsWereUsedRef.current = true;
+        }
         if (recoverAuth) authRecoveryPendingRef.current = false;
         const durableBookmarks = await repository.listBookmarks();
         const durableQueue = await repository.listQueue();
@@ -8601,7 +8618,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // Failed tag work has no bookmark queue entry to wake background sync.
   // Arm the earliest eligible deadline, including queues restored at startup.
   useEffect(() => {
-    if (offline || syncPaused || isSyncingState || bookmarks === null ||
+    if (offline || syncPaused || isSyncingState || isResettingLibrary || bookmarks === null ||
         !auth.userId || auth.userId !== reconciledCacheUserId ||
         (auth.status !== "anonymous" && auth.status !== "authenticated")) return;
     const deadlines = pendingTagOps
@@ -8621,13 +8638,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       clearTimeout(timer);
     };
   }, [pendingTagOps, bookmarks, offline, auth.userId, auth.status, reconciledCacheUserId,
-    syncPaused, isSyncingState, hasSyncedOnce, tagJournalRetryAt]);
+    syncPaused, isSyncingState, isResettingLibrary, hasSyncedOnce, tagJournalRetryAt]);
 
   // Quiet retries must actually have a wake-up: a failed bookmark or pull can
   // otherwise wait forever for another save. Existing upload guards/backoff
   // still decide what gets attempted. Never cross account or pause boundaries.
   useEffect(() => {
-    if (offline || syncPaused || isSyncingState || bookmarks === null ||
+    if (offline || syncPaused || isSyncingState || isResettingLibrary || bookmarks === null ||
         !auth.session || auth.userId !== reconciledCacheUserId ||
         (auth.status !== "anonymous" && auth.status !== "authenticated")) return;
     const deadline = nextAutomaticSyncRetryAt({
@@ -8638,7 +8655,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     if (deadline === null) return;
     const timer = setTimeout(() => { void syncNowRef.current?.().catch(() => {}); }, Math.max(5_000, deadline - Date.now()));
     return () => clearTimeout(timer);
-  }, [offline, syncPaused, isSyncingState, bookmarks, queue, syncRunFailure,
+  }, [offline, syncPaused, isSyncingState, isResettingLibrary, bookmarks, queue, syncRunFailure,
     pendingImportCollections, pendingEnrichmentRestores, auth.session, auth.userId,
     auth.status, reconciledCacheUserId, hasSyncedOnce]);
 

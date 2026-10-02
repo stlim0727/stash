@@ -135,3 +135,11 @@ test('the first auth and permission upload failures are actionable in both local
     assert.equal(syncStatusLabel(createT('ko'), value, { sync_status: 'failed', last_error_kind: 'permission' }), '동기화 접근 권한 확인 필요');
   }
 });
+
+
+test('retryable HTTP failures stay queued after health escalation without hiding escalation data', () => {
+  const queue = { sync_status: 'failed' as const, last_error_kind: 'retryable_http' as const, health_escalated_at: '2026-10-02T00:00:00Z' };
+  assert.equal(syncStatusLabel(createT('en'), 'failed', queue), 'sync queued');
+  assert.equal(syncStatusLabel(createT('ko'), 'failed', queue), '동기화 대기 중');
+  assert.ok(queue.health_escalated_at);
+});

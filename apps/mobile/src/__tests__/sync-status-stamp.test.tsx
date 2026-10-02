@@ -34,6 +34,7 @@ jest.mock('@/supabase/auth-provider', () => {
     session: null as unknown,
     userId: 'real-user' as string | null,
     message: null as string | null,
+    credentialRecoveryVersion: 0,
     ensureAnonymousSession: jest.fn(async (): Promise<unknown> => state.session),
   };
   return {
@@ -76,6 +77,7 @@ jest.mock('@/api/bookmarks', () => {
   const resetLibrary = jest.fn(async () => ({ bookmarks: 0 }));
   const empty = async () => [];
   return {
+    __resetLibraryMock: resetLibrary,
     __createBookmarkMock: createBookmark,
     __listBookmarksUpdatedSinceMock: listBookmarksUpdatedSince,
     createBookmarkApi: () => ({
@@ -119,6 +121,7 @@ const authMock = jest.requireMock('@/supabase/auth-provider') as {
 };
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
 const apiMock = jest.requireMock('@/api/bookmarks') as {
+  __resetLibraryMock: jest.Mock;
   __createBookmarkMock: jest.Mock;
   __listBookmarksUpdatedSinceMock: jest.Mock;
 };
@@ -133,7 +136,7 @@ beforeEach(() => {
   apiMock.__listBookmarksUpdatedSinceMock.mockClear();
   mockUpsertSyncStatus.mockClear();
   mockUpsertSyncStatus.mockImplementation(async () => {});
-  authMock.__setAuth({ status: 'authenticated', session: mockRealSession, userId: 'real-user' });
+  authMock.__setAuth({ status: 'authenticated', session: mockRealSession, userId: 'real-user', credentialRecoveryVersion: 0 });
 });
 afterEach(() => jest.useRealTimers());
 
@@ -431,5 +434,57 @@ test('a freshly restored bearer ahead of reactive auth does not schedule repeate
   await waitFor(() => expect(screen.result.current.isSyncing).toBe(false));
   await act(async () => { await jest.advanceTimersByTimeAsync(3000); });
   expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(1);
+  await screen.unmount();
+});
+
+
+test.each([[0, 0], [1, 1]])('cold-start recovery version %s retries persisted auth failures only after server refresh', async (version, attempts) => {
+  jest.useFakeTimers();
+  authMock.__setAuth({ status: 'loading', session: null, userId: null });
+  const id = '1a2b3c4d-0000-4000-8000-00000000abcd';
+  fakeRepo.__reset([makeStoredBookmark({ id, sync_status: 'failed', ever_synced: false })]);
+  fakeRepo.__setMeta('synced_user_id', 'real-user');
+  const at = new Date().toISOString();
+  await fakeRepo.repository.enqueue({ local_id: id, remote_id: null, operation: 'create', payload: { url: 'https://example.com/cold-start' },
+    sync_status: 'failed', retry_count: 1, last_error: 'Denied', last_error_kind: 'auth', created_at: at, updated_at: at, last_attempt_at: at });
+  const screen = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(screen.result.current.isLoading).toBe(false));
+  await act(async () => { authMock.__setAuth({ status: 'authenticated', session: mockRealSession, userId: 'real-user', credentialRecoveryVersion: version }); });
+  await screen.rerender(undefined);
+  await waitFor(() => expect(screen.result.current.isSyncing).toBe(false));
+  expect(apiMock.__createBookmarkMock).toHaveBeenCalledTimes(attempts);
+  expect(fakeRepo.__queue()).toHaveLength(attempts ? 0 : 1);
+  await screen.unmount();
+});
+
+test.each([true, false])('library reset clears retained terminal pull failures only on success (%s)', async (success) => {
+  jest.useFakeTimers();
+  apiMock.__listBookmarksUpdatedSinceMock.mockRejectedValue(new SupabaseRequestError('Protocol failure', 400));
+  const screen = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(screen.result.current.librarySyncFlow.phase).toBe('retrying'));
+  for (const ms of [5000, 15000]) await act(async () => { await jest.advanceTimersByTimeAsync(ms); });
+  expect(screen.result.current.librarySyncFlow.phase).toBe('attention');
+  if (!success) apiMock.__resetLibraryMock.mockRejectedValueOnce(new Error('Reset unavailable'));
+  apiMock.__listBookmarksUpdatedSinceMock.mockResolvedValue([]);
+  await act(async () => { expect((await screen.result.current.resetLibrary()).ok).toBe(success); });
+  expect(screen.result.current.librarySyncFlow.phase).toBe(success ? 'idle' : 'attention');
+  await screen.unmount();
+});
+
+test('reset cancels retry wakeups and prevents deferred duplicate pulls while it owns the sync lock', async () => {
+  jest.useFakeTimers();
+  apiMock.__listBookmarksUpdatedSinceMock.mockRejectedValueOnce(new Error('Network request failed'));
+  const screen = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(screen.result.current.librarySyncFlow.phase).toBe('retrying'));
+  let finish!: () => void;
+  apiMock.__resetLibraryMock.mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({ bookmarks: 0 }); }));
+  let reset!: ReturnType<typeof screen.result.current.resetLibrary>;
+  await act(async () => { reset = screen.result.current.resetLibrary(); });
+  await waitFor(() => expect(screen.result.current.isResettingLibrary).toBe(true));
+  await act(async () => { await jest.advanceTimersByTimeAsync(20000); expect(await screen.result.current.syncNow()).toBe(false); });
+  expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(1);
+  await act(async () => { finish(); await reset; });
+  await act(async () => { await screen.result.current.syncNow(); await jest.advanceTimersByTimeAsync(100); });
+  expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(2);
   await screen.unmount();
 });

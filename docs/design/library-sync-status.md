@@ -67,10 +67,13 @@ explicit manual force overrides them. A successful sign-in or credential
 refresh permits one recovery pass for stale auth failures across all channels,
 only after account ownership is reconciled. This does not override permission
 or exhausted ordinary failures; a fresh 401 under the same credentials stops
-again. Same-account credential recovery retains the AI quota cooldown. Legacy failed followups without
+again. Cold-start restoration carries an explicit successful-server-refresh
+revision from the auth provider; cached session reads do not authorize recovery.
+Same-account credential recovery retains the AI quota cooldown. Legacy failed followups without
 a timestamp share a stable hydration anchor for their initial 30-second wait.
 Tag health alerts retain the ordinary three-failure threshold for HTTP/API
-errors; only DNS/network failures use six.
+errors; only DNS/network failures use six. Retryable HTTP item chips retain
+recoverable queued wording after health escalation without changing reporting.
 
 The pull driver checks its own retry deadline and eligibility even when
 another channel or unrelated save starts a sync. A manual force can override
@@ -82,7 +85,12 @@ cloud phases when bookmark processing counts are zero, so failed pulls never
 claim all work complete. Detail chips identify auth/permission failures from
 the first failed attempt in both English and Korean.
 
-Retry timers are cancelled while offline, paused, busy, without an active
+A successful remote-and-local library reset clears retained pull failures
+and deferred sync flags; failed resets preserve failure observations. Reset
+ownership cancels retry timers and synchronously gates sync requests, avoiding
+queued duplicate pulls after the wipe.
+
+Retry timers are cancelled while resetting the library, offline, paused, busy, without an active
 session, or before local cache ownership has been reconciled. Reconnecting
 wakes the normal sync path once and respects remaining upload backoff; an
 offline-only request does not queue an extra deferred pass. Offline sync

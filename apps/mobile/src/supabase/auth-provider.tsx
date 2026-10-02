@@ -38,6 +38,8 @@ export type SupabaseAuthStatus =
 interface SupabaseAuthContextValue {
   status: SupabaseAuthStatus;
   session: SupabaseAuthSession | null;
+  /** Successful server refreshes, including cold-start restoration. Cached reads do not increment it. */
+  credentialRecoveryVersion?: number;
   userId: string | null;
   /** Email of the signed-in (non-anonymous) user, if any. */
   email: string | null;
@@ -84,6 +86,7 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
     configState.status === 'missing' ? 'not_configured' : 'loading',
   );
   const [session, setSession] = useState<SupabaseAuthSession | null>(null);
+  const [credentialRecoveryVersion, setCredentialRecoveryVersion] = useState(0);
   const [message, setMessage] = useState(() => describeSupabaseConfig(configState));
 
   // Single-flight: concurrent callers (e.g. React StrictMode double-running
@@ -142,6 +145,7 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
         const restored = await client.restoreSession(effectiveForceRefresh);
         if (restored.outcome === 'active') {
           const { session: active } = restored;
+          if (restored.credentialsRefreshed) setCredentialRecoveryVersion((version) => version + 1);
           setSession(active);
           setStatus(statusForSession(active));
           setMessage(
@@ -430,6 +434,7 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
     () => ({
       status,
       session,
+      credentialRecoveryVersion,
       userId,
       email,
       displayName,
@@ -444,6 +449,7 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
     [
       status,
       session,
+      credentialRecoveryVersion,
       userId,
       email,
       displayName,

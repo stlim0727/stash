@@ -143,7 +143,7 @@ function toSession(response: SupabaseAuthResponse): SupabaseAuthSession {
  *    surfaces a re-sign-in prompt for that case instead of minting.
  */
 export type SessionRestoreResult =
-  | { outcome: 'active'; session: SupabaseAuthSession }
+  | { outcome: 'active'; session: SupabaseAuthSession; credentialsRefreshed?: boolean }
   | { outcome: 'none' }
   | { outcome: 'expired'; wasAnonymous: boolean };
 
@@ -565,7 +565,7 @@ export class StashSupabaseClient {
     const wasAnonymous = stored.user.is_anonymous !== false;
     try {
       const session = await this.refreshSession(stored.refresh_token);
-      return { outcome: 'active', session };
+      return { outcome: 'active', session, credentialsRefreshed: true };
     } catch (error) {
       if (error instanceof SupabaseRequestError && error.status >= 400 && error.status < 500) {
         // The refresh token was rejected — this session is unrecoverable.
