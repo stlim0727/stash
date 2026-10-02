@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-10-02 (added sync review guidance from #873; this was a scoped workflow update).
+Last updated: 2026-10-02 (added database migration deploy-ordering retro and PR merge gate guidance from #881/#882).
 
 ## Successor Agent Orientation
 
@@ -370,7 +370,7 @@ Delete `apps/mobile/dist/` afterwards; it is gitignored.
   **Crucial timing trap:** Never merge immediately after CI passes if less than 5 minutes have elapsed since PR creation or last push. Automated reviewers (such as Codex) routinely take 2–4 minutes to run and comment. Merging prematurely results in actionable review catches landing post-merge directly into trunk (as occurred on #796).
 - Do not auto-merge PRs that change Supabase migrations/functions,
   auth/session/sync deletion behavior, Cloudflare deploy config, or release
-  workflows. Report status and ask.
+  workflows. Report status and ask. **Never declare a PR containing Supabase migrations ready to merge until the migration is confirmed applied to the target database** — CI/CD does not apply migrations automatically, so merging code ahead of its migration breaks production immediately on deploy (PR #881 / Issue #882). When reporting status to the user, explicitly state whether the migration is already live or blocked on manual execution.
 - If CI fails, merge conflicts arise, or review comments appear, stop the auto-merge path, inspect it,
   and either address the issue or report the blocker.
 
@@ -427,6 +427,13 @@ only, debug-signed, standalone, and includes build provenance in Settings.
 - `createBookmark` sends `client_id`; the migration
   `20260621000002_bookmarks_client_id.sql` must exist before deploying code that
   writes it.
+- **Deploy-ordering and RPC migrations (PR #881 / Issue #882)**: Client code that
+  calls a new Supabase RPC (e.g. `delete_user_collections`, `merge_user_collections`)
+  or requires a new column/constraint must never merge to `main` before the
+  migration is live. Removing client-side 404 fallbacks during code review is safe
+  ONLY after the migration is active in production; otherwise PostgREST returns
+  `Could not find the function in schema cache` and breaks the app on deploy. See
+  `docs/development/database-migration-deploy-ordering-retro.md`.
 - Cloud `url_hash` is canonicalized now. Older rows may have stale hashes; use
   `pnpm dedupe:supabase` with `SUPABASE_SERVICE_ROLE_KEY` when needed.
 - Never run `pnpm dedupe:supabase --apply` without explicit user confirmation.

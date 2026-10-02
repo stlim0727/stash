@@ -80,7 +80,7 @@ create policy "Users can delete their <t>" on public.<t> for delete
   the server-trigger variants take the owner id as an argument and are
   `service_role`-only. Constant-time-compare any shared secret header.
 
-## Step 3 — The deploy-ordering rule (this has bitten twice)
+## Step 3 — The deploy-ordering rule (this has bitten three times)
 
 **A migration that code depends on must be applied *with or before* the code
 deploy — never after.** Documented failures in `AGENTS.md`:
@@ -91,6 +91,10 @@ deploy — never after.** Documented failures in `AGENTS.md`:
   **hard-depends** on its `UNIQUE(bookmark_id)` constraint; the function was
   deployed while the migration wasn't applied → every enrichment ran the model
   (burning Gemini quota) then 400'd at the save with `42P10`.
+- `collection_id RPCs (PR #881 / Issue #882)`: `delete_user_collections` and
+  `merge_user_collections` RPCs were merged while client fallbacks were stripped
+  during review. The PR was merged before the migration ran on production → PostgREST
+  returned 404 (schema cache missing function) on every collection delete/merge.
 
 So when your change spans SQL + code:
 
