@@ -22,6 +22,7 @@ import {
   setPendingFeedbackSource,
 } from '@/feedback/screenshot-session';
 import { useT } from '@/i18n';
+import { useFloatingReportPreference } from '@/feedback/floating-report-preference';
 import { getPreference, setPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
 import { usePalette } from '@/theme';
@@ -81,7 +82,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
   }
 }
 
-export function FloatingReportButton({ children, enabled = false }: FloatingReportButtonProps) {
+export function FloatingReportButton({ children, enabled: enabledProp }: FloatingReportButtonProps) {
   const t = useT();
   const router = useRouter();
   const pathname = usePathname();
@@ -90,6 +91,8 @@ export function FloatingReportButton({ children, enabled = false }: FloatingRepo
   const captureRef = useRef<View>(null);
   const [capturing, setCapturing] = useState(false);
   const [minimized, setMinimized] = useState(false);
+  const [prefEnabled] = useFloatingReportPreference();
+  const enabled = enabledProp ?? prefEnabled;
   const hidden = !enabled || shouldHide(pathname);
   // On web the repository's meta store is only populated once BookmarksProvider's
   // startup load resolves (`repository.init()`) — reading the preference before

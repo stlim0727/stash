@@ -21,7 +21,6 @@ import { AiEnrichmentBurstToast } from '@/ui/AiEnrichmentBurstToast';
 import { CaptureToastProvider } from '@/ui/capture-toast';
 import { FeedbackCaptureProvider } from '@/feedback/open-report';
 import { FloatingReportButton } from '@/feedback/FloatingReportButton';
-import { useFloatingReportPreference } from '@/feedback/floating-report-preference';
 import { UpdateRequired } from '@/ui/UpdateRequired';
 import { AnalyticsProvider } from '@/analytics/provider';
 import { PostHogFullProvider } from '@/analytics-full/posthog-full-runtime';
@@ -124,7 +123,6 @@ function RootStack() {
 
 function RootLayout() {
   const colorScheme = useColorScheme();
-  const [floatingReportEnabled] = useFloatingReportPreference();
   return (
     <SafeAreaProvider>
       <ShareIntentProvider options={{ debug: false, resetOnBackground: true }}>
@@ -139,7 +137,7 @@ function RootLayout() {
                       <ShareConfirmHandler />
                       <AiEnrichmentBurstToast />
                       <FeedbackCaptureProvider>
-                        <FloatingReportButton enabled={floatingReportEnabled}>
+                        <FloatingReportButton>
                           <RootStack />
                         </FloatingReportButton>
                       </FeedbackCaptureProvider>
