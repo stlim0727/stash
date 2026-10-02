@@ -50,9 +50,14 @@ Failed bookmark uploads and pull failures now have a timer; waiting for the
 next save is not sufficient to promise automatic recovery. Upload retries use
 the existing backoff (5s, 15s, 30s, 1m, 2m, then 5m; transport failures have a
 3x multiplier), without forcing a pass or bypassing `isSyncable`. Timer wakeups
-have a 5s minimum to avoid a hot loop on missing timestamps or unchanged work.
-Legacy import followups without attempt timestamps use a 30s wakeup cadence.
+use absolute deadlines; overdue eligible work can wake immediately. Creates
+waiting for metadata are excluded rather than repeatedly waking an empty pass.
+Legacy queue rows without attempt timestamps use a stable hydration anchor;
+legacy import followups use that anchor for their initial 30s wait.
 The existing tag retry timer follows the same action-required policy.
+
+Use the [sync change review guide](sync-change-review.md) when changing this
+contract or addressing review findings across its channels.
 
 Transport errors and HTTP 408/429/5xx remain automatically retryable. Authentication/permission
 errors and ordinary failures after three attempts require inspection instead

@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-09-28 (reporting and request histories moved into deeper documentation).
+Last updated: 2026-10-02 (added sync review guidance from #873; this was a scoped workflow update).
 
 ## Successor Agent Orientation
 
@@ -338,6 +338,11 @@ CI=1 pnpm exec expo export --platform ios
 Delete `apps/mobile/dist/` afterwards; it is gitignored.
 
 ## Collaboration And PR Workflow
+
+- For changes that couple sync scheduling, drivers, authentication recovery, or
+  status UI, use [the sync change review guide](docs/design/sync-change-review.md)
+  before publishing. If review repeatedly finds the same mechanism in another
+  channel or lifecycle path, check the shared invariant before the next patch.
 
 - **Always start working on a new worktree when code work is needed.** Before making file modifications for a task, feature, or bugfix, create and switch to an isolated git worktree (e.g., `git worktree add -b <branch> <path> origin/main`) rather than editing directly in the primary workspace root. Keep the main working tree clean.
 - When an agent makes repository changes that are meant to persist or be shared,
