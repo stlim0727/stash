@@ -183,3 +183,10 @@ test('session recovery remains actionable without cloud availability', async () 
     await screen.unmount();
   } finally { mockCloudAvailable = true; mockAuthStatus = 'anonymous'; mockRecoveryPhase = null; }
 });
+
+test('settings renders floating report button toggle', async () => {
+  const screen = await renderSettings();
+  expect(screen.getByTestId('settings-floating-report-row')).toBeTruthy();
+  expect(screen.getByLabelText('Floating report button')).toBeTruthy();
+  await screen.unmount();
+});

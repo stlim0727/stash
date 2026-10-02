@@ -3,6 +3,7 @@ import * as Application from "expo-application";
 import Constants from "expo-constants";
 import { useRouter } from "expo-router";
 import { useOpenReport } from "@/feedback/open-report";
+import { useFloatingReportPreference } from "@/feedback/floating-report-preference";
 import { PostHogMaskView } from "posthog-react-native";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -159,6 +160,7 @@ export default function SettingsScreen() {
   const styles = makeStyles(palette);
   const router = useRouter();
   const { openReport, capturing } = useOpenReport('/settings');
+  const [floatingReport, setFloatingReport] = useFloatingReportPreference();
   // Wide viewports present Settings as a right-side sheet over a dimmed Inbox;
   // phones keep the full-screen layout. One width rule, no Platform branch.
   const { width, height } = useWindowDimensions();
@@ -1317,12 +1319,29 @@ export default function SettingsScreen() {
           icon="construct-outline"
           label={t("settings.developer.label")}
           value={t("settings.developer.value")}
-          last
           right={
             <Switch
               accessibilityLabel={t("settings.developer.label")}
               value={developerMode}
               onValueChange={setDeveloperMode}
+              trackColor={{ true: palette.accent, false: palette.border }}
+              thumbColor="#ffffff"
+            />
+          }
+        />
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="chatbubble-ellipses-outline"
+          label={t("settings.floatingReport.label")}
+          value={t("settings.floatingReport.value")}
+          last
+          testID="settings-floating-report-row"
+          right={
+            <Switch
+              accessibilityLabel={t("settings.floatingReport.label")}
+              value={floatingReport}
+              onValueChange={setFloatingReport}
               trackColor={{ true: palette.accent, false: palette.border }}
               thumbColor="#ffffff"
             />
