@@ -1365,6 +1365,7 @@ test('syncErrorKind preserves transport-vs-HTTP provenance before persistence', 
 
   assert.equal(syncErrorKind(dnsError), 'transient_dns');
   assert.equal(syncErrorKind(timeoutError), 'transient_network');
+  assert.equal(syncErrorKind(new DOMException('This operation was aborted', 'AbortError')), 'transient_network');
   assert.equal(syncErrorKind(responseError), 'retryable_http');
   assert.equal(syncErrorKind(new SupabaseRequestError('Rate limit', 429)), 'retryable_http');
   assert.equal(syncErrorKind(new SupabaseRequestError('Invalid input', 400)), 'other');

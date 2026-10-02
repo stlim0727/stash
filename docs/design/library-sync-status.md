@@ -114,3 +114,9 @@ aggregate phase, because authentication and permission failures take priority
 over offline in that projection. Native image uploads preserve non-success
 HTTP status in `SupabaseRequestError` so they share the same authentication,
 permission, and retryable HTTP policies as bookmark requests.
+
+Retry wakeups use absolute deadlines, including immediately due work; unrelated
+local bookmark changes cannot add another minimum delay. A tag upload already
+in flight retains recovered credentials for its coalesced replay, scoped to the
+same account and bearer. Fetch `AbortError` failures use transport backoff and
+remain automatically recoverable beyond three attempts.

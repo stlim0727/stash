@@ -2306,3 +2306,32 @@ test.each(['collection', 'enrichment'] as const)('%s followups enforce individua
     expect(fakeRepo.__meta(key)).toBe('[]');
   } finally { authMock.__setAuth({ ensureAnonymousSession: originalEnsure }); apiSessions.mockRestore(); await store.unmount(); jest.useRealTimers(); }
 });
+
+test('credential recovery survives coalescing behind an in-flight direct tag upload', async () => {
+  const id = '7e64cf1e-0000-4000-8000-000000000001';
+  fakeRepo.__reset([makeStoredBookmark({ id, user_id: 'real-user', ever_synced: true })]);
+  apiMock.__setRemoteRows([{ id, url: `https://example.com/${id}` }]);
+  fakeRepo.__setMeta('synced_user_id', 'real-user');
+  const at = new Date().toISOString();
+  fakeRepo.__setMeta('pending_tag_ops', JSON.stringify([
+    { bookmark_id: id, tag_name: 'auth-blocked', op: 'add', created_at: at, retry_count: 1, last_attempt_at: at, last_error_kind: 'auth' },
+    { bookmark_id: id, tag_name: 'permission-blocked', op: 'add', created_at: at, retry_count: 1, last_attempt_at: at, last_error_kind: 'permission' },
+  ]));
+  const store = await renderReadyStore();
+  const gate = deferred<never>();
+  apiMock.__bulkAttachMock.mockImplementationOnce(() => gate.promise);
+  await act(async () => { await store.result.current.addTagsToBookmark(id, ['direct-tag']); });
+  await waitFor(() => expect(apiMock.__bulkAttachMock).toHaveBeenCalledTimes(1));
+  const refreshed = { ...mockRealSession, access_token: 'tag-refreshed-token' };
+  authMock.__setAuth({ session: refreshed });
+  await store.rerender(undefined);
+  await act(async () => { await store.result.current.syncNow(); });
+  await act(async () => { gate.reject(new SupabaseRequestError('Old token rejected', 401)); });
+  await waitFor(() => expect(apiMock.__bulkAttachMock).toHaveBeenCalledTimes(2));
+  const tags = apiMock.__bulkAttachMock.mock.calls[1][0].flatMap((item: { tags: { name: string }[] }) => item.tags.map(tag => tag.name));
+  expect(tags).toContain('auth-blocked');
+  expect(tags).toContain('direct-tag');
+  expect(tags).not.toContain('permission-blocked');
+  await waitFor(() => expect(JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]').map((op: { tag_name: string }) => op.tag_name)).toEqual(['permission-blocked']));
+  await store.unmount();
+});

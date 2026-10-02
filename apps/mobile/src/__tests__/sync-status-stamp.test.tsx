@@ -488,3 +488,20 @@ test('reset cancels retry wakeups and prevents deferred duplicate pulls while it
   expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(2);
   await screen.unmount();
 });
+
+test('local bookmark updates do not postpone an approaching pull retry deadline', async () => {
+  jest.useFakeTimers();
+  const id = '1a2b3c4d-0000-4000-8000-00000000abcd';
+  fakeRepo.__reset([makeStoredBookmark({ id, ever_synced: true })]);
+  fakeRepo.__setMeta('synced_user_id', 'real-user');
+  apiMock.__listBookmarksUpdatedSinceMock.mockRejectedValueOnce(new Error('Network request failed'));
+  const screen = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(screen.result.current.librarySyncFlow.phase).toBe('retrying'));
+  await act(async () => { await jest.advanceTimersByTimeAsync(10000); });
+  for (let n = 0; n < 5; n++) {
+    await act(async () => { screen.result.current.markBookmarkAccessed(id); });
+    await act(async () => { await jest.advanceTimersByTimeAsync(1000); });
+  }
+  expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(2);
+  await screen.unmount();
+});

@@ -1022,6 +1022,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const tagSyncInFlight = useRef(false);
   const tagSyncPending = useRef(false);
   const tagSyncPendingForce = useRef(false);
+  const tagSyncPendingRecovery = useRef<SupabaseAuthSession | null>(null);
   const tagOpsWriteRef = useRef(Promise.resolve(true));
   const tagWorkPending = useRef(0);
   const pendingTagHealthReportsRef = useRef(new Map<string, PendingTagOp>());
@@ -4558,8 +4559,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     if (tagSyncInFlight.current) {
       tagSyncPending.current = true;
       tagSyncPendingForce.current ||= force;
+      if (recoverAuth) tagSyncPendingRecovery.current = session;
       return false;
     }
+    const pendingRecovery = tagSyncPendingRecovery.current;
+    tagSyncPendingRecovery.current = null;
+    recoverAuth ||= pendingRecovery?.user.id === session.user.id &&
+      pendingRecovery.access_token === session.access_token;
     tagSyncInFlight.current = true;
     try {
       await tagOpsWriteRef.current;
@@ -8653,7 +8659,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       now: Date.now(), legacyFollowupAttemptAt: legacyFollowupAttemptAt.current,
     });
     if (deadline === null) return;
-    const timer = setTimeout(() => { void syncNowRef.current?.().catch(() => {}); }, Math.max(5_000, deadline - Date.now()));
+    const timer = setTimeout(() => { void syncNowRef.current?.().catch(() => {}); }, Math.max(0, deadline - Date.now()));
     return () => clearTimeout(timer);
   }, [offline, syncPaused, isSyncingState, isResettingLibrary, bookmarks, queue, syncRunFailure,
     pendingImportCollections, pendingEnrichmentRestores, auth.session, auth.userId,
