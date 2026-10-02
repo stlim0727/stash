@@ -127,3 +127,23 @@ hydration anchor for legacy queue rows without attempt timestamps. Direct tag
 removals schedule a local confirming pull when no main sync is running.
 Credential recovery is consumed only after successful ownership reconciliation
 and durable snapshot reads, so an early failure does not discard that proof.
+
+## Settings diagnostics presentation
+
+Developer-mode diagnostics show current cloud state separately from device-wide
+pull history. The current state comes from `librarySyncFlow`, never from an old
+successful attempt. Outstanding upload/followup counts do not include a retained
+pull failure, which remains visible through the current state even at zero items.
+The last successful pull is not proof that uploads, metadata, or AI have finished.
+History shows three attempts initially, with all five available on expansion;
+an earlier failure can note a later successful pull without claiming current
+account recovery. Full recorded errors are selectable and copyable, with the
+existing report flow available beside them.
+
+Processing stages and raw counters remain available in expandable groups. Count
+labels explain their scopes: confirmed cloud storage covers the local cache,
+including trash; metadata complete/skipped counts cover active bookmarks; AI
+counts cover stored enrichment records. Eligible update mutations are current
+resync targets, not a lifetime count of second syncs. These counts overlap and
+must not be added together. App version/build information is grouped separately
+and can be copied for a report.

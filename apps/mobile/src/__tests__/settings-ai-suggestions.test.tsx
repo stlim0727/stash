@@ -64,6 +64,8 @@ beforeEach(() => {
 async function enableDeveloperMode(screen: Awaited<ReturnType<typeof renderSettings>>) {
   await waitFor(() => screen.getByLabelText('Developer mode'));
   fireEvent(screen.getByLabelText('Developer mode'), 'valueChange', true);
+  await waitFor(() => screen.getByLabelText('Pending processing'));
+  await fireEvent.press(screen.getByLabelText('Pending processing'));
   await waitFor(() => screen.getByTestId('processing-stage-ai'));
 }
 

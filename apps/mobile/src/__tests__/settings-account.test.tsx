@@ -132,6 +132,8 @@ test('not configured: cloud processing is local-only and no sign-in buttons are 
   // Activity summary (STASH counter refactor).
   await waitFor(() => screen.getByLabelText('Developer mode'));
   fireEvent(screen.getByLabelText('Developer mode'), 'valueChange', true);
+  await waitFor(() => screen.getByLabelText('Pending processing'));
+  await fireEvent.press(screen.getByLabelText('Pending processing'));
 
   await waitFor(() =>
     expect(screen.getByText('0 bookmarks · local only')).toBeTruthy(),

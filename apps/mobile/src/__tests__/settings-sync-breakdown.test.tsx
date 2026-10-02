@@ -109,6 +109,8 @@ function expectRow(
 async function enableDeveloperMode(screen: Awaited<ReturnType<typeof render>>) {
   await waitFor(() => screen.getByLabelText('Developer mode'));
   fireEvent(screen.getByLabelText('Developer mode'), 'valueChange', true);
+  await waitFor(() => screen.getByLabelText('Pending processing'));
+  await fireEvent.press(screen.getByLabelText('Pending processing'));
   await waitFor(() => screen.getByTestId('processing-stage-cloud'));
 }
 
@@ -202,4 +204,19 @@ test('sync pause is a modifier on the summary row, not another counter', async (
   );
   await enableDeveloperMode(screen);
   expectRow(screen, 'processing-stage-cloud', '1 bookmark · sync paused');
+});
+
+test('diagnostics separates current state, collapsed processing and scoped counts', async () => {
+  await seed({});
+  const screen = await renderSettings();
+  await waitFor(() => screen.getByLabelText('Developer mode'));
+  fireEvent(screen.getByLabelText('Developer mode'), 'valueChange', true);
+  await waitFor(() => screen.getByTestId('diagnostics-current-status'));
+  expect(screen.queryByTestId('processing-stage-cloud')).toBeNull();
+  expect(screen.queryByText('Stored AI enrichment records')).toBeNull();
+  expect(screen.getByText('No bookmarks waiting for processing')).toBeTruthy();
+  await fireEvent.press(screen.getByLabelText('Recorded counts'));
+  expect(screen.getByText('Stored AI enrichment records')).toBeTruthy();
+  expect(screen.getByText('Metadata complete or skipped')).toBeTruthy();
+  expect(screen.getByText('Confirmed cloud storage / updates eligible for sync')).toBeTruthy();
 });
