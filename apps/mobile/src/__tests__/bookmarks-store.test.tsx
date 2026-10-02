@@ -689,6 +689,37 @@ test("editing title/notes marks a complete enrichment stale (locally + persisted
   );
 });
 
+test("queued provenance distinguishes a user unfile from AI-applied notes and survives coalescing", async () => {
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, collection_id: "folder-original" })]);
+  const { result } = await renderStore();
+  await act(async () => { result.current.assignCollection(SYNCED_ID, null); });
+  await act(async () => { result.current.updateBookmarkFields(SYNCED_ID, { notes: "Private AI summary" }, "ai_apply"); });
+  expect(result.current.queue).toHaveLength(1);
+  expect(result.current.getBookmarkProcessing(SYNCED_ID)?.sync.queue?.changes).toEqual([
+    expect.objectContaining({ source: "user_edit", fields: ["collection_id"] }),
+    expect.objectContaining({ source: "ai_apply", fields: ["notes"] }),
+  ]);
+  await waitFor(() => expect(fakeRepo.__queue()[0]?.changes).toEqual(result.current.queue[0]?.changes));
+  expect(JSON.stringify(result.current.getBookmarkProcessing(SYNCED_ID))).not.toContain("Private AI summary");
+});
+
+test("metadata arriving before first upload adds field-level provenance to the existing create", async () => {
+  let settle!: (result: { patch: Partial<Bookmark>; metadata_status: MetadataStatus }) => void;
+  mockEnrichBookmark.mockImplementationOnce(() => new Promise((resolve) => { settle = resolve; }));
+  const { result } = await renderStore();
+  await act(async () => { result.current.addBookmark({ url: "https://example.com/new-capture" }); });
+  await waitFor(() => expect(result.current.queue[0]?.changes?.[0]?.source).toBe("capture"));
+  await act(async () => { settle({ patch: { site_name: "Example", preview_image_url: "https://example.com/image.jpg" }, metadata_status: "complete" }); });
+  await waitFor(() => expect(result.current.queue[0]?.changes?.some((change) => change.source === "metadata_fetch")).toBe(true));
+  expect(result.current.queue).toHaveLength(1);
+  expect(result.current.queue[0]?.operation).toBe("create");
+  expect(result.current.queue[0]?.changes).toEqual([
+    expect.objectContaining({ source: "capture" }),
+    expect.objectContaining({ source: "metadata_fetch", fields: ["metadata_status", "preview_image_url", "site_name"] }),
+  ]);
+  await waitFor(() => expect(fakeRepo.__queue()[0]?.changes).toEqual(result.current.queue[0]?.changes));
+});
+
 test("editing a local-only image bookmark never queues a remote update (Sentry STASH-65)", async () => {
   // Image bookmarks are captured with a real UUID id and sync_status: 'synced'
   // even though the binary was never uploaded (cloud upload of images is
@@ -775,6 +806,9 @@ test("refreshBookmarkPreview replaces generated preview metadata and queues sync
       expect.objectContaining({ local_id: id, operation: "update" }),
     ]),
   );
+  expect(result.current.getBookmarkProcessing(id)?.sync.queue?.changes).toEqual([
+    expect.objectContaining({ source: "preview_refresh", fields: ["favicon_url", "preview_image_url", "site_name", "title"] }),
+  ]);
 });
 
 test("refreshBookmarkPreview keeps a user-authored title while refreshing generated fields", async () => {

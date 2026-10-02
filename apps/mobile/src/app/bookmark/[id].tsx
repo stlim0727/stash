@@ -72,6 +72,7 @@ import {
 import { isYoutubeAvailabilityCandidate } from '@/domain/page-metadata';
 import { hasRemoteIdentity, isLocalOnlyBookmark } from '@/sync/sync-bookmarks';
 import { notifyDetailMounted } from '@/domain/detail-navigation-signal';
+import { useOpenReport } from '@/feedback/open-report';
 
 // Lines of title shown before collapsing behind a "Show more" toggle.
 const TITLE_COLLAPSED_LINES = 4;
@@ -113,6 +114,7 @@ export default function BookmarkDetailScreen({
     getTagsForBookmark,
     getCollection,
     getEnrichment,
+    getBookmarkProcessing,
     trashBookmark,
     restoreBookmark,
     updateBookmarkFields,
@@ -210,6 +212,7 @@ export default function BookmarkDetailScreen({
   const id = inlineId ?? routeId;
   const inline = inlineId !== undefined;
   const bookmark = id ? getBookmark(id) : undefined;
+  const { openReport, capturing: reportCapturing } = useOpenReport('/bookmark/detail');
   usePreviewImageFailuresVersion();
   const rawPreviewUri = selectPreviewImageUri(bookmark?.local_image_uri, bookmark?.preview_image_url);
   // Retain drafts through blur/menu/preview events until the store confirms
@@ -577,9 +580,9 @@ export default function BookmarkDetailScreen({
     }
     setDraftTitle(null);
   };
-  const commitNotes = (draft: MemoDraft) => {
+  const commitNotes = (draft: MemoDraft, source: 'user_edit' | 'ai_apply' = 'user_edit') => {
     if (draft.value !== (bookmark.notes ?? '') || draft.format !== notesFormat(bookmark)) {
-      updateBookmarkFields(bookmark.id, { notes: draft.value, notes_format: draft.format });
+      updateBookmarkFields(bookmark.id, { notes: draft.value, notes_format: draft.format }, source);
     }
   };
   const commitDescription = (draft: MemoDraft) => {
@@ -593,6 +596,28 @@ export default function BookmarkDetailScreen({
 
   // One tidy "Details" section instead of a card per field. Only rows with a
   // real value show, so a sparse bookmark doesn't render mostly-empty cards.
+  const processing = getBookmarkProcessing(bookmark.id);
+  const none = t('detail.stateNone');
+  const yesNo = (value: boolean) => t(value ? 'detail.stateYes' : 'detail.stateNo');
+  const fieldLabels: Record<string, string> = {
+    title: t('detail.changeField.title'), description: t('detail.changeField.description'),
+    notes: t('detail.changeField.notes'), site_name: t('detail.changeField.site_name'),
+    favicon_url: t('detail.changeField.favicon_url'), preview_image_url: t('detail.changeField.preview_image_url'),
+    content_type: t('detail.changeField.content_type'), metadata_status: t('detail.changeField.metadata_status'),
+    collection_id: t('detail.changeField.collection_id'), deleted_at: t('detail.changeField.deleted_at'),
+    dismissed_suggested_tags: t('detail.changeField.dismissed_suggested_tags'),
+    dismissed_suggested_folders: t('detail.changeField.dismissed_suggested_folders'),
+    reviewed_summary_tokens: t('detail.changeField.reviewed_summary_tokens'),
+    description_format: t('detail.changeField.description_format'), notes_format: t('detail.changeField.notes_format'),
+  };
+  const aiMarkers = processing ? [
+    processing.ai.waitingForSync ? 'waiting_for_sync' : null,
+    processing.ai.triggerPending ? 'trigger_pending' : null,
+    processing.ai.dispatchPending ? 'dispatch_pending' : null,
+    processing.ai.inFlight ? 'in_flight' : null,
+    processing.ai.retry && processing.ai.retry.attempts > 0 ? 'retry_pending' : null,
+    processing.ai.locallyConfirmedServerQueued ? 'server_enqueue_confirmed' : null,
+  ].filter(Boolean).join(', ') : '';
   const details = [
     bookmark.url ? { label: t('detail.rowUrl'), value: bookmark.url } : null,
     bookmark.site_name ? { label: t('detail.rowSite'), value: bookmark.site_name } : null,
@@ -602,7 +627,75 @@ export default function BookmarkDetailScreen({
       ? { label: t('detail.rowDescription'), value: bookmark.description }
       : null,
     { label: t('detail.rowSaved'), value: formatDate(bookmark.created_at) },
+    { label: t('detail.rowId'), value: bookmark.id },
     bookmark.source_app ? { label: t('detail.rowFrom'), value: bookmark.source_app } : null,
+    processing ? {
+      label: t('detail.rowSyncState'),
+      value: `${t(`detail.syncPhase.${processing.sync.phase}`)} (${processing.sync.phase})`,
+    } : null,
+    processing ? {
+      label: t('detail.rowSyncBlockers'),
+      value: processing.sync.blockers.map((reason) => t(`detail.syncBlocker.${reason}`)).join(', ') || none,
+    } : null,
+    { label: t('detail.rowSyncMirror'), value: bookmark.sync_status },
+    processing ? { label: t('detail.rowSyncedOnce'), value: yesNo(processing.sync.everSynced) } : null,
+    processing ? {
+      label: t('detail.rowSyncService'),
+      value: `${processing.sync.authStatus} · ${t(processing.sync.paused ? 'detail.syncBlocker.paused' : processing.sync.serviceRunning ? 'detail.serviceRunning' : 'detail.serviceIdle')}`,
+    } : null,
+    processing ? {
+      label: t('detail.rowSyncQueue'),
+      value: processing.sync.queue ? `${processing.sync.queue.operation} / ${processing.sync.queue.status}` : none,
+    } : null,
+    processing?.sync.queue ? { label: t('detail.rowUploadFields'), value: processing.sync.queue.uploadFields.join(', ') || none } : null,
+    processing?.sync.queue ? {
+      label: t('detail.rowSyncChanges'),
+      value: processing.sync.queue.changes.map((change) =>
+        `${t(`detail.changeSource.${change.source}`)}${change.fields.length ? ` · ${change.fields.map((field) => fieldLabels[field] ?? field).join(', ')}` : ''} · ${formatDate(change.at)}`,
+      ).join('\n'),
+    } : null,
+    processing ? {
+      label: t('detail.rowTagSync'),
+      value: t('detail.tagSyncState', {
+        pending: processing.organization.tagUploads.filter((op) => !op.confirmed).length,
+        ai: processing.organization.tagUploads.filter((op) => !op.confirmed && op.source === 'ai').length,
+        confirmed: processing.organization.tagUploads.filter((op) => op.confirmed).length,
+      }),
+    } : null,
+    processing?.organization.importFolderPending ? { label: t('detail.rowImportFolder'), value: t('detail.syncPhase.queued') } : null,
+    processing?.sync.queue ? { label: t('detail.rowRetries'), value: String(processing.sync.queue.retries) } : null,
+    processing?.sync.queue?.lastAttemptAt ? { label: t('detail.rowLastAttempt'), value: formatDate(processing.sync.queue.lastAttemptAt) } : null,
+    processing?.sync.queue?.retryEligibleAt ? { label: t('detail.rowRetryEligible'), value: formatDate(processing.sync.queue.retryEligibleAt) } : null,
+    syncQueueEntry?.last_error ? {
+      label: t('detail.rowSyncError'), value: `${syncQueueEntry.last_error_kind ?? 'unknown'}: ${syncQueueEntry.last_error}`,
+    } : null,
+    { label: t('detail.rowUpdated'), value: formatDate(bookmark.updated_at) },
+    processing ? { label: t('detail.rowLastPull'), value: processing.sync.lastPulledAt ? formatDate(processing.sync.lastPulledAt) : none } : null,
+    { label: t('detail.rowMetadata'), value: `${metadataStatusLabel(t, bookmark.metadata_status)} (${bookmark.metadata_status})${previewRefreshing ? ' · refreshing' : ''}` },
+    { label: t('detail.rowTitleDerived'), value: yesNo(bookmark.title_is_derived === true) },
+    processing ? { label: t('detail.rowAiWork'), value: aiMarkers || none } : null,
+    processing ? { label: t('detail.rowAiMode'), value: processing.ai.mode } : null,
+    processing?.ai.retry ? { label: t('detail.rowAiRetry'), value: `${processing.ai.retry.attempts} · ${processing.ai.retry.eligibleAt ? formatDate(processing.ai.retry.eligibleAt) : t('detail.serverUnknown')}` } : null,
+    processing?.ai.quota ? { label: t('detail.rowAiQuota'), value: `${processing.ai.quota.reason} · ${formatDate(new Date(processing.ai.quota.retryAt).toISOString())}` } : null,
+    processing ? {
+      label: t('detail.rowAiServer'),
+      value: processing.ai.serverQueue ? `${processing.ai.serverQueue.status} · ${formatDate(processing.ai.serverQueue.updated_at)}`
+        : t(processing.ai.serverQueueObserved ? 'detail.serverNoActiveJob' : 'detail.serverUnknown'),
+    } : null,
+    processing ? {
+      label: t('detail.rowAiResult'),
+      value: processing.ai.result ? `${processing.ai.result.status} · ${processing.ai.result.model ?? 'unknown'} · ${t('detail.confidence')}: ${processing.ai.result.confidence ?? 'unknown'}` : none,
+    } : null,
+    { label: t('detail.rowAiChannel'), value: t('detail.aiChannelHelp') },
+    processing?.ai.result ? {
+      label: t('detail.rowAiContent'),
+      value: t('detail.aiContentState', {
+        summary: yesNo(processing.ai.result.hasSummary), tags: processing.ai.result.suggestedTagCount,
+        folder: yesNo(processing.ai.result.hasFolderSuggestion),
+      }),
+    } : null,
+    processing?.ai.result ? { label: t('detail.rowAiUpdated'), value: formatDate(processing.ai.result.updatedAt) } : null,
+    processing?.ai.result?.degradedReason ? { label: t('detail.rowAiDegraded'), value: processing.ai.result.degradedReason } : null,
   ].filter((row): row is { label: string; value: string } => row !== null);
 
   // Sync/metadata are de-emphasized: only surfaced as small chips when they
@@ -807,7 +900,7 @@ export default function BookmarkDetailScreen({
     const nextNotes = notesValue === '' ? summary : `${notesValue}\n\n${summary}`;
     const nextDraft = { value: nextNotes, format: currentNotesFormat };
     changeNotes(nextDraft);
-    commitNotes(nextDraft);
+    commitNotes(nextDraft, 'ai_apply');
     // Durable: don't re-surface an identical summary we've already used.
     if (summaryTok) {
       markSummaryReviewed(bookmark.id, summaryTok);
@@ -1519,6 +1612,20 @@ export default function BookmarkDetailScreen({
                 </PostHogMaskView>
               </View>
             ))}
+            <Text style={[styles.detailLabel, { color: palette.textSecondary }]}>
+              {t('detail.stateHelp')}
+            </Text>
+            <Button
+              variant="ghost"
+              icon="bug-outline"
+              disabled={reportCapturing}
+              onPress={() => void openReport({
+                route: '/bookmark/detail', surface: 'bookmark_detail', bookmarkId: bookmark.id,
+                bookmarkProcessing: getBookmarkProcessing(bookmark.id),
+              })}
+            >
+              {t('detail.reportProblem')}
+            </Button>
           </Card>
         ) : null}
       </View>

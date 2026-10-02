@@ -12,6 +12,7 @@ import type {
   CreateBookmarkInput,
   LocalPendingBookmark,
   SyncErrorKind,
+  SyncChangeSource,
 } from '@/domain/types';
 import { canonicalizeUrl } from '@/domain/urls';
 import { recordLog } from '@/observability/log-buffer';
@@ -1122,12 +1123,14 @@ export function createNeedsReconcileUpdate(
 export function makeMutationEntry(
   bookmarkId: string,
   operation: 'update' | 'delete',
+  source: SyncChangeSource = operation === 'delete' ? 'delete' : 'unknown',
 ): LocalPendingBookmark {
   const now = new Date().toISOString();
   return {
     local_id: bookmarkId,
     remote_id: bookmarkId,
     operation,
+    changes: [{ source, fields: [], at: now }],
     payload: {},
     sync_status: 'pending',
     retry_count: 0,
@@ -1379,7 +1382,7 @@ export function reconcileOrphanedQueueEntries(
     // capture. The reverse mistake (re-`create`-ing an already-synced row) is
     // safe: the server's url_hash dedup resolves it as a duplicate.
     if (bookmark.ever_synced) {
-      entries.push(makeMutationEntry(bookmark.id, 'update'));
+      entries.push(makeMutationEntry(bookmark.id, 'update', 'sync_recovery'));
       continue;
     }
     // Rebuild the create payload from the stored row — for a URL-less text note
@@ -1392,6 +1395,7 @@ export function reconcileOrphanedQueueEntries(
       local_id: bookmark.id,
       remote_id: null,
       operation: 'create',
+      changes: [{ source: 'sync_recovery', fields: [], at: now }],
       payload,
       sync_status: 'pending',
       retry_count: 0,

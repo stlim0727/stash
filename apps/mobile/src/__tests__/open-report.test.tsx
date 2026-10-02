@@ -60,3 +60,14 @@ it('still opens the form when screenshot capture rejects', async () => {
   expect(mockPush).toHaveBeenCalledWith('/report');
   expect(getPendingFeedbackScreenshot()).toBeNull();
 });
+
+it('preserves the explicit bookmark source before asynchronous screenshot capture', async () => {
+  mockCapture.mockResolvedValue(null);
+  const source = { route: '/bookmark/detail', surface: 'bookmark_detail', bookmarkId: 'inline-bookmark' };
+  const { result } = await renderHook(() => useOpenReport('/'));
+  await act(() => { void result.current.openReport(source); });
+  expect(getPendingFeedbackSource()).toEqual(source);
+  await act(async () => { await jest.advanceTimersByTimeAsync(350); });
+  expect(getPendingFeedbackSource()).toEqual(source);
+  expect(mockPush).toHaveBeenCalledWith('/report');
+});

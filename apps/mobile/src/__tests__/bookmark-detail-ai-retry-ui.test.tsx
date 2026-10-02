@@ -37,6 +37,7 @@ jest.mock('@/store/bookmarks', () => {
     ...actual,
     useBookmarks: () => ({
       getBookmark: () => mockBookmark,
+      getBookmarkProcessing: () => undefined,
       queue: [],
       getTagsForBookmark: () => [],
       getCollection: () => undefined,

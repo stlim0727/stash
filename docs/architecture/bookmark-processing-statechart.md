@@ -326,3 +326,136 @@ Realtime subscription.
 - AI direct and worker paths: `supabase/functions/ai-enrich/index.ts`
 - Overflow retry cap: `supabase/functions/ai-enrich/batch-worker.ts`
 - Counter UX contract: `docs/design/settings-processing-counters.md`
+
+## Bookmark Detail: Inspectable State Contract
+
+Detail uses `buildBookmarkProcessingSnapshot` through the store's
+`getBookmarkProcessing(id)`. This is a read-only, per-bookmark projection;
+opening Details must not edit the bookmark or enqueue an upload. The existing
+storage enums and synchronization behavior remain unchanged.
+
+### Sync phase
+
+The outbox is authoritative over `Bookmark.sync_status`. The raw mirror and
+raw queue state remain visible so disagreement is diagnosable.
+
+| Phase | Definition |
+| --- | --- |
+| `local_only` | The existing sync policy excludes this bookmark from cloud upload. |
+| `queued` | A pending outbox entry exists, even if the bookmark mirror says synced. |
+| `syncing` | An outbox entry says syncing and the account sync service is running. This records an attempted upload; it is not proof that a network request is active at this instant. |
+| `interrupted` | An outbox entry still says syncing but the account service is idle. It is eligible for the normal interrupted-upload recovery path. |
+| `failed` | The latest outbox attempt failed. This is an outcome, not necessarily terminal. |
+| `inconsistent` | No outbox entry exists but the bookmark mirror is unsynced, or a supposedly completed entry remains in the outbox. Do not silently treat this as saved. |
+| `synced` | Cloud identity has been confirmed at least once, the bookmark mirror says synced, and no outbox entry remains. It does not guarantee a current server read or completion of metadata, AI, or the separate tag journal. |
+| `not_synced` | No outbox entry exists and the mirror says synced, but the existing identity/confirmation predicate cannot confirm a cloud save (for example seed data). |
+
+For queued work the operation is separately shown as `create`, `update`, or
+`delete`. `everSynced` retains the existing confirmed-identity semantics: a
+later pending update does not erase evidence of an earlier cloud save.
+
+Blockers are independent modifiers, so multiple can be shown at once:
+
+- `paused`: the user paused the account sync service.
+- `auth_unavailable`: no session in an authenticated or anonymous active state.
+- `retry_backoff`: the next automatic retry is not yet eligible. Use the same
+  `uploadRetryBackoffMs` as the uploader, including the network multiplier.
+- `permanent_error`: the uploader's existing permanently-unsyncable predicate
+  rejects this entry; waiting or forcing another retry will not resolve it.
+
+Retry timestamps mean *earliest eligibility*, not a promised execution time.
+A queued item is not labelled uploading merely because some other item or an
+account pull is running. An idle service is not a network-offline diagnosis.
+The last failure's structured kind describes that attempt, not current
+connectivity. Upload field names are hints, not an edit history: a clearing
+update can have an empty payload and metadata work can queue an update without
+any user folder change. Local `updated_at` and account `lastPulledAt` are not
+per-bookmark upload acknowledgement timestamps.
+
+### Independent metadata and AI observations
+
+Detail exposes metadata status and preview refresh separately from sync. AI
+markers also remain separate: waiting for sync (zero provider failures),
+trigger queued, dispatch queued, in flight, retry backoff, and locally confirmed
+server enqueue. A cached AI result can coexist with any of these markers.
+A completed result with no summary, tags, or folder suggestion is explicitly
+inspectable via content counts and confidence; complete does not mean useful.
+
+The account-wide server queue snapshot is an observation, not a live probe.
+`serverQueueObserved = false` means unknown. A fetched snapshot with no entry
+means no active job was observed; it does not imply the server has never
+processed this bookmark. Snapshot rows cover pending/processing/failed, so a
+terminal done job is absent. A job's `updated_at` is its update time, not the
+snapshot fetch time. Quota reset and AI retry eligibility are shown separately.
+
+### Bookmark problem report
+
+The button inside Details opens the existing report form with the resolved
+bookmark ID and a processing snapshot taken **before** screenshot capture or
+navigation. That snapshot is retained even if sync succeeds while the user
+writes the report, and even if the bookmark is deleted or re-keyed afterward.
+The report still resolves a live bookmark/alias for its normal current summary.
+Reports opened elsewhere fall back to a snapshot when the form is collected.
+
+The processing snapshot contains field names, states, counts, timestamps, and
+operational error details; it excludes upload payload values, page URLs,
+titles, notes, AI summary text, tag names, and credentials. URLs and bearer
+values in upload errors are redacted and error length is bounded. Sending the
+report remains the user's explicit action, and screenshots remain opt-in.
+
+Implementation: `domain/bookmark-processing.ts`, `store/bookmarks.tsx`,
+`app/bookmark/[id].tsx`, `feedback/open-report.tsx`, and `app/report.tsx`.
+
+### Upload origin and independent synchronization channels
+
+A sync phase is not its cause. Detail separately exposes local-only outbox
+`changes`: a bounded list of source, actual changed field names, and most recent
+change time for that source. The list merges while work is outstanding and is
+removed with the completed outbox entry; it is not a permanent audit history.
+No field values are stored in this diagnostic provenance.
+
+| Source | Cause |
+| --- | --- |
+| `capture` | New capture or re-saving a bookmark. Operation distinguishes initial create from update. |
+| `import` | Create from a file import/restore. |
+| `account_rehome` | Create under a new account identity; not a new user capture. |
+| `user_edit` | User edits text or changes/removes the folder assignment. |
+| `metadata_fetch` | Automatic page information fetch changes generated fields or processing status. |
+| `preview_refresh` | Explicit preview refresh changes generated fields or processing status. |
+| `ai_apply` | User or auto-accept applies an AI folder or summary suggestion. |
+| `suggestion_review` | Persisted AI review/dismissal state changes. |
+| `trash` / `restore` / `delete` | Trash, restoration, or permanent removal/cleanup. |
+| `sync_recovery` | Reconstruct a missing outbox entry. Original cause may be unknown. |
+| `sync_reconcile` | Follow-up upload needed to reconcile capture and current state. |
+| `unknown` | Legacy work has no recorded origin. Do not infer it from a sparse upload payload. |
+
+Metadata subtypes are represented by actual field differences: title,
+description, site name, favicon, preview image, content type, and metadata
+processing status as applicable. User text, text format, folder assignment,
+trash status, and AI review fields are separately identifiable. Explicit null
+clears count as changes. Local-only provenance/access fields and `updated_at`
+are excluded. One queue entry can therefore show both `user_edit: title` and
+`preview_refresh: preview_image_url`, rather than incorrectly blaming a folder
+change. A source with no fields means that path queued bookkeeping work but
+no tracked remote field differed; field unions describe changes made while
+waiting, not a minimal final diff (a change can later be undone).
+
+The synchronization channels remain independent:
+
+1. **Bookmark upload:** create/update/delete, with origins and fields above.
+2. **Tag uploads:** the separate durable tag journal records add/remove and
+   user/AI/system source. Detail shows unconfirmed uploads separately from
+   acknowledged removal tombstones that are still waiting for pull confirmation.
+   Imported folder assignment has its own pending outbox indication.
+3. **Cloud AI result → device:** an AI result is stored in `ai_enrichments` and
+   received via the direct response or pull. An AI result changing does not by
+   itself imply a bookmark upload. Applying it can produce `ai_apply` bookmark
+   changes (notes/folder), separate AI-origin tag operations, and review-state
+   uploads. Result validity and current AI processing remain separate states.
+
+New provenance is persisted in web localStorage and native SQLite (`changes`
+JSON column; null on pre-upgrade entries) and included in the frozen report
+snapshot. Updating the provenance of an existing create uses a diagnostic-only
+UPDATE, preserving upload status/retries/version and never recreating a queue
+entry that already completed. Retry processing and cloud payloads do not send
+this local-only provenance to the bookmark API.

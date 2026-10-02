@@ -15,6 +15,7 @@
 
 import type { ShareAttemptDiagnostics } from './share-diagnostics';
 import type { PullAttemptDiagnostics } from './pull-diagnostics';
+import type { BookmarkProcessingSnapshot } from './bookmark-processing';
 
 export type DiagnosticsAuthStatus =
   | 'not_configured'
@@ -108,6 +109,7 @@ export interface DiagnosticsInput {
   bookmarkId?: string | null;
   /** High-level operational summary of the bookmark being viewed, if any. */
   bookmark?: DiagnosticsBookmark | null;
+  bookmarkProcessing?: BookmarkProcessingSnapshot | null;
 }
 
 export interface DiagnosticsBookmark {
@@ -204,6 +206,7 @@ export interface DiagnosticsContext {
   bookmarkId?: string;
   /** High-level operational summary of the bookmark being viewed, if any. */
   bookmark?: DiagnosticsBookmark;
+  bookmarkProcessing?: BookmarkProcessingSnapshot;
   capturedAt: string;
 }
 
@@ -367,6 +370,9 @@ export function buildDiagnosticsContext(input: DiagnosticsInput = {}): Diagnosti
     }
   }
 
+  if (input.bookmarkProcessing) {
+    context.bookmarkProcessing = input.bookmarkProcessing;
+  }
   return context;
 }
 

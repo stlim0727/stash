@@ -312,7 +312,19 @@ export type QueueOperation = 'create' | 'update' | 'delete';
  * for retry/backoff and health-escalation purposes. */
 export type SyncErrorKind = 'transient_dns' | 'transient_network' | 'other';
 
+export type SyncChangeSource = 'capture' | 'import' | 'account_rehome' | 'user_edit'
+  | 'metadata_fetch' | 'preview_refresh' | 'ai_apply' | 'suggestion_review'
+  | 'trash' | 'restore' | 'delete' | 'sync_recovery' | 'sync_reconcile' | 'unknown';
+export interface SyncChange {
+  source: SyncChangeSource;
+  fields: string[];
+  /** Most recent change from this source within the outstanding mutation. */
+  at: string;
+}
+
 export interface LocalPendingBookmark {
+  /** Local-only provenance; absent for legacy work whose origin is unknown. */
+  changes?: SyncChange[];
   /** Generated on device. */
   local_id: string;
   /** Supabase bookmark ID after sync. */

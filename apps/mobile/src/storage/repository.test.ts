@@ -315,3 +315,20 @@ test('pending tag intent survives web repository reload independently of the tag
   assert.deepEqual(JSON.parse((await repository.getMeta('pending_tag_ops'))!), ops);
   assert.equal((await repository.listBookmarks())[0]?.id, bookmark.id);
 });
+
+test('sync provenance survives reload without changing the upload attempt and cannot resurrect completed work', async () => {
+  await repository.init([]);
+  const entry = {
+    local_id: 'provenance-id', remote_id: 'provenance-id', operation: 'update' as const,
+    payload: {}, sync_status: 'failed' as const, retry_count: 6, last_error: 'DNS failure',
+    created_at: '2026-10-01T10:00:00Z', updated_at: '2026-10-01T10:01:00Z',
+  };
+  await repository.enqueue(entry);
+  const changes = [{ source: 'preview_refresh' as const, fields: ['preview_image_url'], at: entry.updated_at }];
+  await repository.annotateQueueChanges!(entry.local_id, changes);
+  await repository.init([]);
+  assert.deepEqual((await repository.listQueue())[0], { ...entry, changes });
+  await repository.removeQueueEntry(entry.local_id);
+  await repository.annotateQueueChanges!(entry.local_id, changes);
+  assert.equal((await repository.listQueue()).length, 0);
+});

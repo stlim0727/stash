@@ -15,6 +15,9 @@ import { Platform } from "react-native";
 import { captureAnalytics } from "@/analytics/capture-bridge";
 import { createSyncRecoveredEvent } from "@/analytics/events";
 import { resolveAliasedId } from "@/domain/bookmark-id-swap";
+import { buildBookmarkProcessingSnapshot, type BookmarkProcessingSnapshot } from "@/domain/bookmark-processing";
+import { changedSyncFields, mergeSyncChanges } from "@/domain/sync-changes";
+import type { SyncChangeSource } from "@/domain/types";
 import { mockUserId } from "@/domain/mock-data";
 import { canonicalizeUrl, isUrlTooLong, normalizeUrl } from "@/domain/urls";
 import { makeUuid } from "@/domain/uuid";
@@ -176,6 +179,7 @@ import {
   IMAGE_TOO_LARGE_ERROR_TEXT,
   isLocalOnlyBookmark,
   isPermanentlyUnsyncableUrl,
+  uploadRetryBackoffMs,
   isRowSpecificPermanentSyncErrorText,
   isSyncable,
   makeMutationEntry,
@@ -302,6 +306,7 @@ interface BookmarksContextValue {
   getTagsForBookmark: (id: string) => Tag[];
   getCollection: (id: string | null) => Collection | undefined;
   getEnrichment: (bookmarkId: string) => AIEnrichment | undefined;
+  getBookmarkProcessing: (bookmarkId: string) => BookmarkProcessingSnapshot | undefined;
   /** Local-first creation: the bookmark is visible immediately with pending states. */
   addBookmark: (input: {
     url?: string;
@@ -349,6 +354,7 @@ interface BookmarksContextValue {
   updateBookmarkFields: (
     id: string,
     fields: { title?: string; notes?: string; description?: string; description_format?: TextFormat; notes_format?: TextFormat },
+    source?: "user_edit" | "ai_apply",
   ) => void;
   /**
    * Record that the user opened a bookmark (viewed Detail or opened its link),
@@ -518,7 +524,7 @@ interface BookmarksContextValue {
    *  opens the Review screen (witnesses them all). Durable. */
   clearUnseenSuggestions: () => void;
   /** Move a bookmark into a collection (or out, with null). Local-first. */
-  assignCollection: (bookmarkId: string, collectionId: string | null) => void;
+  assignCollection: (bookmarkId: string, collectionId: string | null, source?: "user_edit" | "ai_apply") => void;
   /** Create a cloud collection. Resolves to the collection or an error message. */
   createCollection: (
     name: string,
@@ -1391,8 +1397,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // Queue a remote mutation for a bookmark that already exists on the server.
   // One entry per bookmark: a newer mutation supersedes an older one.
   const enqueueMutation = useCallback(
-    (bookmarkId: string, operation: "update" | "delete") => {
+    (bookmarkId: string, operation: "update" | "delete", source: SyncChangeSource = operation === "delete" ? "delete" : "sync_reconcile", fields: string[] = []) => {
+      const previous = queueRef.current.find((item) => item.local_id === bookmarkId);
       const entry = makeMutationEntry(bookmarkId, operation);
+      entry.changes = mergeSyncChanges(previous?.changes ?? (previous ? [{ source: "unknown", fields: [], at: previous.created_at }] : []), {
+        source, fields, at: entry.created_at,
+      });
       setQueue((current) => [
         ...current.filter((queued) => queued.local_id !== bookmarkId),
         entry,
@@ -1418,10 +1428,23 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  // Annotate an outstanding create without changing upload status, retry count,
+  // payload, or its mutation version. This is diagnostic data, not new work.
+  const noteQueuedChange = useCallback((id: string, source: SyncChangeSource, fields: string[]) => {
+    const previous = queueRef.current.find((entry) => entry.local_id === id);
+    if (!previous) return;
+    const next = { ...previous, changes: mergeSyncChanges(previous.changes ?? [{ source: "unknown", fields: [], at: previous.created_at }], {
+      source, fields, at: new Date().toISOString(),
+    }) };
+    queueRef.current = queueRef.current.map((entry) => entry.local_id === id ? next : entry);
+    setQueue((current) => current.map((entry) => entry.local_id === id ? next : entry));
+    void ensureRepositoryReady().then(() => repository.annotateQueueChanges?.(id, next.changes)).catch((error) => logStorageError("sync provenance", error));
+  }, []);
+
   // Local-first edit of user-editable fields: apply + persist immediately,
   // show as sync-pending, and queue an update mutation for synced bookmarks.
   const applyBookmarkUpdate = useCallback(
-    (id: string, patch: Partial<Bookmark>) => {
+    (id: string, patch: Partial<Bookmark>, source: SyncChangeSource = "user_edit") => {
       const syncsRemotely = hasSyncedOnce(id);
       setBookmarks((current) => {
         if (current === null) {
@@ -1468,11 +1491,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           .then(() => repository.updateBookmark(next))
           .catch((error) => logStorageError("bookmark update", error));
         if (syncsRemotely) {
-          enqueueMutation(id, "update");
+          enqueueMutation(id, "update", source, changedSyncFields(existing, patch));
+        } else {
+          noteQueuedChange(id, source, changedSyncFields(existing, patch));
         }
       }
     },
-    [enqueueMutation, hasSyncedOnce],
+    [enqueueMutation, hasSyncedOnce, noteQueuedChange],
   );
 
   // Suggestion review/dismissal helpers
@@ -1500,14 +1525,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       ];
       applyBookmarkUpdate(bookmarkId, {
         dismissed_suggested_tags: updatedTags,
-      });
+      }, "suggestion_review");
     },
     [applyBookmarkUpdate],
   );
 
   const clearReviewedSuggestions = useCallback(
     (bookmarkId: string) => {
-      applyBookmarkUpdate(bookmarkId, { dismissed_suggested_tags: [] });
+      applyBookmarkUpdate(bookmarkId, { dismissed_suggested_tags: [] }, "suggestion_review");
     },
     [applyBookmarkUpdate],
   );
@@ -1532,14 +1557,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       ];
       applyBookmarkUpdate(bookmarkId, {
         dismissed_suggested_folders: updatedFolders,
-      });
+      }, "suggestion_review");
     },
     [applyBookmarkUpdate],
   );
 
   const clearDismissedFolderSuggestions = useCallback(
     (bookmarkId: string) => {
-      applyBookmarkUpdate(bookmarkId, { dismissed_suggested_folders: [] });
+      applyBookmarkUpdate(bookmarkId, { dismissed_suggested_folders: [] }, "suggestion_review");
     },
     [applyBookmarkUpdate],
   );
@@ -1560,14 +1585,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       ];
       applyBookmarkUpdate(bookmarkId, {
         reviewed_summary_tokens: updatedSummaries,
-      });
+      }, "suggestion_review");
     },
     [applyBookmarkUpdate],
   );
 
   const clearReviewedSummary = useCallback(
     (bookmarkId: string) => {
-      applyBookmarkUpdate(bookmarkId, { reviewed_summary_tokens: [] });
+      applyBookmarkUpdate(bookmarkId, { reviewed_summary_tokens: [] }, "suggestion_review");
     },
     [applyBookmarkUpdate],
   );
@@ -2211,16 +2236,19 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // it on their next pull. Only for already-synced bookmarks: a local
           // bookmark's create upload already sends its latest fields.
           if (hasSyncedOnce(updated.id)) {
-            enqueueMutation(updated.id, "update");
+            enqueueMutation(updated.id, "update", "metadata_fetch", changedSyncFields(latest, { ...safePatch, metadata_status }));
           } else if (generatedTitleChanged) {
             pendingGeneratedTitleUpdates.current.add(updated.id);
+          }
+          if (!hasSyncedOnce(updated.id)) {
+            noteQueuedChange(updated.id, "metadata_fetch", changedSyncFields(latest, { ...safePatch, metadata_status }));
           }
         } finally {
           enriching.current.delete(bookmark.id);
         }
       });
     },
-    [enqueueMutation, hasSyncedOnce],
+    [enqueueMutation, hasSyncedOnce, noteQueuedChange],
   );
 
   useEffect(() => {
@@ -2382,7 +2410,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                         error,
                       ),
                     );
-                  enqueueMutation(updated.id, "update");
+                  enqueueMutation(updated.id, "update", "suggestion_review", ["dismissed_suggested_tags", "dismissed_suggested_folders", "reviewed_summary_tokens"]);
                   return updated;
                 }
                 return bookmark;
@@ -2863,6 +2891,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           local_id: id,
           remote_id: null,
           operation: "create",
+          changes: [{ source: "capture", fields: [], at: now }],
           payload: {
             id,
             // The explicit signal requirePayload needs — there's no
@@ -3020,6 +3049,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           local_id: note.id,
           remote_id: null,
           operation: "create",
+          changes: [{ source: "capture", fields: [], at: noteNow }],
           payload: {
             id: note.id,
             title: note.title ?? undefined,
@@ -3159,7 +3189,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         }
 
         if (syncsRemotely) {
-          enqueueMutation(existing.id, "update");
+          enqueueMutation(existing.id, "update", "capture", changedSyncFields(existing, updated));
         }
 
         if (needsMetadataRefresh) {
@@ -3212,6 +3242,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         local_id: bookmark.id,
         remote_id: null,
         operation: "create",
+        changes: [{ source: "capture", fields: [], at: now }],
         payload: {
           id: bookmark.id,
           url: normalized,
@@ -3426,6 +3457,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               local_id: id,
               remote_id: null,
               operation: "create",
+              changes: [{ source: "import", fields: [], at: now }],
               payload: {
                 id,
                 shared_text: memoBody ?? undefined,
@@ -3570,6 +3602,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             local_id: id,
             remote_id: null,
             operation: "create",
+            changes: [{ source: "import", fields: [], at: now }],
             payload: {
               id,
               url: normalized,
@@ -3881,7 +3914,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
   const trashBookmark = useCallback(
     (id: string) => {
-      applyBookmarkUpdate(id, { deleted_at: new Date().toISOString() });
+      applyBookmarkUpdate(id, { deleted_at: new Date().toISOString() }, "trash");
       // Trashed: nothing left to retry enriching until restored — mirrors
       // deleteBookmark's cleanup so a discarded bookmark doesn't keep
       // consuming retry attempts (and, if one eventually succeeds, silently
@@ -3896,7 +3929,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   );
 
   const restoreBookmark = useCallback(
-    (id: string) => applyBookmarkUpdate(id, { deleted_at: null }),
+    (id: string) => applyBookmarkUpdate(id, { deleted_at: null }, "restore"),
     [applyBookmarkUpdate],
   );
 
@@ -3904,6 +3937,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     (
       id: string,
       fields: { title?: string; notes?: string; description?: string; description_format?: TextFormat; notes_format?: TextFormat },
+      source: "user_edit" | "ai_apply" = "user_edit",
     ) => {
       const before = bookmarksRef.current?.find(
         (bookmark) => bookmark.id === id,
@@ -3934,7 +3968,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         (patch.notes !== undefined && patch.notes !== (before?.notes ?? null)) ||
         (patch.description !== undefined &&
           patch.description !== (before?.description ?? null));
-      applyBookmarkUpdate(id, patch);
+      applyBookmarkUpdate(id, patch, source);
       if (textChanged) {
         if (patch.title !== undefined && !hasSyncedOnce(id)) {
           pendingUserTitleEdits.current.add(id);
@@ -4045,7 +4079,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           logStorageError("preview refresh", error);
         }
         if (syncsRemotely) {
-          enqueueMutation(id, "update");
+          enqueueMutation(id, "update", "preview_refresh", changedSyncFields(latest, nextPatch));
+        } else {
+          noteQueuedChange(id, "preview_refresh", changedSyncFields(latest, nextPatch));
         }
         // STASH #573: 'off' means never auto-trigger AI enrichment. This is a
         // direct continuation of the user's own "refresh preview" tap (not a
@@ -4098,6 +4134,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     },
     [
       enqueueMutation,
+      noteQueuedChange,
       previewRefreshingIds,
       hasSyncedOnce,
       markPendingAiPreviewRefresh,
@@ -4826,7 +4863,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           deferAiEnrichmentUntilSync(bookmarkId);
           aiTriggerAttempted.current.delete(bookmarkId);
           return source === "manual"
-            ? "Folder changes must finish syncing before generating AI suggestions."
+            ? "This bookmark must finish syncing before generating AI suggestions."
             : "sync_deferred";
         }
         const metadata: EnrichmentMetadataHint | undefined = latest
@@ -5359,7 +5396,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   );
 
   const assignCollection = useCallback(
-    (bookmarkId: string, collectionId: string | null) => {
+    (bookmarkId: string, collectionId: string | null, source: "user_edit" | "ai_apply" = "user_edit") => {
       // A direct user move is newer than an imported folder hint. Remove the
       // hint synchronously from the active outbox so a later retry cannot move
       // the bookmark back to its stale imported collection.
@@ -5370,7 +5407,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (remaining.length !== pendingImportCollectionsRef.current.length) {
         applyPendingImportCollections(remaining);
       }
-      applyBookmarkUpdate(bookmarkId, { collection_id: collectionId });
+      applyBookmarkUpdate(bookmarkId, { collection_id: collectionId }, source);
     },
     [applyBookmarkUpdate, applyPendingImportCollections],
   );
@@ -8521,6 +8558,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // otherwise re-fire this effect every render. We reset the guard whenever we
   // leave `signed_out`, so a later save (or a recovered network) tries again.
   const lazyMintInFlight = useRef(false);
+  // Provenance annotations are observations, not a new save or retry signal.
+  // Depend on operational queue state so annotating the first capture cannot
+  // trigger another anonymous-session attempt after a failed mint.
+  const lazyMintQueueKey = JSON.stringify(queue.map((entry) => [
+    entry.local_id, entry.operation, entry.sync_status, entry.updated_at, entry.retry_count,
+  ]));
   useEffect(() => {
     if (auth.status !== "signed_out") {
       lazyMintInFlight.current = false;
@@ -8529,7 +8572,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     if (
       lazyMintInFlight.current ||
       bookmarks === null ||
-      !queue.some(
+      !queueRef.current.some(
         (entry) =>
           entry.sync_status === "pending" || entry.sync_status === "syncing",
       )
@@ -8555,7 +8598,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         lazyMintInFlight.current = false;
         logStorageError("lazy anonymous mint", error);
       });
-  }, [auth, bookmarks, queue]);
+  }, [auth, bookmarks, lazyMintQueueKey]);
 
   // Pull on first ready, and again whenever the signed-in user changes —
   // including the anonymous → real upgrade at sign-in and an account switch.
@@ -8833,6 +8876,40 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [loadedBookmarks],
   );
 
+  const getBookmarkProcessing = useCallback((bookmarkId: string) => {
+    const resolvedId = resolveAliasedId(bookmarkId, idAliases.current);
+    const bookmark = bookmarksRef.current?.find((item) => item.id === resolvedId);
+    if (!bookmark) return undefined;
+    const entry = queueRef.current.find((item) => item.local_id === resolvedId);
+    const retryAt = entry?.sync_status === "failed" && entry.last_attempt_at
+      ? Date.parse(entry.last_attempt_at) + uploadRetryBackoffMs(entry) : null;
+    const retry = aiRetryState.current[resolvedId];
+    return buildBookmarkProcessingSnapshot({
+      bookmark, queue: entry, localOnly: isLocalOnlyBookmark(bookmark),
+      syncedOnce: isBookmarkSyncedOnce(bookmark), authStatus: auth.status,
+      hasSession: Boolean(auth.session) && (auth.status === "anonymous" || auth.status === "authenticated"), syncPaused: syncPausedRef.current,
+      isSyncing, lastPulledAt, retryEligibleAt: retryAt !== null && Number.isFinite(retryAt) ? retryAt : null,
+      permanentlyUnsyncable: Boolean(entry && isPermanentlyUnsyncableUrl(entry)),
+      refreshing: previewRefreshingIds.has(resolvedId),
+      triggerPending: pendingAiTrigger.current.has(resolvedId),
+      dispatchPending: aiDispatchQueueRef.current.pending.includes(resolvedId),
+      inFlight: aiEnriching.current.has(resolvedId),
+      aiRetry: retry ? { ...retry, eligibleAt: Date.parse(retry.lastAttemptAt) + (AI_RETRY_BACKOFF_MS[retry.attemptCount] ?? 0) } : null,
+      confirmedServerQueued: aiServerQueued.current.has(resolvedId),
+      serverQueue: aiServerQueueSnapshot?.find((item) => item.bookmark_id === resolvedId) ?? null,
+      serverQueueObserved: aiServerQueueSnapshot !== null,
+      aiMode: aiSuggestionsMode, quota: aiQuotaExceeded,
+      enrichment: enrichmentsRef.current.find((item) => item.bookmark_id === resolvedId),
+      tagUploads: pendingTagOpsRef.current.filter((op) => op.bookmark_id === resolvedId).map((op) => ({
+        operation: op.op, source: op.source, confirmed: op.confirmed === true,
+        retries: op.retry_count ?? 0, errorKind: op.last_error_kind ?? null,
+      })),
+      importFolderPending: pendingImportCollectionsRef.current.some((item) => item.bookmark_id === resolvedId),
+      now: Date.now(),
+    });
+  }, [auth.status, auth.session, isSyncing, lastPulledAt, previewRefreshingIds,
+    aiServerQueueSnapshot, aiSuggestionsMode, aiQuotaExceeded]);
+
   const value = useMemo<BookmarksContextValue>(
     () => ({
       isLoading: bookmarks === null,
@@ -8844,6 +8921,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       getTagsForBookmark,
       getCollection,
       getEnrichment,
+      getBookmarkProcessing,
       addBookmark,
       importBookmarks,
       trashBookmark,
@@ -8903,6 +8981,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       getTagsForBookmark,
       getCollection,
       getEnrichment,
+      getBookmarkProcessing,
       addBookmark,
       importBookmarks,
       trashBookmark,

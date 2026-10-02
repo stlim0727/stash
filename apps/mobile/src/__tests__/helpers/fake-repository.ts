@@ -118,6 +118,9 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
     updateQueueEntry: async (entry) => {
       queue = [...queue.filter((q) => q.local_id !== entry.local_id), entry];
     },
+    annotateQueueChanges: async (id, changes) => {
+      queue = queue.map((entry) => entry.local_id === id ? { ...entry, changes } : entry);
+    },
     removeQueueEntry: async (localId) => {
       queue = queue.filter((q) => q.local_id !== localId);
     },

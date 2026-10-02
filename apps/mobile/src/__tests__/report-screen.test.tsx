@@ -82,6 +82,7 @@ import {
   setPendingFeedbackScreenshot,
 } from '@/feedback/screenshot-session';
 import { feedbackSourceFromPath } from '@/feedback/open-report';
+import { buildBookmarkProcessingSnapshot } from '@/domain/bookmark-processing';
 import { getLogEntries } from '@/observability/log-buffer';
 import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
 import { type FakeRepositoryModule, makeStoredBookmark } from './helpers/fake-repository';
@@ -354,6 +355,23 @@ test('coarsens dynamic report source routes before tagging screenshots and captu
 });
 
 test('attaches bookmarkId and operational bookmark diagnostics when reporting from detail screen', async () => {
+  // The upload settled while the report form was open. Keep the failure the
+  // user saw, alongside the normal live bookmark summary below.
+  const observed = buildBookmarkProcessingSnapshot({
+    bookmark: makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000f1', sync_status: 'failed' }),
+    queue: {
+      local_id: '7e64cf1e-0000-4000-8000-0000000000f1', remote_id: null,
+      operation: 'update', sync_status: 'failed', payload: { notes: 'Private queued note' },
+      retry_count: 6, last_error: 'Host unresolved', last_error_kind: 'transient_dns',
+      created_at: '2026-09-28T01:00:00Z', updated_at: '2026-09-28T01:05:00Z',
+    },
+    localOnly: false, syncedOnce: true, authStatus: 'authenticated', hasSession: true,
+    syncPaused: false, isSyncing: false, lastPulledAt: null, retryEligibleAt: null,
+    permanentlyUnsyncable: false, refreshing: false, triggerPending: false,
+    dispatchPending: false, inFlight: false, aiRetry: null, confirmedServerQueued: false,
+    serverQueue: null, serverQueueObserved: false, aiMode: 'confirm', quota: null,
+    now: Date.parse('2026-09-28T01:05:01Z'),
+  });
   fakeRepo.__reset([
     makeStoredBookmark({
       id: '7e64cf1e-0000-4000-8000-0000000000f1',
@@ -373,6 +391,7 @@ test('attaches bookmarkId and operational bookmark diagnostics when reporting fr
     route: '/bookmark/detail',
     surface: 'bookmark_detail',
     bookmarkId: '7e64cf1e-0000-4000-8000-0000000000f1',
+    bookmarkProcessing: observed,
   });
 
   const submitReport = jest.fn(async (_input: unknown) => {});
@@ -392,6 +411,8 @@ test('attaches bookmarkId and operational bookmark diagnostics when reporting fr
     context: Record<string, unknown>;
   };
   expect(arg.context.bookmarkId).toBe('7e64cf1e-0000-4000-8000-0000000000f1');
+  expect(arg.context.bookmarkProcessing).toEqual(observed);
+  expect(JSON.stringify(arg.context)).not.toContain('Private queued note');
   expect(arg.context.bookmark).toEqual({
     id: '7e64cf1e-0000-4000-8000-0000000000f1',
     hasUrl: true,

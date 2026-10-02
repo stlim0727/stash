@@ -267,7 +267,7 @@ export default function ReviewScreen() {
     const currentNotes = item.notes ?? '';
     const nextNotes = currentNotes.trim() === '' ? item.summary : `${currentNotes}\n\n${item.summary}`;
     const safeNotes = nextNotes.length > MAX_NOTES_LENGTH ? nextNotes.slice(0, MAX_NOTES_LENGTH) : nextNotes;
-    updateBookmarkFields(item.id, { notes: safeNotes });
+    updateBookmarkFields(item.id, { notes: safeNotes }, 'ai_apply');
     markSummaryReviewed(item.id, item.summaryTok);
   };
 

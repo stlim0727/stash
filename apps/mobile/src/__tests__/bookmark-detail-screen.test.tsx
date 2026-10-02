@@ -89,6 +89,10 @@ jest.mock('expo-clipboard', () => ({
 
 const mockNavigate = jest.fn();
 const mockDismissTo = jest.fn();
+const mockOpenReport = jest.fn(async (_source: unknown) => {});
+jest.mock('@/feedback/open-report', () => ({
+  useOpenReport: () => ({ openReport: mockOpenReport, capturing: false }),
+}));
 // The detail screen reads the bookmark id from the route; tests set it.
 let mockRouteId = 'bookmark-raindrop';
 jest.mock('expo-router', () => {
@@ -130,6 +134,31 @@ function renderDetail() {
     </BookmarksProvider>,
   );
 }
+
+test('Details shows independent processing state and reports the inline bookmark identity', async () => {
+  mockRouteId = 'different-route-id';
+  mockOpenReport.mockClear();
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, sync_status: 'synced', metadata_status: 'complete' })]);
+  const screen = await render(
+    <BookmarksProvider>
+      <CaptureToastProvider>
+        <BookmarkDetailScreen inlineId={SYNCED_ID} />
+      </CaptureToastProvider>
+    </BookmarksProvider>,
+  );
+  await waitFor(() => expect(screen.getByLabelText('Toggle details')).toBeTruthy());
+  await fireEvent.press(screen.getByLabelText('Toggle details'));
+  expect(screen.getByText(SYNCED_ID)).toBeTruthy();
+  expect(screen.getByText('Cloud save confirmed; no pending upload (synced)')).toBeTruthy();
+  expect(screen.getByText('Page information state')).toBeTruthy();
+  expect(screen.getByText('Not checked on this device')).toBeTruthy();
+  await fireEvent.press(screen.getByText('Report a problem with this bookmark'));
+  expect(mockOpenReport).toHaveBeenCalledWith(expect.objectContaining({
+    bookmarkId: SYNCED_ID, surface: 'bookmark_detail',
+    bookmarkProcessing: expect.objectContaining({ bookmarkId: SYNCED_ID,
+      sync: expect.objectContaining({ phase: 'synced', queue: null }) }),
+  }));
+});
 
 test('tapping a tag chip navigates to the Inbox filtered by that tag', async () => {
   mockRouteId = 'bookmark-raindrop';
