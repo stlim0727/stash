@@ -8,13 +8,17 @@ jest.mock('react-native-safe-area-context', () => ({
 jest.mock('@/storage/repository', () =>
   require('./helpers/fake-repository').createFakeRepositoryModule(),
 );
+let mockCloudAvailable = true;
+let mockAuthStatus = 'anonymous';
+let mockOffline = false;
+jest.mock('@/ui/use-network-offline', () => ({ useNetworkOffline: () => mockOffline }));
 jest.mock('@/supabase/auth-provider', () => ({
   useSupabaseAuth: () => ({
-    status: 'anonymous',
+    status: mockAuthStatus,
     email: null,
     displayName: null,
     avatarUrl: null,
-    isSignedIn: true,
+    isSignedIn: mockCloudAvailable,
     userId: 'user-1',
     message: '',
     signIn: jest.fn(async () => ({ ok: true })),
@@ -138,4 +142,44 @@ test.each([['retrying', 'Sync delayed · retrying automatically'], ['attention',
     expect(screen.queryByText('All work complete')).toBeNull();
     await screen.unmount();
   } finally { mockRecoveryPhase = null; }
+});
+
+
+test.each(['working', 'paused', 'offline'])('local-only %s does not advertise cloud progress', async (phase) => {
+  mockCloudAvailable = false;
+  mockAuthStatus = 'not_configured';
+  mockRecoveryPhase = phase;
+  try {
+    const screen = await renderSettings();
+    expect(screen.getByText('All work complete')).toBeTruthy();
+    expect(screen.queryByLabelText('Sync')).toBeNull();
+    expect(screen.queryByLabelText('Will sync automatically when connected')).toBeNull();
+    await screen.unmount();
+  } finally { mockCloudAvailable = true; mockAuthStatus = 'anonymous'; mockRecoveryPhase = null; }
+});
+
+test.each(['sign_in', 'permission', 'attention'])('offline %s has no enabled cloud retry', async (phase) => {
+  mockOffline = true;
+  mockRecoveryPhase = phase;
+  mockRetrySync.mockClear();
+  try {
+    const screen = await renderSettings();
+    expect(screen.queryByLabelText('Sync')).toBeNull();
+    expect(screen.getByLabelText('Will sync automatically when connected')).toBeTruthy();
+    expect(mockRetrySync).not.toHaveBeenCalled();
+    await screen.unmount();
+  } finally { mockOffline = false; mockRecoveryPhase = null; }
+});
+
+
+test('session recovery remains actionable without cloud availability', async () => {
+  mockCloudAvailable = false;
+  mockAuthStatus = 'error';
+  mockRecoveryPhase = 'sign_in';
+  try {
+    const screen = await renderSettings();
+    expect(screen.queryByText('All work complete')).toBeNull();
+    expect(screen.getByLabelText('Sign in with Google')).toBeTruthy();
+    await screen.unmount();
+  } finally { mockCloudAvailable = true; mockAuthStatus = 'anonymous'; mockRecoveryPhase = null; }
 });

@@ -107,3 +107,10 @@ See the [Expo Network documentation](https://docs.expo.dev/versions/v56.0.0/sdk/
 Tests cover transition sequences, all cloud channels, HTTP provenance,
 backoff deadlines, restored failed uploads, failed pulls with empty outboxes,
 pause/session/offline cancellation, reconnect, and network observer ordering.
+
+Settings advertises cloud progress only with an active cloud session. Its
+manual sync control also checks observed connectivity independently of the
+aggregate phase, because authentication and permission failures take priority
+over offline in that projection. Native image uploads preserve non-success
+HTTP status in `SupabaseRequestError` so they share the same authentication,
+permission, and retryable HTTP policies as bookmark requests.

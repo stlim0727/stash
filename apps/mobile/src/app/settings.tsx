@@ -70,6 +70,7 @@ import { pickImportFile } from "@/share/import-data";
 import { useBookmarks } from "@/store/bookmarks";
 import { isPermanentlyUnsyncableUrl } from "@/sync/sync-bookmarks";
 import { useSupabaseAuth } from "@/supabase/auth-provider";
+import { useNetworkOffline } from "@/ui/use-network-offline";
 import type { OAuthProvider } from "@/supabase/types";
 import { useAnalytics } from "@/analytics/provider";
 import { usePostHogFull } from "@/analytics-full/posthog-full-runtime";
@@ -192,6 +193,7 @@ export default function SettingsScreen() {
   const [aiSuggestionsSheetOpen, setAiSuggestionsSheetOpen] = useState(false);
   const [processingDetailsOpen, setProcessingDetailsOpen] = useState(false);
   const auth = useSupabaseAuth();
+  const offline = useNetworkOffline();
   const analytics = useAnalytics();
   const [analyticsBusy, setAnalyticsBusy] = useState(false);
   const sessionReplay = usePostHogFull();
@@ -778,7 +780,7 @@ export default function SettingsScreen() {
     hasPending &&
     !isSyncing &&
     !isResettingLibrary &&
-    !syncPaused && librarySyncFlow?.phase !== "offline";
+    !syncPaused && !offline && librarySyncFlow?.phase !== "offline";
 
   // A bookmark may be uploading, fetching metadata, and queued for AI at the
   // same time. `processingStats` assigns it to exactly one display stage
@@ -791,7 +793,7 @@ export default function SettingsScreen() {
   const aiQuotaResetTime = aiQuotaExceeded
     ? formatQuotaResetTime(aiQuotaExceeded.retryAt, formatDate)
     : null;
-  const incompleteSyncSummary = librarySyncFlow?.phase === "retrying" ? t("library.delayed")
+  const incompleteSyncSummary = !cloudAvailable && librarySyncFlow?.phase !== "sign_in" ? null : librarySyncFlow?.phase === "retrying" ? t("library.delayed")
     : librarySyncFlow?.phase === "attention" ? t("library.attention")
     : librarySyncFlow?.phase === "sign_in" ? t(auth.status === "error" || auth.status === "session_expired" ? "library.resume" : "library.attention")
     : librarySyncFlow?.phase === "permission" ? t("library.permission")
@@ -969,7 +971,7 @@ export default function SettingsScreen() {
           testID="processing-summary"
           right={
             <View style={styles.syncActions}>
-              {isSyncing ? (
+              {cloudAvailable && isSyncing ? (
                 <ActivityIndicator color={palette.textSecondary} />
               ) : canSync ? (
                 <Pressable
@@ -984,7 +986,7 @@ export default function SettingsScreen() {
                 >
                   <Ionicons name="refresh" size={18} color={palette.accent} />
                 </Pressable>
-              ) : librarySyncFlow?.phase === "offline" ? (
+              ) : cloudAvailable && (offline || librarySyncFlow?.phase === "offline") ? (
                 <View accessibilityRole="text" accessibilityLiveRegion="polite" accessibilityLabel={t("library.offline")}>
                   <Ionicons name="cloud-offline-outline" size={20} color={palette.textSecondary} />
                 </View>

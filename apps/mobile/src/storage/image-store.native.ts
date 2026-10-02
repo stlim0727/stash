@@ -10,6 +10,7 @@
  */
 
 import { Directory, File, Paths, UploadType } from 'expo-file-system';
+import { SupabaseRequestError } from '@/supabase/client';
 
 /** Subdirectory under the document directory that holds captured images. */
 const IMAGE_DIR = 'stash-images';
@@ -63,6 +64,6 @@ export async function uploadImageFile(
     headers,
   });
   if (result.status < 200 || result.status >= 300) {
-    throw new Error(`Image upload failed with HTTP ${result.status}: ${result.body.slice(0, 200)}`);
+    throw new SupabaseRequestError(`Image upload failed with HTTP ${result.status}: ${result.body.slice(0, 200)}`, result.status);
   }
 }
