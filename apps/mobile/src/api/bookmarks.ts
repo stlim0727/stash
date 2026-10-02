@@ -963,58 +963,14 @@ export class BookmarkApi {
     if (collectionIds.length === 0) {
       return;
     }
-    try {
-      await this.client.request('/rest/v1/rpc/delete_user_collections', {
-        method: 'POST',
-        accessToken: this.session.access_token,
-        body: {
-          collection_ids: collectionIds,
-          delete_action: action,
-        },
-      });
-      return;
-    } catch (error) {
-      if (error instanceof SupabaseRequestError && error.status === 404) {
-        const timestamp = nowIso();
-        const patchBody =
-          action === 'trash'
-            ? { collection_id: null, deleted_at: timestamp, updated_at: timestamp }
-            : { collection_id: null, updated_at: timestamp };
-
-        // Fallback: update remote member bookmarks first, then delete collections
-        await this.client.request(
-          appendSearchParams(
-            '/rest/v1/bookmarks',
-            new URLSearchParams({
-              user_id: `eq.${this.session.user.id}`,
-              collection_id: `in.${inFilter(collectionIds)}`,
-            }),
-          ),
-          {
-            method: 'PATCH',
-            accessToken: this.session.access_token,
-            headers: { Prefer: 'return=minimal' },
-            body: patchBody,
-          },
-        );
-
-        await this.client.request(
-          appendSearchParams(
-            '/rest/v1/collections',
-            new URLSearchParams({
-              user_id: `eq.${this.session.user.id}`,
-              id: `in.${inFilter(collectionIds)}`,
-            }),
-          ),
-          {
-            method: 'DELETE',
-            accessToken: this.session.access_token,
-          },
-        );
-        return;
-      }
-      throw error;
-    }
+    await this.client.request('/rest/v1/rpc/delete_user_collections', {
+      method: 'POST',
+      accessToken: this.session.access_token,
+      body: {
+        collection_ids: collectionIds,
+        delete_action: action,
+      },
+    });
   }
 
   async mergeCollections(
@@ -1025,57 +981,14 @@ export class BookmarkApi {
     if (sources.length === 0) {
       return;
     }
-    try {
-      await this.client.request('/rest/v1/rpc/merge_user_collections', {
-        method: 'POST',
-        accessToken: this.session.access_token,
-        body: {
-          source_collection_ids: sources,
-          target_collection_id: targetCollectionId,
-        },
-      });
-      return;
-    } catch (error) {
-      if (error instanceof SupabaseRequestError && error.status === 404) {
-        const timestamp = nowIso();
-
-        // Fallback: reassign remote bookmarks first, then delete source collections
-        await this.client.request(
-          appendSearchParams(
-            '/rest/v1/bookmarks',
-            new URLSearchParams({
-              user_id: `eq.${this.session.user.id}`,
-              collection_id: `in.${inFilter(sources)}`,
-            }),
-          ),
-          {
-            method: 'PATCH',
-            accessToken: this.session.access_token,
-            headers: { Prefer: 'return=minimal' },
-            body: {
-              collection_id: targetCollectionId,
-              updated_at: timestamp,
-            },
-          },
-        );
-
-        await this.client.request(
-          appendSearchParams(
-            '/rest/v1/collections',
-            new URLSearchParams({
-              user_id: `eq.${this.session.user.id}`,
-              id: `in.${inFilter(sources)}`,
-            }),
-          ),
-          {
-            method: 'DELETE',
-            accessToken: this.session.access_token,
-          },
-        );
-        return;
-      }
-      throw error;
-    }
+    await this.client.request('/rest/v1/rpc/merge_user_collections', {
+      method: 'POST',
+      accessToken: this.session.access_token,
+      body: {
+        source_collection_ids: sources,
+        target_collection_id: targetCollectionId,
+      },
+    });
   }
 
   private async fetchAllPages<T>(
