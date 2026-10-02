@@ -1,4 +1,5 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { Alert } from 'react-native';
 import type { ReactNode } from 'react';
 
 jest.mock('react-native-safe-area-context', () => ({
@@ -157,5 +158,24 @@ test('the honest, distinct copy for the session replay toggle renders', async ()
         'Records anonymized screen sessions (with bookmark text and images hidden) and enables in-app surveys and experimental features',
       ),
     ).toBeTruthy(),
+  );
+});
+
+test('turning on base analytics shows an error alert when setEnabled rejects', async () => {
+  mockAnalyticsSetEnabled.mockRejectedValue(new Error('Analytics transport could not be enabled'));
+  const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+
+  const screen = await renderSettings();
+  const toggle = await waitFor(() =>
+    screen.getByLabelText('Share privacy-safe usage analytics'),
+  );
+
+  await act(async () => {
+    fireEvent(toggle, 'valueChange', true);
+  });
+
+  expect(alertSpy).toHaveBeenCalledWith(
+    'Could not save analytics preference',
+    expect.any(String),
   );
 });

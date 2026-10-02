@@ -169,7 +169,9 @@ export function AnalyticsProvider({ children }: { children: ReactNode }) {
       // reuse is handled separately above when the stored consent is already on.
       await clearPostHogAnalyticsState();
       const connected = await runtime.enable(true);
-      if (!connected) return;
+      if (!connected) {
+        throw new Error('Analytics transport could not be enabled');
+      }
       setEnabledState(true);
       setAdExperimentEnabled(
         await adFlag.refresh(() => runtime.reloadBooleanFlag(AD_EXPERIMENT_FLAG_KEY)),
