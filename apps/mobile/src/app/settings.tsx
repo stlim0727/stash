@@ -96,6 +96,14 @@ const webOverscrollContain: StyleProp<ViewStyle> =
     ? ({ overscrollBehavior: "contain" } as ViewStyle)
     : undefined;
 
+function showAlert(title: string, message?: string) {
+  if (Platform.OS === "web" && typeof alert !== "undefined") {
+    alert(message ? `${title}\n${message}` : title);
+    return;
+  }
+  Alert.alert(title, message);
+}
+
 type AppPalette = ReturnType<typeof usePalette>;
 
 /** Sign-in providers, in display order (Google first), with logo + a11y keys. */
@@ -215,7 +223,7 @@ export default function SettingsScreen() {
     const cascade = enabled ? Promise.resolve() : sessionReplay.setEnabled(false);
     void Promise.all([analytics.setEnabled(enabled), cascade])
       .catch(() =>
-        Alert.alert(
+        showAlert(
           t("settings.analytics.errorTitle"),
           t("settings.analytics.errorBody"),
         ),
@@ -235,7 +243,7 @@ export default function SettingsScreen() {
     void sessionReplay
       .setEnabled(enabled)
       .catch(() =>
-        Alert.alert(
+        showAlert(
           t("settings.sessionReplay.errorTitle"),
           t("settings.sessionReplay.errorBody"),
         ),
@@ -666,6 +674,10 @@ export default function SettingsScreen() {
           PUSH_NOTIFICATIONS_PREF_KEY,
           serializePushNotificationsEnabled(false),
         ).catch(() => {});
+        showAlert(
+          t("settings.pushNotifications.unavailableTitle"),
+          t("settings.pushNotifications.unavailableBody"),
+        );
       }
     })().finally(() => setPushNotificationsBusy(false));
   };
@@ -707,12 +719,15 @@ export default function SettingsScreen() {
         serializePushNotificationsEnabled(false),
       ).catch(() => {});
       if (outcome.outcome === "denied") {
-        Alert.alert(
+        showAlert(
           t("settings.pushNotifications.deniedTitle"),
           t("settings.pushNotifications.deniedBody"),
         );
-      } else if (outcome.outcome === "no_project_id") {
-        Alert.alert(
+      } else if (
+        outcome.outcome === "no_project_id" ||
+        outcome.outcome === "unsupported"
+      ) {
+        showAlert(
           t("settings.pushNotifications.unavailableTitle"),
           t("settings.pushNotifications.unavailableBody"),
         );
@@ -739,7 +754,7 @@ export default function SettingsScreen() {
         PUSH_NOTIFICATIONS_PREF_KEY,
         serializePushNotificationsEnabled(false),
       ).catch(() => {});
-      Alert.alert(
+      showAlert(
         t("settings.pushNotifications.unavailableTitle"),
         t("settings.pushNotifications.unavailableBody"),
       );

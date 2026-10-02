@@ -203,6 +203,45 @@ test('turning on: no EAS projectId configured shows an alert instead of crashing
   );
 });
 
+test('turning on: unsupported platform shows an alert and leaves the row Off', async () => {
+  mockRequestPushPermissionAndToken.mockResolvedValue({ outcome: 'unsupported' });
+  const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+
+  const screen = await renderSettings();
+  await waitFor(() => expect(screen.getByText('Off')).toBeTruthy());
+
+  await act(async () => {
+    fireEvent(screen.getByLabelText('Notify when AI catches up'), 'valueChange', true);
+  });
+
+  expect(mockRegisterPushToken).not.toHaveBeenCalled();
+  expect(alertSpy).toHaveBeenCalledWith(
+    'Can’t enable notifications right now',
+    expect.any(String),
+  );
+  expect(screen.getByText('Off')).toBeTruthy();
+});
+
+test('turning on: unexpected permission error shows an alert instead of silent failure', async () => {
+  mockRequestPushPermissionAndToken.mockRejectedValue(
+    new Error('Push notifications removed from Expo Go'),
+  );
+  const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+
+  const screen = await renderSettings();
+  await waitFor(() => expect(screen.getByText('Off')).toBeTruthy());
+
+  await act(async () => {
+    fireEvent(screen.getByLabelText('Notify when AI catches up'), 'valueChange', true);
+  });
+
+  expect(alertSpy).toHaveBeenCalledWith(
+    'Can’t enable notifications right now',
+    expect.any(String),
+  );
+  expect(screen.getByText('Off')).toBeTruthy();
+});
+
 test('turning off deregisters the last-registered token and clears both prefs', async () => {
   fakeRepo.__setMeta(PUSH_NOTIFICATIONS_PREF_KEY, 'true');
   fakeRepo.__setMeta(LAST_REGISTERED_PUSH_TOKEN_PREF_KEY, 'ExponentPushToken[abc]');
