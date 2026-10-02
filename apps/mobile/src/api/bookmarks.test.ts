@@ -1044,66 +1044,124 @@ test('updateCollection patches collection name and returns updated collection', 
   assert.equal(result.name, 'Renamed Col');
 });
 
-test('deleteCollection and deleteCollections patch remote bookmarks before deleting collections', async () => {
+test('deleteCollection and deleteCollections invoke transactional RPC delete_user_collections', async () => {
   const calls: Array<{ path: string; options: Record<string, unknown> }> = [];
   const client = {
     request: async (path: string, options: Record<string, unknown> = {}) => {
       calls.push({ path, options });
+      return null;
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  await api.deleteCollection('col-1', 'uncategorize');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, '/rest/v1/rpc/delete_user_collections');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.deepEqual(calls[0].options.body, {
+    collection_ids: ['col-1'],
+    delete_action: 'uncategorize',
+  });
+
+  calls.length = 0;
+  await api.deleteCollections(['col-2', 'col-3'], 'trash');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, '/rest/v1/rpc/delete_user_collections');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.deepEqual(calls[0].options.body, {
+    collection_ids: ['col-2', 'col-3'],
+    delete_action: 'trash',
+  });
+});
+
+test('deleteCollections falls back to sequential PATCH and DELETE when RPC is unavailable (404)', async () => {
+  const calls: Array<{ path: string; options: Record<string, unknown> }> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      calls.push({ path, options });
+      if (path.includes('/rpc/')) {
+        throw new SupabaseRequestError('RPC not found', 404);
+      }
       return [];
     },
   };
   const api = new BookmarkApi(SESSION, client as never);
 
-  // Uncategorize mode
   await api.deleteCollection('col-1', 'uncategorize');
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0].options.method, 'PATCH');
-  assert.ok(calls[0].path.includes('/rest/v1/bookmarks'));
-  assert.ok(decodeURIComponent(calls[0].path).includes('collection_id=in.("col-1")'));
-  assert.deepEqual(calls[0].options.body, {
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0].path, '/rest/v1/rpc/delete_user_collections');
+  assert.equal(calls[1].options.method, 'PATCH');
+  assert.ok(calls[1].path.includes('/rest/v1/bookmarks'));
+  assert.ok(decodeURIComponent(calls[1].path).includes('collection_id=in.("col-1")'));
+  assert.deepEqual(calls[1].options.body, {
     collection_id: null,
-    updated_at: (calls[0].options.body as Record<string, unknown>).updated_at,
+    updated_at: (calls[1].options.body as Record<string, unknown>).updated_at,
   });
-  assert.equal(calls[1].options.method, 'DELETE');
-  assert.ok(calls[1].path.includes('/rest/v1/collections'));
-  assert.ok(decodeURIComponent(calls[1].path).includes('id=in.("col-1")'));
+  assert.equal(calls[2].options.method, 'DELETE');
+  assert.ok(calls[2].path.includes('/rest/v1/collections'));
+  assert.ok(decodeURIComponent(calls[2].path).includes('id=in.("col-1")'));
 
-  // Trash mode
+  // Trash mode fallback
   calls.length = 0;
   await api.deleteCollections(['col-2', 'col-3'], 'trash');
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0].options.method, 'PATCH');
-  assert.ok(calls[0].path.includes('/rest/v1/bookmarks'));
-  assert.ok(decodeURIComponent(calls[0].path).includes('collection_id=in.("col-2","col-3")'));
-  const trashBody = calls[0].options.body as Record<string, unknown>;
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0].path, '/rest/v1/rpc/delete_user_collections');
+  assert.equal(calls[1].options.method, 'PATCH');
+  assert.ok(calls[1].path.includes('/rest/v1/bookmarks'));
+  assert.ok(decodeURIComponent(calls[1].path).includes('collection_id=in.("col-2","col-3")'));
+  const trashBody = calls[1].options.body as Record<string, unknown>;
   assert.equal(trashBody.collection_id, null);
   assert.ok(trashBody.deleted_at);
   assert.ok(trashBody.updated_at);
-  assert.equal(calls[1].options.method, 'DELETE');
-  assert.ok(calls[1].path.includes('/rest/v1/collections'));
-  assert.ok(decodeURIComponent(calls[1].path).includes('id=in.("col-2","col-3")'));
+  assert.equal(calls[2].options.method, 'DELETE');
+  assert.ok(calls[2].path.includes('/rest/v1/collections'));
+  assert.ok(decodeURIComponent(calls[2].path).includes('id=in.("col-2","col-3")'));
 });
 
-test('mergeCollections reassigns remote bookmarks to target collection before deleting source collections', async () => {
+test('mergeCollections invokes transactional RPC merge_user_collections', async () => {
   const calls: Array<{ path: string; options: Record<string, unknown> }> = [];
   const client = {
     request: async (path: string, options: Record<string, unknown> = {}) => {
       calls.push({ path, options });
+      return null;
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  await api.mergeCollections(['col-a', 'col-b'], 'col-target');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, '/rest/v1/rpc/merge_user_collections');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.deepEqual(calls[0].options.body, {
+    source_collection_ids: ['col-a', 'col-b'],
+    target_collection_id: 'col-target',
+  });
+});
+
+test('mergeCollections falls back to sequential PATCH and DELETE when RPC is unavailable (404)', async () => {
+  const calls: Array<{ path: string; options: Record<string, unknown> }> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      calls.push({ path, options });
+      if (path.includes('/rpc/')) {
+        throw new SupabaseRequestError('RPC not found', 404);
+      }
       return [];
     },
   };
   const api = new BookmarkApi(SESSION, client as never);
 
   await api.mergeCollections(['col-a', 'col-b'], 'col-target');
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0].options.method, 'PATCH');
-  assert.ok(calls[0].path.includes('/rest/v1/bookmarks'));
-  assert.ok(decodeURIComponent(calls[0].path).includes('collection_id=in.("col-a","col-b")'));
-  const patchBody = calls[0].options.body as Record<string, unknown>;
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0].path, '/rest/v1/rpc/merge_user_collections');
+  assert.equal(calls[1].options.method, 'PATCH');
+  assert.ok(calls[1].path.includes('/rest/v1/bookmarks'));
+  assert.ok(decodeURIComponent(calls[1].path).includes('collection_id=in.("col-a","col-b")'));
+  const patchBody = calls[1].options.body as Record<string, unknown>;
   assert.equal(patchBody.collection_id, 'col-target');
   assert.ok(patchBody.updated_at);
 
-  assert.equal(calls[1].options.method, 'DELETE');
-  assert.ok(calls[1].path.includes('/rest/v1/collections'));
-  assert.ok(decodeURIComponent(calls[1].path).includes('id=in.("col-a","col-b")'));
+  assert.equal(calls[2].options.method, 'DELETE');
+  assert.ok(calls[2].path.includes('/rest/v1/collections'));
+  assert.ok(decodeURIComponent(calls[2].path).includes('id=in.("col-a","col-b")'));
 });

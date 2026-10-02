@@ -5634,6 +5634,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
       try {
         const idSet = new Set(collectionIds);
+
+        // Perform remote deletion first so if network/remote fails, local bookmarks
+        // and collections remain completely intact without abandoned mutations in the outbox.
+        const api = createSyncApi(auth.session);
+        await api.deleteCollections(collectionIds, action);
+
         const affected = (bookmarksRef.current ?? []).filter(
           (b) => b.collection_id && idSet.has(b.collection_id),
         );
@@ -5654,9 +5660,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             assignCollection(bookmark.id, null);
           }
         }
-
-        const api = createSyncApi(auth.session);
-        await api.deleteCollections(collectionIds, action);
 
         const current = tagDataRef.current;
         applyTagData({
@@ -5720,15 +5723,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
       try {
         const sourceSet = new Set(sources);
+
+        // Perform remote merge first so if network/remote fails, local bookmarks
+        // and collections remain completely intact without abandoned mutations in the outbox.
+        const api = createSyncApi(auth.session);
+        await api.mergeCollections(sources, targetCollectionId);
+
         const affected = (bookmarksRef.current ?? []).filter(
           (b) => b.collection_id && sourceSet.has(b.collection_id),
         );
         for (const bookmark of affected) {
           assignCollection(bookmark.id, targetCollectionId);
         }
-
-        const api = createSyncApi(auth.session);
-        await api.mergeCollections(sources, targetCollectionId);
 
         const current = tagDataRef.current;
         applyTagData({
