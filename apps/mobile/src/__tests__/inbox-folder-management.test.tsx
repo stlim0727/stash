@@ -360,7 +360,7 @@ describe('Folder View & Collection Management', () => {
     expect(screen.queryByTestId('merge-target-col-c')).toBeNull();
 
     // Multi-source prompt and notice are present
-    expect(screen.getByText('Select the collection to keep:')).toBeTruthy();
+    expect(screen.getByText('Which collection should hold everything?')).toBeTruthy();
     expect(screen.getByTestId('merge-collections-notice')).toBeTruthy();
 
     // Select Design as target

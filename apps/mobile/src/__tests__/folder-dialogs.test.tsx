@@ -234,9 +234,13 @@ describe('MergeCollectionsDialog', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('shows multi-source prompt, notice and contextual confirm label when multiple sources provided', async () => {
+  it('shows multi-source vessel cards, dignified notices, and contextual confirm label', async () => {
     const onMerge = jest.fn();
     const onClose = jest.fn();
+    const counts = new Map([
+      ['col-1', 12],
+      ['col-2', 8],
+    ]);
 
     const screen = await render(
       <MergeCollectionsDialog
@@ -245,30 +249,41 @@ describe('MergeCollectionsDialog', () => {
         error={null}
         sourceCollections={dummyCollections}
         availableTargets={dummyCollections}
+        collectionCounts={counts}
         onMerge={onMerge}
         onClose={onClose}
       />,
     );
 
-    expect(screen.getByText('Select the collection to keep:')).toBeTruthy();
+    // Prompt
+    expect(screen.getByText('Which collection should hold everything?')).toBeTruthy();
     expect(screen.getByTestId('merge-collections-notice')).toBeTruthy();
+
+    // Default target is col-1 (Design)
     expect(
       screen.getByText(
-        'Bookmarks will move into “Design”, and the other selected collections will be removed. All bookmarks are safely preserved.',
+        '8 bookmarks from “Engineering” will move into “Design”, and empty collections will be retired.',
       ),
     ).toBeTruthy();
+    expect(screen.getByText('All 20 bookmarks are safely preserved.')).toBeTruthy();
+    expect(screen.getByText('Keep “Design”')).toBeTruthy();
 
+    // Badges
+    expect(screen.getByText('Keep')).toBeTruthy();
+    expect(screen.getByText('Will be merged')).toBeTruthy();
+
+    // Select Engineering (col-2)
     await act(async () => {
       fireEvent.press(screen.getByTestId('merge-target-col-2'));
     });
 
     expect(
       screen.getByText(
-        'Bookmarks will move into “Engineering”, and the other selected collections will be removed. All bookmarks are safely preserved.',
+        '12 bookmarks from “Design” will move into “Engineering”, and empty collections will be retired.',
       ),
     ).toBeTruthy();
-
-    expect(screen.getByText('Merge into “Engineering”')).toBeTruthy();
+    expect(screen.getByText('All 20 bookmarks are safely preserved.')).toBeTruthy();
+    expect(screen.getByText('Keep “Engineering”')).toBeTruthy();
 
     await act(async () => {
       fireEvent.press(screen.getByTestId('merge-collections-submit'));

@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { collectionColorKey } from '@/domain/collection-color';
 import type { Collection } from '@/domain/types';
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
@@ -21,6 +22,7 @@ export interface MergeCollectionsDialogProps {
   error: string | null;
   sourceCollections: Collection[];
   availableTargets: Collection[];
+  collectionCounts?: Map<string, number>;
   onMerge: (targetCollectionId: string) => void;
   onClose: () => void;
 }
@@ -31,6 +33,7 @@ export function MergeCollectionsDialog({
   error,
   sourceCollections,
   availableTargets,
+  collectionCounts,
   onMerge,
   onClose,
 }: MergeCollectionsDialogProps) {
@@ -50,6 +53,17 @@ export function MergeCollectionsDialog({
   }, [visible, availableTargets, selectedTargetId]);
 
   const selectedTarget = availableTargets.find((col) => col.id === selectedTargetId);
+
+  const otherSources = isMultiSource && selectedTarget
+    ? sourceCollections.filter((c) => c.id !== selectedTarget.id)
+    : [];
+  const otherSourcesNames = otherSources.map((c) => `“${c.name}”`).join(', ');
+  const targetCount = selectedTarget ? (collectionCounts?.get(selectedTarget.id) ?? 0) : 0;
+  const movingCount = otherSources.reduce(
+    (sum, c) => sum + (collectionCounts?.get(c.id) ?? 0),
+    0,
+  );
+  const totalCount = targetCount + movingCount;
 
   const submit = () => {
     if (!selectedTargetId || busy) return;
@@ -88,6 +102,90 @@ export function MergeCollectionsDialog({
           <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
             {availableTargets.map((col) => {
               const isSelected = col.id === selectedTargetId;
+              const count = collectionCounts?.get(col.id) ?? 0;
+              const colorKey = collectionColorKey(col.id);
+
+              if (isMultiSource) {
+                return (
+                  <Pressable
+                    key={col.id}
+                    testID={`merge-target-${col.id}`}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: isSelected }}
+                    accessibilityLabel={`${col.name}, ${t('inbox.collectionTileCount', { count })}`}
+                    disabled={busy}
+                    onPress={() => setSelectedTargetId(col.id)}
+                    style={({ pressed }) => [
+                      styles.vesselCard,
+                      {
+                        backgroundColor: isSelected ? palette.accentSoft : palette.surface,
+                        borderColor: isSelected ? palette.accent : palette.border,
+                        borderWidth: isSelected ? 2 : StyleSheet.hairlineWidth,
+                        opacity: pressed ? 0.7 : 1,
+                      },
+                    ]}
+                  >
+                    <View style={styles.vesselCardRow}>
+                      <View
+                        style={[
+                          styles.vesselIconBox,
+                          { backgroundColor: palette[colorKey] },
+                        ]}
+                      >
+                        <Ionicons name="folder" size={20} color={palette.text} />
+                      </View>
+                      <View style={styles.vesselInfo}>
+                        <Text
+                          style={[
+                            styles.vesselName,
+                            { color: isSelected ? palette.accentText : palette.text },
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {col.name}
+                        </Text>
+                        <Text style={[styles.vesselCount, { color: palette.textSecondary }]}>
+                          {t('inbox.collectionTileCount', { count })}
+                        </Text>
+                      </View>
+                      <View
+                        style={[
+                          styles.vesselBadge,
+                          {
+                            backgroundColor: isSelected ? palette.accent : palette.surfaceElevated,
+                            borderColor: isSelected ? palette.accent : palette.border,
+                          },
+                        ]}
+                      >
+                        {isSelected ? (
+                          <Ionicons
+                            name="checkmark-circle"
+                            size={14}
+                            color={palette.accentForeground}
+                            style={styles.vesselBadgeIcon}
+                          />
+                        ) : (
+                          <Ionicons
+                            name="arrow-forward"
+                            size={12}
+                            color={palette.textSecondary}
+                            style={styles.vesselBadgeIcon}
+                          />
+                        )}
+                        <Text
+                          style={[
+                            styles.vesselBadgeText,
+                            { color: isSelected ? palette.accentForeground : palette.textSecondary },
+                          ]}
+                        >
+                          {isSelected ? t('folder.keepTargetBadge') : t('folder.mergeSourceBadge')}
+                        </Text>
+                      </View>
+                    </View>
+                  </Pressable>
+                );
+              }
+
               return (
                 <Pressable
                   key={col.id}
@@ -126,12 +224,30 @@ export function MergeCollectionsDialog({
           </ScrollView>
 
           {isMultiSource && selectedTarget ? (
-            <Text
+            <View
               testID="merge-collections-notice"
-              style={[styles.notice, { color: palette.textSecondary }]}
+              style={[
+                styles.reassuranceCard,
+                { backgroundColor: palette.mutedSurface, borderColor: palette.border },
+              ]}
             >
-              {t('folder.mergeMultiNotice', { target: selectedTarget.name })}
-            </Text>
+              <View style={styles.reassuranceRow}>
+                <Ionicons name="swap-horizontal" size={16} color={palette.accent} />
+                <Text style={[styles.reassuranceText, { color: palette.text }]}>
+                  {t('folder.mergeConsequenceNotice', {
+                    sources: otherSourcesNames,
+                    count: movingCount,
+                    target: selectedTarget.name,
+                  })}
+                </Text>
+              </View>
+              <View style={styles.reassuranceRow}>
+                <Ionicons name="shield-checkmark" size={16} color={palette.success} />
+                <Text style={[styles.reassuranceSubText, { color: palette.textSecondary }]}>
+                  {t('folder.mergePreservedNotice', { count: totalCount })}
+                </Text>
+              </View>
+            </View>
           ) : null}
 
           {error ? (
@@ -214,6 +330,49 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 4,
   },
+  vesselCard: {
+    borderRadius: 14,
+    padding: 12,
+  },
+  vesselCardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  vesselIconBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  vesselInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  vesselName: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  vesselCount: {
+    fontSize: 13,
+  },
+  vesselBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  vesselBadgeIcon: {
+    marginRight: 1,
+  },
+  vesselBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
   targetItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -228,13 +387,31 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     flex: 1,
   },
+  reassuranceCard: {
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: 12,
+    gap: 6,
+  },
+  reassuranceRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  reassuranceText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+  },
+  reassuranceSubText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 16,
+  },
   error: {
     fontSize: 13,
     fontWeight: '500',
-  },
-  notice: {
-    fontSize: 12,
-    lineHeight: 17,
   },
   actions: {
     flexDirection: 'row',

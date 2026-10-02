@@ -4112,6 +4112,7 @@ export default function InboxScreen() {
         error={mergeError}
         sourceCollections={mergeSources}
         availableTargets={availableMergeTargets}
+        collectionCounts={folderCollectionCounts}
         onMerge={handleMergeFolders}
         onClose={() => {
           if (!mergeBusy) {
