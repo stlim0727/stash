@@ -103,3 +103,13 @@ test('provider errors with failed pulls are actionable even when every outbox is
   assert.equal(buildLibrarySyncFlow({ ...input, authStatus: 'error', runFailure: { kind: 'transient_network', attempts: 1 } }).phase, 'sign_in');
   assert.equal(buildLibrarySyncFlow({ ...input, authStatus: 'error' }).phase, 'idle');
 });
+
+
+test('permanent never-synced owners exclude every dependent channel while independent work remains', () => {
+  const dependent = { bookmark_id: 'a', status: 'failed' as const, last_error_kind: 'permission' as const };
+  const flow = { ...input, permanentlyUnsyncableIds: new Set(['a']), queue: [entry({ sync_status: 'failed' })],
+    tagOps: [{ bookmark_id: 'a', last_error_kind: 'auth' as const }], importCollections: [dependent], enrichmentRestores: [dependent] };
+  assert.deepEqual(buildLibrarySyncFlow(flow), idle);
+  assert.deepEqual(buildLibrarySyncFlow({ ...flow, tagOps: [...flow.tagOps, { bookmark_id: 'b' }] }), { phase: 'working', remaining: 1 });
+  assert.equal(buildLibrarySyncFlow({ ...flow, blockedDependentBookmarkIds: new Set() }).remaining, 3);
+});

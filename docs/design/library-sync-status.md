@@ -10,7 +10,9 @@ cloud sync completion does not claim they have finished.
 `buildLibrarySyncFlow` projects those channels into one observation. Remaining
 counts include failed/backoff work, not only entries currently eligible for
 upload. Permanently unsyncable bookmark entries are excluded from this cloud
-flow, while their item-level diagnostics remain available. A failed pull is retained even with an empty outbox, so it cannot be
+flow, while their item-level diagnostics remain available. Tags, imported
+folders, and enrichment restores whose never-synced owner is permanently
+blocked are excluded too; dependents of already-synced owners still count. A failed pull is retained even with an empty outbox, so it cannot be
 mistaken for completion. Successful pulls clear that observation. Account
 changes clear its history; account identity also scopes the UI display history.
 
@@ -61,7 +63,11 @@ refresh result never falls back to the rejected bearer token. Actual expiry
 then exposes the provider's sign-in UI. Ordinary sync triggers retain their
 existing upload backoff. Bookmark selection, both followup drivers, and the tag journal enforce
 retry-kind eligibility and per-item ready-at deadlines on ordinary passes;
-only an explicit manual force overrides them. Legacy failed followups without
+explicit manual force overrides them. A successful sign-in or credential
+refresh permits one recovery pass for stale auth failures across all channels,
+only after account ownership is reconciled. This does not override permission
+or exhausted ordinary failures; a fresh 401 under the same credentials stops
+again. Same-account credential recovery retains the AI quota cooldown. Legacy failed followups without
 a timestamp share a stable hydration anchor for their initial 30-second wait.
 Tag health alerts retain the ordinary three-failure threshold for HTTP/API
 errors; only DNS/network failures use six.
@@ -71,7 +77,10 @@ another channel or unrelated save starts a sync. A manual force can override
 this wait; reconnect uses the normal readiness policy. A skipped pull keeps
 its failure observation and does not claim a completed full-sync stamp.
 Settings hides the manual sync action while offline and shows an accessible
-connectivity indicator instead.
+connectivity indicator instead. Its Activity summary also reflects incomplete
+cloud phases when bookmark processing counts are zero, so failed pulls never
+claim all work complete. Detail chips identify auth/permission failures from
+the first failed attempt in both English and Korean.
 
 Retry timers are cancelled while offline, paused, busy, without an active
 session, or before local cache ownership has been reconciled. Reconnecting

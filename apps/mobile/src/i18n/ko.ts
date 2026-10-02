@@ -43,6 +43,8 @@ export const ko: Catalog = {
   'common.signOut': '로그아웃',
   'common.untitled': '제목 없음',
 
+  'status.signInRequired': '로그인 필요',
+  'status.permissionRequired': '접근 권한 확인 필요',
   'status.syncPrefix': '동기화 {status}',
   'status.metadataPrefix': '메타데이터 {status}',
   'status.pending': '대기 중',

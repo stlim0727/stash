@@ -37,6 +37,8 @@ export function syncStatusLabel(
   repeatedDnsFailure?: boolean,
 ): string {
   const isFailed = queueState?.sync_status === 'failed';
+  if (isFailed && queueState?.last_error_kind === 'auth') return t('status.syncPrefix', { status: t('status.signInRequired') });
+  if (isFailed && queueState?.last_error_kind === 'permission') return t('status.syncPrefix', { status: t('status.permissionRequired') });
   const isDnsFailure = isFailed && queueState?.last_error_kind === 'transient_dns';
   const isTransientFailure =
     isFailed &&

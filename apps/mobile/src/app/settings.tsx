@@ -791,8 +791,16 @@ export default function SettingsScreen() {
   const aiQuotaResetTime = aiQuotaExceeded
     ? formatQuotaResetTime(aiQuotaExceeded.retryAt, formatDate)
     : null;
+  const incompleteSyncSummary = librarySyncFlow?.phase === "retrying" ? t("library.delayed")
+    : librarySyncFlow?.phase === "attention" ? t("library.attention")
+    : librarySyncFlow?.phase === "sign_in" ? t(auth.status === "error" || auth.status === "session_expired" ? "library.resume" : "library.attention")
+    : librarySyncFlow?.phase === "permission" ? t("library.permission")
+    : librarySyncFlow?.phase === "working" ? t("library.syncing")
+    : librarySyncFlow?.phase === "offline" ? t("library.offline")
+    : librarySyncFlow?.phase === "paused" ? t("library.paused") : null;
   const processingSummary =
-    processingStats.remaining === 0
+    processingStats.remaining === 0 && incompleteSyncSummary ? incompleteSyncSummary
+    : processingStats.remaining === 0
       ? t("settings.processing.complete")
       : processingStats.stages.attention > 0
         ? t("settings.processing.remainingWithAttention", {

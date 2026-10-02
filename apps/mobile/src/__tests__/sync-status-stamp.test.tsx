@@ -360,3 +360,76 @@ test.each(['auth', 'permission', 'other'] as const)('%s bookmark failures remain
   expect(fakeRepo.__queue()).toHaveLength(0);
   await screen.unmount();
 });
+
+test.each([['auth', 1], ['permission', 0], ['other', 0]] as const)('new credentials recover %s failures selectively without manual force', async (kind, attempts) => {
+  jest.useFakeTimers();
+  const id = '1a2b3c4d-0000-4000-8000-00000000abcd';
+  fakeRepo.__reset([makeStoredBookmark({ id, sync_status: 'failed', ever_synced: false })]);
+  fakeRepo.__setMeta('synced_user_id', 'real-user');
+  const at = new Date().toISOString();
+  await fakeRepo.repository.enqueue({ local_id: id, remote_id: null, operation: 'create', payload: { url: 'https://example.com/credential-recovery' },
+    sync_status: 'failed', retry_count: kind === 'other' ? 3 : 1, last_error: 'Requires recovery', last_error_kind: kind,
+    created_at: at, updated_at: at, last_attempt_at: at });
+  const screen = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(screen.result.current.isLoading).toBe(false));
+  await waitFor(() => expect(screen.result.current.isSyncing).toBe(false));
+  expect(apiMock.__createBookmarkMock).not.toHaveBeenCalled();
+  await act(async () => { authMock.__setAuth({ session: { ...mockRealSession, access_token: 'fresh-credentials' } }); });
+  await screen.rerender(undefined);
+  await waitFor(() => expect(screen.result.current.isSyncing).toBe(false));
+  expect(apiMock.__createBookmarkMock).toHaveBeenCalledTimes(attempts);
+  expect(fakeRepo.__queue()).toHaveLength(attempts ? 0 : 1);
+  await screen.unmount();
+});
+
+test('sign-out and sign-in recovers a preserved never-synced auth-failed capture', async () => {
+  const id = '1a2b3c4d-0000-4000-8000-00000000abcd';
+  fakeRepo.__reset([makeStoredBookmark({ id, sync_status: 'failed', ever_synced: false })]);
+  fakeRepo.__setMeta('synced_user_id', 'real-user');
+  const at = new Date().toISOString();
+  await fakeRepo.repository.enqueue({ local_id: id, remote_id: null, operation: 'create', payload: { url: 'https://example.com/login-recovery' },
+    sync_status: 'failed', retry_count: 1, last_error: 'Denied', last_error_kind: 'auth', created_at: at, updated_at: at, last_attempt_at: at });
+  const screen = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(screen.result.current.isLoading).toBe(false));
+  await waitFor(() => expect(screen.result.current.isSyncing).toBe(false));
+  expect(apiMock.__createBookmarkMock).not.toHaveBeenCalled();
+  await act(async () => { authMock.__setAuth({ status: 'signed_out', session: null, userId: null }); });
+  await screen.rerender(undefined);
+  await waitFor(() => expect(screen.result.current.isLoading).toBe(false));
+  await act(async () => { authMock.__setAuth({ status: 'authenticated', session: { ...mockRealSession, access_token: 'signed-in-token' }, userId: 'real-user' }); });
+  await screen.rerender(undefined);
+  await waitFor(() => expect(apiMock.__createBookmarkMock).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(0));
+  await screen.unmount();
+});
+
+test('a fresh 401 after credential recovery is not retried again with the same credential', async () => {
+  jest.useFakeTimers();
+  const id = '1a2b3c4d-0000-4000-8000-00000000abcd';
+  fakeRepo.__reset([makeStoredBookmark({ id, sync_status: 'failed', ever_synced: false })]);
+  fakeRepo.__setMeta('synced_user_id', 'real-user');
+  const at = new Date().toISOString();
+  await fakeRepo.repository.enqueue({ local_id: id, remote_id: null, operation: 'create', payload: { url: 'https://example.com/still-denied' },
+    sync_status: 'failed', retry_count: 1, last_error: 'Denied', last_error_kind: 'auth', created_at: at, updated_at: at, last_attempt_at: at });
+  const screen = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(screen.result.current.isLoading).toBe(false));
+  await waitFor(() => expect(screen.result.current.isSyncing).toBe(false));
+  apiMock.__createBookmarkMock.mockRejectedValueOnce(new SupabaseRequestError('Still denied', 401));
+  await act(async () => { authMock.__setAuth({ session: { ...mockRealSession, access_token: 'fresh-but-rejected' } }); });
+  await screen.rerender(undefined);
+  await waitFor(() => expect(apiMock.__createBookmarkMock).toHaveBeenCalledTimes(1));
+  await act(async () => { await jest.advanceTimersByTimeAsync(30000); await screen.result.current.syncNow(); });
+  expect(apiMock.__createBookmarkMock).toHaveBeenCalledTimes(1);
+  await screen.unmount();
+});
+
+test('a freshly restored bearer ahead of reactive auth does not schedule repeated recovery pulls', async () => {
+  jest.useFakeTimers();
+  authMock.useSupabaseAuth().ensureAnonymousSession.mockResolvedValueOnce({ ...mockRealSession, access_token: 'ahead-of-render' });
+  const screen = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(screen.result.current.isLoading).toBe(false));
+  await waitFor(() => expect(screen.result.current.isSyncing).toBe(false));
+  await act(async () => { await jest.advanceTimersByTimeAsync(3000); });
+  expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(1);
+  await screen.unmount();
+});

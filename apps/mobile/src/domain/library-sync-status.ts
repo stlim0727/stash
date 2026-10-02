@@ -15,16 +15,18 @@ export function buildLibrarySyncFlow(input: {
   syncing: boolean;
   queue: readonly LocalPendingBookmark[];
   permanentlyUnsyncableIds?: ReadonlySet<string>;
-  tagOps?: readonly { confirmed?: boolean; retry_count?: number; last_error_kind?: SyncErrorKind }[];
-  importCollections?: readonly { status: 'pending' | 'failed'; last_error_kind?: SyncErrorKind; retry_count?: number }[];
-  enrichmentRestores?: readonly { status: 'pending' | 'failed'; last_error_kind?: SyncErrorKind; retry_count?: number }[];
+  blockedDependentBookmarkIds?: ReadonlySet<string>;
+  tagOps?: readonly { bookmark_id?: string; confirmed?: boolean; retry_count?: number; last_error_kind?: SyncErrorKind }[];
+  importCollections?: readonly { bookmark_id?: string; status: 'pending' | 'failed'; last_error_kind?: SyncErrorKind; retry_count?: number }[];
+  enrichmentRestores?: readonly { bookmark_id?: string; status: 'pending' | 'failed'; last_error_kind?: SyncErrorKind; retry_count?: number }[];
   runFailure?: SyncFailureObservation | null;
 }): LibrarySyncFlow {
   const queue = input.queue.filter((entry) => entry.sync_status !== 'synced' && !input.permanentlyUnsyncableIds?.has(entry.local_id));
   // Confirmed tag removals are still waiting for pull confirmation.
-  const tags = input.tagOps ?? [];
-  const imports = input.importCollections ?? [];
-  const restores = input.enrichmentRestores ?? [];
+  const unblocked = (item: { bookmark_id?: string }) => !item.bookmark_id || !(input.blockedDependentBookmarkIds ?? input.permanentlyUnsyncableIds)?.has(item.bookmark_id);
+  const tags = (input.tagOps ?? []).filter(unblocked);
+  const imports = (input.importCollections ?? []).filter(unblocked);
+  const restores = (input.enrichmentRestores ?? []).filter(unblocked);
   const remaining = queue.length + tags.length + imports.length + restores.length;
   const kinds = [input.runFailure?.kind,
     ...queue.filter((entry) => entry.sync_status === 'failed').map((entry) => entry.last_error_kind),

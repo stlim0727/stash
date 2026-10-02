@@ -128,3 +128,14 @@ test('offline pending work shows connectivity feedback instead of a no-op manual
     await screen.unmount();
   } finally { mockRecoveryPhase = null; }
 });
+
+
+test.each([['retrying', 'Sync delayed · retrying automatically'], ['attention', 'Sync needs attention. Review the details in Settings.'], ['sign_in', 'Sync needs attention. Review the details in Settings.']])('empty-outbox %s does not claim all work complete', async (phase, copy) => {
+  mockRecoveryPhase = phase;
+  try {
+    const screen = await renderSettings();
+    expect(screen.getByText(copy)).toBeTruthy();
+    expect(screen.queryByText('All work complete')).toBeNull();
+    await screen.unmount();
+  } finally { mockRecoveryPhase = null; }
+});

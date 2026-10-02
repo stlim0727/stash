@@ -1046,6 +1046,23 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   >(new Set());
   const unseenSuggestionIdsRef = useRef<ReadonlySet<string>>(new Set());
   const [lastPulledAt, setLastPulledAt] = useState<string | null>(null);
+  const syncCredentialsRef = useRef(auth.session ? { userId: auth.session.user.id, accessToken: auth.session.access_token } : null);
+  const observedCredentialsRef = useRef(syncCredentialsRef.current);
+  const authRecoveryPendingRef = useRef(false);
+  useEffect(() => {
+    if (["signed_out", "session_expired", "error"].includes(auth.status)) {
+      authRecoveryPendingRef.current = true;
+    } else if (auth.session && (auth.status === "authenticated" || auth.status === "anonymous")) {
+      const observed = observedCredentialsRef.current;
+      const used = syncCredentialsRef.current;
+      const changed = !!observed && (observed.userId !== auth.session.user.id || observed.accessToken !== auth.session.access_token);
+      // The provider can lag the session returned by ensureAnonymousSession.
+      // Observe provider changes once; never compare a stale render against a
+      // newer already-used bearer and repeatedly schedule recovery passes.
+      if (changed && (!used || used.userId !== auth.session.user.id || used.accessToken !== auth.session.access_token)) authRecoveryPendingRef.current = true;
+      observedCredentialsRef.current = { userId: auth.session.user.id, accessToken: auth.session.access_token };
+    }
+  }, [auth.status, auth.session]);
   const legacyFollowupAttemptAt = useRef(Date.now());
   const offline = useNetworkOffline();
   const offlineRef = useRef(offline);
@@ -1062,9 +1079,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const librarySyncFlow = useMemo(() => buildLibrarySyncFlow({
     authStatus: auth.status, offline, paused: syncPaused, syncing: isSyncing,
     queue, permanentlyUnsyncableIds: new Set(queue.filter(isPermanentlyUnsyncableUrl).map((entry) => entry.local_id)),
+    blockedDependentBookmarkIds: new Set(queue.filter(isPermanentlyUnsyncableUrl).filter((entry) => !bookmarks?.some((bookmark) => bookmark.id === entry.local_id && isBookmarkSyncedOnce(bookmark))).map((entry) => entry.local_id)),
     tagOps: pendingTagOps, importCollections: pendingImportCollections,
     enrichmentRestores: pendingEnrichmentRestores, runFailure: syncRunFailure,
-  }), [auth.status, offline, syncPaused, isSyncing, queue, pendingTagOps,
+  }), [auth.status, offline, syncPaused, isSyncing, queue, bookmarks, pendingTagOps,
     pendingImportCollections, pendingEnrichmentRestores, syncRunFailure]);
   const librarySyncFlowRef = useRef(librarySyncFlow);
   librarySyncFlowRef.current = librarySyncFlow;
@@ -4512,7 +4530,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // bookmark used to mean 3,000+ sequential round trips for 1,000 bookmarks
   // (Sentry STASH-5F/5G/5D). "remove" ops stay one-per-op, unchanged: imports
   // never enqueue removes, and removes are always low-volume interactive edits.
-  const syncTagOps = useCallback(async (force = false, session: SupabaseAuthSession | null = auth.session): Promise<boolean> => {
+  const syncTagOps = useCallback(async (force = false, session: SupabaseAuthSession | null = auth.session, recoverAuth = false): Promise<boolean> => {
     if (!session) {
       return false;
     }
@@ -4558,7 +4576,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       reportPendingHealth();
       const ops = pendingTagOpsRef.current.filter((op) => {
         if (op.confirmed) return false;
-        return force || (canAutomaticallyRetry(op.last_error_kind, op.retry_count ?? 0) && Date.now() >= tagRetryReadyAt(op));
+        return force || (recoverAuth && op.last_error_kind === "auth") || (canAutomaticallyRetry(op.last_error_kind, op.retry_count ?? 0) && Date.now() >= tagRetryReadyAt(op));
       });
 
       if (ops.length === 0) {
@@ -5474,12 +5492,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // collection server-side in one call per chunk instead of one
   // `createCollection`/`updateBookmark` round trip per bookmark.
   const syncPendingImportCollections =
-    useCallback(async (force = false, session: SupabaseAuthSession | null = auth.session): Promise<boolean> => {
+    useCallback(async (force = false, session: SupabaseAuthSession | null = auth.session, recoverAuth = false): Promise<boolean> => {
       if (!session || syncPausedRef.current) {
         return false;
       }
       const eligible = pendingImportCollectionsRef.current.filter((item) =>
-        hasSyncedOnce(item.bookmark_id) && isFollowupReady(item, Date.now(), legacyFollowupAttemptAt.current, force),
+        hasSyncedOnce(item.bookmark_id) && isFollowupReady(item, Date.now(), legacyFollowupAttemptAt.current, force || (recoverAuth && item.last_error_kind === "auth")),
       );
       if (eligible.length === 0) {
         return false;
@@ -5662,12 +5680,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // per-chunk-failure precedent as syncPendingImportCollections's #713 fix:
   // one SQLite persist for the whole drive, not one per item.
   const syncPendingEnrichmentRestores =
-    useCallback(async (force = false, session: SupabaseAuthSession | null = auth.session): Promise<boolean> => {
+    useCallback(async (force = false, session: SupabaseAuthSession | null = auth.session, recoverAuth = false): Promise<boolean> => {
       if (!session || syncPausedRef.current) {
         return false;
       }
       const eligible = pendingEnrichmentRestoresRef.current.filter((item) =>
-        hasSyncedOnce(item.bookmark_id) && isFollowupReady(item, Date.now(), legacyFollowupAttemptAt.current, force),
+        hasSyncedOnce(item.bookmark_id) && isFollowupReady(item, Date.now(), legacyFollowupAttemptAt.current, force || (recoverAuth && item.last_error_kind === "auth")),
       );
       if (eligible.length === 0) {
         return false;
@@ -6138,6 +6156,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       setIsSyncing(true);
       let mutationsPushed = false;
       let syncFailed = 0;
+      const recoveryRequested = authRecoveryPendingRef.current;
+      authRecoveryPendingRef.current = false;
       try {
         await ensureRepositoryReady();
         // Re-ensure the session so a token that expired while the app stayed
@@ -6163,6 +6183,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         if (!accountReady) {
           return false;
         }
+        // Successful sign-in/refresh is recovery for stale auth failures only,
+        // after durable account ownership has been reconciled. No null refresh
+        // or fallback bearer may authorize this bypass. Consume it once so a
+        // fresh 401 remains blocked until another actual credential recovery.
+        const priorCredentials = syncCredentialsRef.current;
+        const recoverAuth = !!restoredSession && (recoveryRequested ||
+          (!!priorCredentials && (priorCredentials.userId !== session.user.id || priorCredentials.accessToken !== session.access_token)));
+        if (restoredSession) syncCredentialsRef.current = { userId: session.user.id, accessToken: session.access_token };
+        if (recoverAuth) authRecoveryPendingRef.current = false;
         const durableBookmarks = await repository.listBookmarks();
         const durableQueue = await repository.listQueue();
         // Repository reads allocate fresh arrays/rows even when nothing has
@@ -6188,11 +6217,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // Only an explicit manual request bypasses retry eligibility and
           // backoff. Unrelated saves/nudges/reconnects must not retry terminal
           // auth, permission, or exhausted ordinary failures.
-          if (!force && entry.sync_status === "failed" &&
+          if (!force && !(recoverAuth && entry.last_error_kind === "auth") && entry.sync_status === "failed" &&
               !canAutomaticallyRetry(entry.last_error_kind, entry.retry_count)) {
             return false;
           }
-          if (!isSyncable(entry, { ignoreBackoff: force })) {
+          if (!isSyncable(entry, { ignoreBackoff: force || (recoverAuth && entry.last_error_kind === "auth") })) {
             return false;
           }
           if (entry.operation === "create") {
@@ -7198,7 +7227,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // loop below instead (see syncCreateQueueEntryBatch's own guard).
             entry.payload.content_type !== "image" &&
             hasBulkCreateResultKey(entry) &&
-            isSyncable(entry, { ignoreBackoff: force }),
+            isSyncable(entry, { ignoreBackoff: force || (recoverAuth && entry.last_error_kind === "auth") }),
         );
         if (bulkCreateEntries.length > 1) {
           for (
@@ -7566,21 +7595,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
         // Imported collection names are a separate durable outbox because a
         // bookmark must exist remotely before it can reference a cloud collection.
-        const importCollectionsSynced = await syncPendingImportCollections(force, session);
+        const importCollectionsSynced = await syncPendingImportCollections(force, session, recoverAuth);
         if (importCollectionsSynced) {
           mutationsPushed = true;
         }
 
         // Same reasoning, same seam: a restored AI enrichment snapshot (#671)
         // needs its bookmark's remote id resolved first too.
-        const enrichmentRestoresSynced = await syncPendingEnrichmentRestores(force, session);
+        const enrichmentRestoresSynced = await syncPendingEnrichmentRestores(force, session, recoverAuth);
         if (enrichmentRestoresSynced) {
           mutationsPushed = true;
         }
 
         // Upload any queued local-first tag ops before pulling, so the pull's
         // server snapshot already reflects them.
-        const tagsSynced = await syncTagOps(force, session);
+        const tagsSynced = await syncTagOps(force, session, recoverAuth);
         if (tagsSynced) {
           mutationsPushed = true;
         }
@@ -7601,7 +7630,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // Re-checked here (not just at entry) so pausing mid-run — after the
         // account reconciliation above but before this point — still skips it.
         const pullFailure = syncRunFailureRef.current;
-        const pullReady = isPullReady(pullFailure?.userId === session.user.id ? pullFailure : null, Date.now(), force);
+        const pullReady = isPullReady(pullFailure?.userId === session.user.id ? pullFailure : null, Date.now(), force || (recoverAuth && pullFailure?.kind === "auth"));
         if (!syncPausedRef.current && pullReady) {
           try {
             const result = await pullRemoteChanges(
@@ -8696,7 +8725,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       bookmarks !== null &&
       auth.userId !== null &&
       (auth.status === "anonymous" || auth.status === "authenticated") &&
-      lastSyncedUserId.current !== auth.userId
+      (lastSyncedUserId.current !== auth.userId || (!offline && !syncPaused && authRecoveryPendingRef.current))
     ) {
       // Only claim this user as synced once we can actually start — otherwise a
       // sign-in landing mid-flight (the startup anonymous sync still running)
@@ -8704,6 +8733,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // guard, and with the ref already matching, the effect would never retry.
       // Gating on isSyncing makes the effect re-run when the in-flight sync
       // settles, so the new user's pull still fires.
+      if (lastSyncedUserId.current === auth.userId) {
+        // Credential recovery must not reset this same account's AI quota.
+        void syncNow();
+        return;
+      }
       lastSyncedUserId.current = auth.userId;
       // Codex review (PR #655): a quota cooldown armed for the PREVIOUS
       // account must not throttle this one's independent AI quota — each
@@ -8722,7 +8756,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       void syncNow();
     }
   }, [
-    bookmarks,
+    bookmarks, offline, syncPaused,
     auth.userId,
     auth.status,
     isSyncing,

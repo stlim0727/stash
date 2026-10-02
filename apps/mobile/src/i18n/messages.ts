@@ -60,6 +60,8 @@ export const en = {
   'common.ok': 'OK',
 
   // Status words (sync/metadata), composed via the prefixes below.
+  'status.signInRequired': 'sign-in required',
+  'status.permissionRequired': 'access denied',
   'status.syncPrefix': 'sync {status}',
   'status.metadataPrefix': 'metadata {status}',
   'status.pending': 'pending',
