@@ -8,6 +8,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useT } from '@/i18n';
@@ -69,23 +70,40 @@ export function ResetLibraryDialog({
         <Pressable
           style={[
             styles.card,
-            { backgroundColor: palette.surfaceElevated, marginBottom: insets.bottom + 24 },
+            {
+              backgroundColor: palette.surfaceElevated,
+              marginBottom: insets.bottom + 24,
+              borderColor: palette.danger,
+            },
           ]}
           onPress={() => {}}
         >
-          <Text style={[styles.title, { color: palette.text }]}>
-            {t('settings.reset.dialogTitle')}
-          </Text>
-          <Text style={[styles.body, { color: palette.textSecondary }]}>
-            {t('settings.reset.dialogBody')}
-          </Text>
+          {/* Danger banner with warning icon */}
+          <View style={[styles.dangerBanner, { backgroundColor: palette.dangerSoft }]}>
+            <Ionicons name="warning" size={32} color={palette.danger} />
+            <Text style={[styles.title, { color: palette.danger }]}>
+              {t('settings.reset.dialogTitle')}
+            </Text>
+          </View>
+          <View style={[styles.warningCallout, { borderLeftColor: palette.danger }]}>
+            <Text style={[styles.body, { color: palette.textSecondary, paddingHorizontal: 0 }]}>
+              {t('settings.reset.dialogBody')}
+            </Text>
+          </View>
           <Text style={[styles.body, { color: palette.text }]}>
             {t('settings.reset.typeToConfirm', { word: confirmWord })}
           </Text>
           <TextInput
             testID="reset-library-input"
             accessibilityLabel={t('settings.reset.typeToConfirm', { word: confirmWord })}
-            style={[styles.input, { color: palette.text, borderColor: palette.border }]}
+            style={[
+              styles.input,
+              {
+                color: palette.text,
+                borderColor: confirmed ? palette.danger : palette.border,
+                backgroundColor: confirmed ? palette.dangerSoft : undefined,
+              },
+            ]}
             placeholder={confirmWord}
             placeholderTextColor={palette.textSecondary}
             autoCapitalize="characters"
@@ -145,39 +163,58 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: 'rgba(0,0,0,0.5)',
     padding: 24,
   },
   card: {
     width: '100%',
     maxWidth: 360,
     borderRadius: 18,
-    padding: 18,
+    overflow: 'hidden',
+    borderWidth: 1.5,
+    paddingBottom: 18,
     gap: 12,
   },
+  dangerBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+  },
+  warningCallout: {
+    borderLeftWidth: 3,
+    marginHorizontal: 18,
+    paddingLeft: 12,
+  },
   title: {
-    fontSize: 16,
-    fontWeight: '700',
+    fontSize: 17,
+    fontWeight: '800',
+    flexShrink: 1,
   },
   body: {
     fontSize: 13,
     lineHeight: 18,
+    paddingHorizontal: 18,
   },
   input: {
-    borderWidth: StyleSheet.hairlineWidth,
+    borderWidth: 1.5,
     borderRadius: 10,
     paddingVertical: 11,
     paddingHorizontal: 12,
     fontSize: 15,
+    marginHorizontal: 18,
   },
   error: {
     fontSize: 13,
     fontWeight: '500',
+    paddingHorizontal: 18,
   },
   actions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
     gap: 10,
+    paddingHorizontal: 18,
   },
   button: {
     minWidth: 84,
