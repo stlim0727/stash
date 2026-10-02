@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mock, test } from 'node:test';
 
 import { DEFAULT_REQUEST_TIMEOUT_MS, errorMessageFrom, StashSupabaseClient, SupabaseRequestError } from './client.ts';
+import { syncErrorKind } from '../sync/sync-bookmarks.ts';
 
 test('errorMessageFrom prefers GoTrue/PostgREST human-readable keys', () => {
   assert.equal(errorMessageFrom({ msg: 'bad login' }, 400), 'bad login');
@@ -329,7 +330,7 @@ test('request() aborts when timeoutMs expires', async () => {
     });
     const promise = client.request('/rest/v1/user_preferences', { timeoutMs: 20 });
     mock.timers.tick(25);
-    await assert.rejects(promise, (err: any) => err.name === 'AbortError');
+    await assert.rejects(promise, (err: any) => err.name === 'AbortError' && syncErrorKind(err) === 'transient_network');
   } finally {
     mock.timers.reset();
     globalThis.fetch = originalFetch;

@@ -15,6 +15,7 @@
  */
 
 import type { ImportedEnrichment } from '@/domain/import';
+import type { SyncErrorKind } from '@/domain/types';
 
 export const PENDING_ENRICHMENT_RESTORE_KEY = 'pending_enrichment_restore';
 
@@ -23,6 +24,9 @@ export interface PendingEnrichmentRestore {
   enrichment: ImportedEnrichment;
   status: 'pending' | 'failed';
   last_error: string | null;
+  last_error_kind?: SyncErrorKind;
+  retry_count?: number;
+  last_attempt_at?: string;
   created_at: string;
 }
 

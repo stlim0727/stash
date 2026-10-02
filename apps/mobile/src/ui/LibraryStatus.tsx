@@ -5,16 +5,31 @@ import { readDurableBookmarks } from '@/storage/durable-snapshot';
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
 import { Button } from '@/ui/Button';
+import { buildLibrarySyncFlow, type LibrarySyncFlow, type SyncDisplayPhase } from '@/domain/library-sync-status';
+import { useSyncDisplay } from '@/ui/use-sync-display';
+import type { MessageKey } from '@/i18n/messages';
 
-export function LibraryStatus({ bookmarks, queue, authStatus, loading, loadError, syncing, paused = false, retry, signIn, guestActions, inline = false }: {
+const SYNC_COPY: Partial<Record<SyncDisplayPhase, MessageKey>> = {
+  syncing: 'library.syncing', delayed: 'library.delayed', complete: 'library.complete',
+  offline: 'library.offline', paused: 'library.paused', sign_in: 'library.resume',
+  permission: 'library.permission', attention: 'library.attention',
+};
+
+export function LibraryStatus({ bookmarks, queue, authStatus, loading, loadError, syncing, paused = false, signIn, guestActions, inline = false, flow, scopeKey }: {
   bookmarks: Bookmark[]; queue: LocalPendingBookmark[]; authStatus: string;
   loading: boolean; loadError: boolean; syncing: boolean; paused?: boolean;
-  retry: () => void; signIn: () => void; guestActions?: ReactNode; inline?: boolean;
+  signIn: () => void; guestActions?: ReactNode; inline?: boolean;
+  flow?: LibrarySyncFlow; scopeKey?: string | null;
 }) {
   const t = useT();
   const palette = usePalette();
   const [confirmation, setConfirmation] = useState<{ bookmarks: Bookmark[]; confirmed: boolean } | null>(null);
   const guest = ['anonymous', 'signed_out', 'not_configured'].includes(authStatus);
+  const cloudEnabled = authStatus === 'authenticated' || authStatus === 'anonymous';
+  const observation = loading || loadError || (!cloudEnabled && authStatus !== 'session_expired' && authStatus !== 'error')
+    ? { phase: 'idle' as const, remaining: 0 }
+    : flow ?? buildLibrarySyncFlow({ authStatus, paused, offline: false, syncing, queue });
+  const phase = useSyncDisplay(observation, `${scopeKey ?? authStatus}:${loading}:${loadError}`);
   useEffect(() => {
     if (!inline || !guest || loading || loadError || bookmarks.length === 0) return;
     let active = true;
@@ -33,27 +48,24 @@ export function LibraryStatus({ bookmarks, queue, authStatus, loading, loadError
   }, [bookmarks, guest, loading, loadError, inline]);
 
   if (loading || loadError) return null;
-  const expired = authStatus === 'session_expired';
-  const failed = !guest && queue.some((item) => item.sync_status === 'failed');
-  const waiting = !guest && queue.length > 0;
   const saved = guest && confirmation?.bookmarks === bookmarks && confirmation.confirmed;
-  const key = expired ? 'library.resume' : guest ? (saved ? 'library.saved' : 'library.guest')
-    : paused ? 'library.paused' : failed ? 'library.failed' : waiting ? 'library.waiting' : null;
+  const key = (phase === 'sign_in' && authStatus !== 'session_expired' && authStatus !== 'error' ? 'library.attention' : SYNC_COPY[phase]) ?? (guest && saved ? 'library.saved' : null);
+  const actionable = phase === 'sign_in' || phase === 'permission' || phase === 'attention';
   if (inline) {
-    if (expired || (!paused && failed) || !key || (guest && !saved)) return null;
-    return <Text testID="library-status-inline" style={{ color: palette.textSecondary, fontSize: 13 }}
-      onPress={paused ? signIn : undefined} accessibilityRole={paused ? 'button' : undefined}>
+    if (actionable || !key) return null;
+    return <Text testID="library-status-inline" numberOfLines={1} accessibilityLiveRegion="polite"
+      style={{ color: palette.textSecondary, fontSize: 13, flexShrink: 1 }}
+      onPress={phase === 'paused' ? signIn : undefined} accessibilityRole={phase === 'paused' ? 'button' : undefined}>
       · {t(key)}
     </Text>;
   }
   // Routine queue activity and guest persistence belong beside the saved count.
-  const bannerKey = expired ? 'library.resume' : (!paused && failed) ? 'library.failed' : null;
-  if (!bannerKey) return null;
+  if (!actionable || !key) return null;
   return <View testID="library-status" accessibilityRole="summary"
     style={{ padding: 16, marginBottom: 12, gap: 8, borderRadius: 16, borderWidth: 1, borderColor: palette.border, backgroundColor: palette.card }}>
-    <Text style={{ color: bannerKey === 'library.failed' ? palette.danger : palette.textSecondary }}>{t(bannerKey)}</Text>
+    <Text style={{ color: phase === 'sign_in' ? palette.textSecondary : palette.danger }}>{t(key)}</Text>
     {guest ? guestActions : null}
-    {expired ? <Button variant="ghost" onPress={signIn}>{t('settings.account.signIn')}</Button>
-      : failed ? <Button variant="ghost" disabled={syncing} onPress={retry}>{t('library.retry')}</Button> : null}
+    {phase === 'sign_in' && (authStatus === 'session_expired' || authStatus === 'error') ? <Button variant="ghost" onPress={signIn}>{t('settings.account.signIn')}</Button>
+      : <Button variant="ghost" onPress={signIn}>{t('library.viewSync')}</Button>}
   </View>;
 }

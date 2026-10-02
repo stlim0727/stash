@@ -397,3 +397,15 @@ test('aborts in-flight publication request when superseded before completion', a
   expect(observedSignals.length).toBeGreaterThanOrEqual(1);
   expect(observedSignals[0].aborted).toBe(true);
 });
+
+
+test('cold-start server refresh records credential recovery while cached restoration does not', async () => {
+  fakeClient.restoreSession.mockResolvedValueOnce({ outcome: 'active', session: mockAuthedSession, credentialsRefreshed: true });
+  const screen = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(screen.result.current.status).toBe('authenticated'));
+  expect(screen.result.current.credentialRecoveryVersion).toBe(1);
+  fakeClient.restoreSession.mockResolvedValueOnce({ outcome: 'active', session: mockAuthedSession });
+  await act(async () => { await screen.result.current.ensureAnonymousSession(); });
+  expect(screen.result.current.credentialRecoveryVersion).toBe(1);
+  await screen.unmount();
+});

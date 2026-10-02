@@ -189,3 +189,11 @@ test("diagnostic counters preserve raw overlapping causes", () => {
     { trigger: 1, dispatch: 1, retry: 1, inFlight: 1, serverProcessing: 1 },
   );
 });
+
+test('automatically retryable HTTP uploads stay cloud work after health escalation', () => {
+  const entry = queued('http', 'failed', 'HTTP 503', 'retryable_http');
+  entry.health_escalated_at = NOW;
+  const result = stats({ queue: [entry] });
+  assert.equal(result.stages.cloud, 1);
+  assert.equal(result.stages.attention, 0);
+});

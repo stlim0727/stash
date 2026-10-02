@@ -15,6 +15,13 @@ export const ko: Catalog = {
   'library.guest': '이 기기의 라이브러리',
   'library.failed': '동기화 실패',
   'library.waiting': '동기화 대기 중',
+  'library.syncing': '동기화 중',
+  'library.complete': '동기화 완료',
+  'library.delayed': '동기화 지연 중 · 자동 재시도',
+  'library.offline': '연결되면 자동으로 동기화됩니다',
+  'library.permission': '동기화 권한이 없습니다. 계정 권한을 확인해 주세요.',
+  'library.attention': '동기화 확인이 필요합니다. 설정에서 세부 내용을 확인해 주세요.',
+  'library.viewSync': '동기화 세부 정보 보기',
 
   // Brand name is not localized; Korean reuses the same "Keepory" wordmark.
   'app.nameLocal': 'Keepory',
@@ -36,6 +43,8 @@ export const ko: Catalog = {
   'common.signOut': '로그아웃',
   'common.untitled': '제목 없음',
 
+  'status.signInRequired': '로그인 필요',
+  'status.permissionRequired': '접근 권한 확인 필요',
   'status.syncPrefix': '동기화 {status}',
   'status.metadataPrefix': '메타데이터 {status}',
   'status.pending': '대기 중',

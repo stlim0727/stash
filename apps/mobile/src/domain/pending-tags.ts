@@ -12,7 +12,7 @@
  * Dependency-light so it is unit-tested under the Node runner.
  */
 
-import type { BookmarkTag, Tag, TagSource } from '@/domain/types';
+import type { BookmarkTag, Tag, TagSource, SyncErrorKind } from '@/domain/types';
 import type { TagData } from '@/storage/types';
 import { normalizeTag, tagSlug } from '@/domain/tag-input';
 
@@ -29,7 +29,7 @@ export interface PendingTagOp {
   retry_count?: number;
   last_attempt_at?: string;
   last_error?: string;
-  last_error_kind?: 'other' | 'transient_network' | 'transient_dns';
+  last_error_kind?: SyncErrorKind;
   health_escalated_at?: string;
   /** Acknowledged removal remains a tombstone until a pull confirms absence. */
   confirmed?: boolean;

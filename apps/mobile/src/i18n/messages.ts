@@ -27,6 +27,13 @@ export const en = {
   'library.guest': 'Device-only library',
   'library.failed': 'Sync failed',
   'library.waiting': 'Waiting to sync',
+  'library.syncing': 'Syncing',
+  'library.complete': 'Sync complete',
+  'library.delayed': 'Sync delayed · retrying automatically',
+  'library.offline': 'Will sync automatically when connected',
+  'library.permission': 'Sync access denied. Review your account permissions.',
+  'library.attention': 'Sync needs attention. Review the details in Settings.',
+  'library.viewSync': 'View sync details',
   'app.name': 'Keepory',
   // Locale-native wordmark shown beside the brand name. Defaults to the brand
   // name itself, which the hero reads as "no native wordmark" and renders just
@@ -53,6 +60,8 @@ export const en = {
   'common.ok': 'OK',
 
   // Status words (sync/metadata), composed via the prefixes below.
+  'status.signInRequired': 'sign-in required',
+  'status.permissionRequired': 'access denied',
   'status.syncPrefix': 'sync {status}',
   'status.metadataPrefix': 'metadata {status}',
   'status.pending': 'pending',

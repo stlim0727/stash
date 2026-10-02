@@ -125,3 +125,21 @@ test('repeatedDnsFailure does not affect a non-DNS transient failure', () => {
     'sync waiting for connection',
   );
 });
+
+
+test('the first auth and permission upload failures are actionable in both locales without health escalation', () => {
+  for (const value of ['pending', 'failed']) {
+    assert.equal(syncStatusLabel(createT('en'), value, { sync_status: 'failed', last_error_kind: 'auth' }), 'sync sign-in required');
+    assert.equal(syncStatusLabel(createT('ko'), value, { sync_status: 'failed', last_error_kind: 'auth' }), '동기화 로그인 필요');
+    assert.equal(syncStatusLabel(createT('en'), value, { sync_status: 'failed', last_error_kind: 'permission' }), 'sync access denied');
+    assert.equal(syncStatusLabel(createT('ko'), value, { sync_status: 'failed', last_error_kind: 'permission' }), '동기화 접근 권한 확인 필요');
+  }
+});
+
+
+test('retryable HTTP failures stay queued after health escalation without hiding escalation data', () => {
+  const queue = { sync_status: 'failed' as const, last_error_kind: 'retryable_http' as const, health_escalated_at: '2026-10-02T00:00:00Z' };
+  assert.equal(syncStatusLabel(createT('en'), 'failed', queue), 'sync queued');
+  assert.equal(syncStatusLabel(createT('ko'), 'failed', queue), '동기화 대기 중');
+  assert.ok(queue.health_escalated_at);
+});

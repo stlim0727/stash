@@ -37,6 +37,8 @@ export function syncStatusLabel(
   repeatedDnsFailure?: boolean,
 ): string {
   const isFailed = queueState?.sync_status === 'failed';
+  if (isFailed && queueState?.last_error_kind === 'auth') return t('status.syncPrefix', { status: t('status.signInRequired') });
+  if (isFailed && queueState?.last_error_kind === 'permission') return t('status.syncPrefix', { status: t('status.permissionRequired') });
   const isDnsFailure = isFailed && queueState?.last_error_kind === 'transient_dns';
   const isTransientFailure =
     isFailed &&
@@ -49,7 +51,7 @@ export function syncStatusLabel(
   // `health_escalated_at` is the durable point where repeated failures become
   // actionable (3 ordinary attempts, 6 connectivity attempts), so it is also
   // the source of truth for when the stronger wording is warranted.
-  const isRecoveringFailure = isFailed && !queueState?.health_escalated_at;
+  const isRecoveringFailure = isFailed && (queueState?.last_error_kind === 'retryable_http' || !queueState?.health_escalated_at);
   const status =
     isDnsFailure && repeatedDnsFailure
       ? t('status.checkConnection')
