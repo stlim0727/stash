@@ -96,8 +96,9 @@ jest.mock('@/api/bookmarks', () => {
   };
 });
 
+let mockHoldMetadata = false;
 jest.mock('@/domain/enrichment', () => ({
-  enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
+  enrichBookmark: async () => mockHoldMetadata ? new Promise(() => {}) : ({ patch: {}, metadata_status: 'complete' }),
 }));
 
 const mockUpsertSyncStatus = jest.fn(async (..._args: unknown[]) => {});
@@ -131,6 +132,7 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 beforeEach(() => {
+  mockHoldMetadata = false;
   fakeRepo.__reset();
   apiMock.__createBookmarkMock.mockClear();
   apiMock.__listBookmarksUpdatedSinceMock.mockClear();
@@ -503,5 +505,46 @@ test('local bookmark updates do not postpone an approaching pull retry deadline'
     await act(async () => { await jest.advanceTimersByTimeAsync(1000); });
   }
   expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(2);
+  await screen.unmount();
+});
+
+
+test('overdue metadata-blocked creates do not spin full pulls', async () => {
+  jest.useFakeTimers();
+  mockHoldMetadata = true;
+  const id = '1a2b3c4d-0000-4000-8000-00000000abcd';
+  fakeRepo.__reset([makeStoredBookmark({ id, metadata_status: 'pending', sync_status: 'failed', ever_synced: false })]);
+  fakeRepo.__setMeta('synced_user_id', 'real-user');
+  const at = new Date(Date.now() - 60000).toISOString();
+  await fakeRepo.repository.enqueue({ local_id: id, remote_id: null, operation: 'create', payload: { url: 'https://example.com/metadata-wait' },
+    sync_status: 'failed', retry_count: 1, last_error_kind: 'retryable_http', last_error: 'HTTP 503', created_at: at, updated_at: at, last_attempt_at: at });
+  const screen = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(screen.result.current.isLoading).toBe(false));
+  await waitFor(() => expect(screen.result.current.isSyncing).toBe(false));
+  const pulls = apiMock.__listBookmarksUpdatedSinceMock.mock.calls.length;
+  await act(async () => { await jest.advanceTimersByTimeAsync(20000); });
+  expect(apiMock.__createBookmarkMock).not.toHaveBeenCalled();
+  expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(pulls);
+  await screen.unmount();
+});
+
+test('cold-start credential recovery survives a transient early session restoration failure', async () => {
+  jest.useFakeTimers();
+  authMock.__setAuth({ status: 'loading', session: null, userId: null });
+  const id = '1a2b3c4d-0000-4000-8000-00000000abcd';
+  fakeRepo.__reset([makeStoredBookmark({ id, sync_status: 'failed', ever_synced: false })]);
+  fakeRepo.__setMeta('synced_user_id', 'real-user');
+  const at = new Date().toISOString();
+  await fakeRepo.repository.enqueue({ local_id: id, remote_id: null, operation: 'create', payload: { url: 'https://example.com/early-recovery' },
+    sync_status: 'failed', retry_count: 1, last_error_kind: 'auth', last_error: 'HTTP 401', created_at: at, updated_at: at, last_attempt_at: at });
+  const screen = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(screen.result.current.isLoading).toBe(false));
+  authMock.useSupabaseAuth().ensureAnonymousSession.mockRejectedValueOnce(new Error('Network request failed'));
+  authMock.__setAuth({ status: 'authenticated', session: mockRealSession, userId: 'real-user', credentialRecoveryVersion: 1 });
+  await screen.rerender(undefined);
+  await waitFor(() => expect(screen.result.current.isSyncing).toBe(false));
+  await act(async () => { await jest.advanceTimersByTimeAsync(15000); });
+  await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(0));
+  expect(apiMock.__createBookmarkMock).toHaveBeenCalledTimes(1);
   await screen.unmount();
 });

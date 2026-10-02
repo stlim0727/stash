@@ -2335,3 +2335,17 @@ test('credential recovery survives coalescing behind an in-flight direct tag upl
   await waitFor(() => expect(JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]').map((op: { tag_name: string }) => op.tag_name)).toEqual(['permission-blocked']));
   await store.unmount();
 });
+
+test('a direct tag removal schedules its own confirming pull and retires the tombstone', async () => {
+  const id = '7e64cf1e-0000-4000-8000-000000000001';
+  fakeRepo.__reset([makeStoredBookmark({ id, user_id: 'real-user' })]);
+  apiMock.__setRemoteRows([{ id, url: 'https://example.com/stored' }]);
+  const store = await renderReadyStore();
+  const pull = jest.requireMock('@/api/bookmarks').createBookmarkApi(mockRealSession).listBookmarksUpdatedSince;
+  const pulls = pull.mock.calls.length;
+  await act(async () => { await store.result.current.removeTagFromBookmark(id, 'removed-tag'); });
+  await waitFor(() => expect(pull.mock.calls.length).toBeGreaterThan(pulls));
+  await waitFor(() => expect(fakeRepo.__meta('pending_tag_ops')).toBe('[]'));
+  expect(store.result.current.librarySyncFlow.phase).toBe('idle');
+  await store.unmount();
+});

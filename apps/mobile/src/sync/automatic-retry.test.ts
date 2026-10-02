@@ -64,3 +64,10 @@ test("pull readiness is independent from another channel's earlier deadline", ()
     assert.equal(isPullReady(blocked, now, true), true);
   }
 });
+
+test('legacy queue retry deadlines retain a stable hydration anchor across renders', () => {
+  const queue = [failed({ last_attempt_at: undefined })];
+  for (const elapsed of [0, 1000, 6000, 30000]) {
+    assert.equal(nextAutomaticSyncRetryAt({ ...input, queue, now: now + elapsed, legacyQueueAttemptAt: now }), now + 5000);
+  }
+});

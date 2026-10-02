@@ -4745,6 +4745,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           logStorageError("tag ops", error);
         }
         broadcastSyncNudgeRef.current?.();
+        if (!syncInFlight.current && pendingTagOpsRef.current.some((op) => op.confirmed)) {
+          void syncNowRef.current?.().catch(() => {});
+        }
       }
       return mutationsPushed;
     } finally {
@@ -6177,7 +6180,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       let mutationsPushed = false;
       let syncFailed = 0;
       const recoveryRequested = authRecoveryPendingRef.current;
-      authRecoveryPendingRef.current = false;
       try {
         await ensureRepositoryReady();
         // Re-ensure the session so a token that expired while the app stayed
@@ -6210,13 +6212,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const priorCredentials = syncCredentialsRef.current;
         const recoverAuth = !!restoredSession && (recoveryRequested ||
           (!!priorCredentials && (priorCredentials.userId !== session.user.id || priorCredentials.accessToken !== session.access_token)));
+        const durableBookmarks = await repository.listBookmarks();
+        const durableQueue = await repository.listQueue();
         if (restoredSession) {
           syncCredentialsRef.current = { userId: session.user.id, accessToken: session.access_token };
           credentialsWereUsedRef.current = true;
         }
         if (recoverAuth) authRecoveryPendingRef.current = false;
-        const durableBookmarks = await repository.listBookmarks();
-        const durableQueue = await repository.listQueue();
         // Repository reads allocate fresh arrays/rows even when nothing has
         // changed. Publishing those references unconditionally made every sync
         // pass invalidate the whole Bookmarks context and re-render the large
@@ -8653,10 +8655,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     if (offline || syncPaused || isSyncingState || isResettingLibrary || bookmarks === null ||
         !auth.session || auth.userId !== reconciledCacheUserId ||
         (auth.status !== "anonymous" && auth.status !== "authenticated")) return;
+    const metadataBlockedIds = new Set(bookmarks.filter((bookmark) => bookmark.metadata_status === "pending").map((bookmark) => bookmark.id));
     const deadline = nextAutomaticSyncRetryAt({
-      queue, runFailure: syncRunFailure,
+      queue: queue.filter((entry) => entry.operation !== "create" ||
+        !metadataBlockedIds.has(entry.local_id)),
+      runFailure: syncRunFailure,
       followups: [...pendingImportCollections, ...pendingEnrichmentRestores].filter((item) => hasSyncedOnce(item.bookmark_id)),
       now: Date.now(), legacyFollowupAttemptAt: legacyFollowupAttemptAt.current,
+      legacyQueueAttemptAt: legacyFollowupAttemptAt.current,
     });
     if (deadline === null) return;
     const timer = setTimeout(() => { void syncNowRef.current?.().catch(() => {}); }, Math.max(0, deadline - Date.now()));

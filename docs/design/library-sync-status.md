@@ -120,3 +120,10 @@ local bookmark changes cannot add another minimum delay. A tag upload already
 in flight retains recovered credentials for its coalesced replay, scoped to the
 same account and bearer. Fetch `AbortError` failures use transport backoff and
 remain automatically recoverable beyond three attempts.
+
+Recoverable HTTP uploads remain in the cloud processing stage even after health
+escalation. Retry wakeups exclude creates waiting for metadata and use a stable
+hydration anchor for legacy queue rows without attempt timestamps. Direct tag
+removals schedule a local confirming pull when no main sync is running.
+Credential recovery is consumed only after successful ownership reconciliation
+and durable snapshot reads, so an early failure does not discard that proof.

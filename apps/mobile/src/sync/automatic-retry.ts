@@ -40,6 +40,7 @@ export function nextAutomaticSyncRetryAt(input: {
   followups?: readonly RetryableFollowup[];
   now: number;
   legacyFollowupAttemptAt?: number;
+  legacyQueueAttemptAt?: number;
 }): number | null {
   if (input.runFailure?.kind === 'auth' || input.runFailure?.kind === 'permission') return null;
   const deadlines: number[] = [];
@@ -47,7 +48,7 @@ export function nextAutomaticSyncRetryAt(input: {
     if (entry.sync_status !== 'failed' || isPermanentlyUnsyncableUrl(entry) ||
         !canAutomaticallyRetry(entry.last_error_kind, entry.retry_count)) continue;
     const attemptedAt = Date.parse(entry.last_attempt_at ?? '');
-    deadlines.push((Number.isFinite(attemptedAt) ? attemptedAt : input.now) + Math.max(5_000, uploadRetryBackoffMs(entry)));
+    deadlines.push((Number.isFinite(attemptedAt) ? attemptedAt : input.legacyQueueAttemptAt ?? input.now) + Math.max(5_000, uploadRetryBackoffMs(entry)));
   }
   const failure = input.runFailure;
   if (failure && canAutomaticallyRetry(failure.kind, failure.attempts)) {

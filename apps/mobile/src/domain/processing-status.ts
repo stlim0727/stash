@@ -122,6 +122,7 @@ export function buildProcessingStats(input: BuildProcessingStatsInput): Processi
         (entry) =>
           entry.sync_status === "failed" &&
           !isTransientSyncFailure(entry) &&
+          entry.last_error_kind !== "retryable_http" &&
           !permanentIds.has(entry.local_id),
       )
       .map((entry) => entry.local_id),
@@ -132,7 +133,8 @@ export function buildProcessingStats(input: BuildProcessingStatsInput): Processi
         (entry) =>
           (entry.sync_status === "pending" ||
             entry.sync_status === "syncing" ||
-            isTransientSyncFailure(entry)) &&
+            isTransientSyncFailure(entry) ||
+            (entry.sync_status === "failed" && entry.last_error_kind === "retryable_http")) &&
           !permanentIds.has(entry.local_id) &&
           !syncAttentionIds.has(entry.local_id),
       )
