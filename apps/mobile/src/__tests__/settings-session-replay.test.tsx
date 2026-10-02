@@ -35,7 +35,7 @@ jest.mock('expo-router', () => ({
 // mock) so cascade behavior between them is deterministic and doesn't depend
 // on real network/storage plumbing.
 const mockAnalyticsSetEnabled = jest.fn(async () => {});
-const mockAnalyticsState = { enabled: false, ready: true };
+const mockAnalyticsState = { enabled: false, ready: true, configured: true };
 jest.mock('@/analytics/provider', () => ({
   useAnalytics: () => ({
     ...mockAnalyticsState,
@@ -71,9 +71,29 @@ beforeEach(() => {
   mockSessionReplaySetEnabled.mockClear().mockResolvedValue(undefined);
   mockAnalyticsState.enabled = false;
   mockAnalyticsState.ready = true;
+  mockAnalyticsState.configured = true;
   mockSessionReplayState.enabled = false;
   mockSessionReplayState.ready = true;
   mockSessionReplayState.configured = true;
+});
+
+test('the analytics row is disabled and reads unconfigured when posthog is not configured', async () => {
+  mockAnalyticsState.configured = false;
+  const screen = await renderSettings();
+
+  await waitFor(() =>
+    expect(
+      screen.getByText('Unavailable — analytics service is not configured'),
+    ).toBeTruthy(),
+  );
+  const toggle = screen.getByLabelText('Share privacy-safe usage analytics');
+  expect(toggle.props.disabled).toBe(true);
+  expect(toggle.props.value).toBe(false);
+
+  await act(async () => {
+    fireEvent(toggle, 'valueChange', true);
+  });
+  expect(mockAnalyticsSetEnabled).not.toHaveBeenCalled();
 });
 
 test('the session replay row is hidden entirely in a build with no full-SDK build gate', async () => {

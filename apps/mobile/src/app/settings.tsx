@@ -215,7 +215,7 @@ export default function SettingsScreen() {
   const [sessionReplayBusy, setSessionReplayBusy] = useState(false);
 
   const handleAnalyticsChange = (enabled: boolean) => {
-    if (!analytics.ready || analyticsBusy) return;
+    if (!analytics.configured || !analytics.ready || analyticsBusy) return;
     setAnalyticsBusy(true);
     // Narrower consent (session replay) doesn't survive revoking the broader
     // one (base analytics) — cascade the opt-out unconditionally (not gated
@@ -650,6 +650,7 @@ export default function SettingsScreen() {
   // stable cross-device identity to bind a token to, see the push_tokens
   // migration — AND an AI-suggestions mode other than `off`, since `off`
   // means nothing ever queues for the backend worker to notify about.
+  // Remote push notifications are also unsupported on web.
   // Rather than hide the row when either is unmet, it stays visible but
   // disabled with an explanatory value line (same pattern as "Clear search
   // history" below), so the setting doesn't appear to vanish. Turning AI
@@ -657,7 +658,7 @@ export default function SettingsScreen() {
   // already-enabled preference (and its registered token, if any) is left
   // alone rather than force-cleared while suggestions are off.
   const canUsePushNotifications =
-    isAuthenticated && aiSuggestionsMode !== "off";
+    Platform.OS !== "web" && isAuthenticated && aiSuggestionsMode !== "off";
 
   const handlePushNotificationsChange = (enabled: boolean) => {
     if (pushNotificationsBusy || !canUsePushNotifications) {
@@ -1095,13 +1096,15 @@ export default function SettingsScreen() {
           icon="notifications-outline"
           label={t("settings.pushNotifications.label")}
           value={
-            !isAuthenticated
-              ? t("settings.pushNotifications.signInRequired")
-              : aiSuggestionsMode === "off"
-                ? t("settings.pushNotifications.aiOff")
-                : pushNotificationsEnabled
-                  ? t("settings.pushNotifications.on")
-                  : t("settings.pushNotifications.off")
+            Platform.OS === "web"
+              ? t("settings.pushNotifications.unsupportedPlatform")
+              : !isAuthenticated
+                ? t("settings.pushNotifications.signInRequired")
+                : aiSuggestionsMode === "off"
+                  ? t("settings.pushNotifications.aiOff")
+                  : pushNotificationsEnabled
+                    ? t("settings.pushNotifications.on")
+                    : t("settings.pushNotifications.off")
           }
           right={
             pushNotificationsBusy ? (
@@ -1143,15 +1146,17 @@ export default function SettingsScreen() {
           icon="analytics-outline"
           label={t("settings.analytics.label")}
           value={
-            analytics.enabled
-              ? t("settings.analytics.enabled")
-              : t("settings.analytics.disabled")
+            !analytics.configured
+              ? t("settings.analytics.unconfigured")
+              : analytics.enabled
+                ? t("settings.analytics.enabled")
+                : t("settings.analytics.disabled")
           }
           right={
             <Switch
               accessibilityLabel={t("settings.analytics.label")}
-              value={analytics.enabled}
-              disabled={!analytics.ready || analyticsBusy}
+              value={analytics.configured && analytics.enabled}
+              disabled={!analytics.configured || !analytics.ready || analyticsBusy}
               onValueChange={handleAnalyticsChange}
               trackColor={{ true: palette.accent, false: palette.border }}
               thumbColor="#ffffff"

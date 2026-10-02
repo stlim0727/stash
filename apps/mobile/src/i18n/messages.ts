@@ -667,6 +667,8 @@ export const en = {
   'settings.analytics.enabled':
     'Shares app opens, screen categories, platform/sign-in state, share performance/latency, time, and a random analytics ID',
   'settings.analytics.disabled': 'Off — no analytics are sent',
+  'settings.analytics.unconfigured':
+    'Unavailable — analytics service is not configured',
   'settings.analytics.errorTitle': 'Could not save analytics preference',
   'settings.analytics.errorBody':
     'Analytics stays off for this session. Please try again so the choice is saved for the next launch.',
@@ -712,6 +714,7 @@ export const en = {
   'settings.pushNotifications.label': 'Notify when AI catches up',
   'settings.pushNotifications.on': 'On — a push arrives once AI finishes a backlog',
   'settings.pushNotifications.off': 'Off',
+  'settings.pushNotifications.unsupportedPlatform': 'Not supported on web',
   'settings.pushNotifications.signInRequired': 'Sign in to enable',
   'settings.pushNotifications.aiOff': 'Turn on AI suggestions first',
   'settings.pushNotifications.deniedTitle': 'Notifications are turned off',

@@ -474,6 +474,8 @@ export const ko: Catalog = {
   'settings.analytics.enabled':
     '앱 실행, 화면 범주, 플랫폼/로그인 상태, 공유 성능/지연 시간, 시각, 무작위 분석 ID를 공유합니다',
   'settings.analytics.disabled': '꺼짐 — 분석 데이터를 보내지 않습니다',
+  'settings.analytics.unconfigured':
+    '사용할 수 없음 — 분석 서비스가 설정되지 않았습니다',
   'settings.analytics.errorTitle': '분석 설정을 저장하지 못했습니다',
   'settings.analytics.errorBody':
     '이번 실행에서는 분석이 꺼진 상태로 유지됩니다. 다음 실행에도 적용되도록 다시 시도해 주세요.',
@@ -509,6 +511,7 @@ export const ko: Catalog = {
   'settings.pushNotifications.label': 'AI 정리가 끝나면 알림',
   'settings.pushNotifications.on': '켜짐 — AI가 밀린 작업을 끝내면 알림이 와요',
   'settings.pushNotifications.off': '꺼짐',
+  'settings.pushNotifications.unsupportedPlatform': '웹에서는 지원되지 않아요',
   'settings.pushNotifications.signInRequired': '로그인하면 사용할 수 있어요',
   'settings.pushNotifications.aiOff': '먼저 AI 추천을 켜주세요',
   'settings.pushNotifications.deniedTitle': '알림이 꺼져 있어요',
