@@ -539,6 +539,26 @@ interface BookmarksContextValue {
   createCollection: (
     name: string,
   ) => Promise<{ collection?: Collection; error?: string }>;
+  /** Rename an existing collection. */
+  renameCollection: (
+    collectionId: string,
+    name: string,
+  ) => Promise<{ collection?: Collection; error?: string }>;
+  /** Delete a collection, either moving its bookmarks to trash or leaving them uncategorized. */
+  deleteCollection: (
+    collectionId: string,
+    action: "uncategorize" | "trash",
+  ) => Promise<{ error?: string }>;
+  /** Bulk delete collections, either moving bookmarks to trash or leaving them uncategorized. */
+  deleteCollections: (
+    collectionIds: string[],
+    action: "uncategorize" | "trash",
+  ) => Promise<{ error?: string }>;
+  /** Merge source collections into a target collection, reassigning bookmarks. */
+  mergeCollections: (
+    sourceCollectionIds: string[],
+    targetCollectionId: string,
+  ) => Promise<{ error?: string }>;
   /** Mutually-exclusive user-facing stages plus overlapping raw diagnostic
    *  counters (developer mode) for the Settings background-processing card. */
   processingStats: ProcessingStats;
@@ -5560,6 +5580,181 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [auth, applyTagData],
   );
 
+  const renameCollection = useCallback(
+    async (
+      collectionId: string,
+      name: string,
+    ): Promise<{ collection?: Collection; error?: string }> => {
+      if (!auth.session) {
+        return {
+          error:
+            "Collections need the cloud — Supabase is not available right now.",
+        };
+      }
+      const trimmed = name.trim();
+      if (!trimmed) {
+        return { error: "Enter a collection name." };
+      }
+      try {
+        const api = createSyncApi(auth.session);
+        const updated = await api.updateCollection(collectionId, { name: trimmed });
+        const current = tagDataRef.current;
+        applyTagData({
+          ...current,
+          collections: current.collections.map((c) =>
+            c.id === collectionId ? updated : c,
+          ),
+        });
+        return { collection: updated };
+      } catch (error) {
+        return {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Could not rename the collection.",
+        };
+      }
+    },
+    [auth, applyTagData],
+  );
+
+  const deleteCollections = useCallback(
+    async (
+      collectionIds: string[],
+      action: "uncategorize" | "trash",
+    ): Promise<{ error?: string }> => {
+      if (!auth.session) {
+        return {
+          error:
+            "Collections need the cloud — Supabase is not available right now.",
+        };
+      }
+      if (collectionIds.length === 0) {
+        return {};
+      }
+      try {
+        const idSet = new Set(collectionIds);
+
+        // Perform remote deletion first so if network/remote fails, local bookmarks
+        // and collections remain completely intact without abandoned mutations in the outbox.
+        const api = createSyncApi(auth.session);
+        await api.deleteCollections(collectionIds, action);
+
+        const affected = (bookmarksRef.current ?? []).filter(
+          (b) => b.collection_id && idSet.has(b.collection_id),
+        );
+        for (const bookmark of affected) {
+          if (action === "trash") {
+            applyBookmarkUpdate(
+              bookmark.id,
+              {
+                deleted_at: bookmark.deleted_at ?? new Date().toISOString(),
+                collection_id: null,
+              },
+              "trash",
+            );
+            clearAiRetry(bookmark.id);
+            syncAiRetryIds();
+            clearAiServerQueued(bookmark.id);
+          } else {
+            assignCollection(bookmark.id, null);
+          }
+        }
+
+        const current = tagDataRef.current;
+        applyTagData({
+          ...current,
+          collections: current.collections.filter((c) => !idSet.has(c.id)),
+        });
+
+        return {};
+      } catch (error) {
+        return {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Could not delete the collections.",
+        };
+      }
+    },
+    [
+      auth,
+      applyTagData,
+      applyBookmarkUpdate,
+      assignCollection,
+      clearAiRetry,
+      syncAiRetryIds,
+      clearAiServerQueued,
+    ],
+  );
+
+  const deleteCollection = useCallback(
+    async (
+      collectionId: string,
+      action: "uncategorize" | "trash",
+    ): Promise<{ error?: string }> => {
+      return deleteCollections([collectionId], action);
+    },
+    [deleteCollections],
+  );
+
+  const mergeCollections = useCallback(
+    async (
+      sourceCollectionIds: string[],
+      targetCollectionId: string,
+    ): Promise<{ error?: string }> => {
+      if (!auth.session) {
+        return {
+          error:
+            "Collections need the cloud — Supabase is not available right now.",
+        };
+      }
+      const target = tagDataRef.current.collections.find(
+        (c) => c.id === targetCollectionId,
+      );
+      if (!target) {
+        return { error: "Target collection not found." };
+      }
+      const sources = sourceCollectionIds.filter(
+        (id) => id !== targetCollectionId,
+      );
+      if (sources.length === 0) {
+        return {};
+      }
+      try {
+        const sourceSet = new Set(sources);
+
+        // Perform remote merge first so if network/remote fails, local bookmarks
+        // and collections remain completely intact without abandoned mutations in the outbox.
+        const api = createSyncApi(auth.session);
+        await api.mergeCollections(sources, targetCollectionId);
+
+        const affected = (bookmarksRef.current ?? []).filter(
+          (b) => b.collection_id && sourceSet.has(b.collection_id),
+        );
+        for (const bookmark of affected) {
+          assignCollection(bookmark.id, targetCollectionId);
+        }
+
+        const current = tagDataRef.current;
+        applyTagData({
+          ...current,
+          collections: current.collections.filter((c) => !sourceSet.has(c.id)),
+        });
+
+        return {};
+      } catch (error) {
+        return {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Could not merge the collections.",
+        };
+      }
+    },
+    [auth, applyTagData, assignCollection],
+  );
+
   // Same batch-attach RPC as syncTagOps above (issue #713): group eligible
   // imported-collection intents by bookmark, chunk, and resolve-or-create each
   // collection server-side in one call per chunk instead of one
@@ -9168,6 +9363,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       clearUnseenSuggestions,
       assignCollection,
       createCollection,
+      renameCollection,
+      deleteCollection,
+      deleteCollections,
+      mergeCollections,
     }),
     [
       bookmarks,
@@ -9231,6 +9430,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       clearUnseenSuggestions,
       assignCollection,
       createCollection,
+      renameCollection,
+      deleteCollection,
+      deleteCollections,
+      mergeCollections,
     ],
   );
 

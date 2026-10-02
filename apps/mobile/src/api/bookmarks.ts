@@ -913,6 +913,84 @@ export class BookmarkApi {
     return created;
   }
 
+  async updateCollection(
+    collectionId: string,
+    updates: { name?: string; description?: string | null },
+  ): Promise<Collection> {
+    const timestamp = nowIso();
+    const body: Record<string, unknown> = {
+      updated_at: timestamp,
+    };
+    if (updates.name !== undefined) {
+      body.name = normalizeText(updates.name);
+    }
+    if (updates.description !== undefined) {
+      body.description = updates.description?.trim() || null;
+    }
+    const rows = await this.requestArray<Collection>(
+      appendSearchParams(
+        '/rest/v1/collections',
+        new URLSearchParams({
+          id: `eq.${collectionId}`,
+          user_id: `eq.${this.session.user.id}`,
+        }),
+      ),
+      {
+        method: 'PATCH',
+        accessToken: this.session.access_token,
+        headers: { Prefer: 'return=representation' },
+        body,
+      },
+    );
+    const updated = rows[0];
+    if (!updated) {
+      throw new Error('Supabase did not return the updated collection.');
+    }
+    return updated;
+  }
+
+  async deleteCollection(
+    collectionId: string,
+    action: 'uncategorize' | 'trash' = 'uncategorize',
+  ): Promise<void> {
+    return this.deleteCollections([collectionId], action);
+  }
+
+  async deleteCollections(
+    collectionIds: string[],
+    action: 'uncategorize' | 'trash' = 'uncategorize',
+  ): Promise<void> {
+    if (collectionIds.length === 0) {
+      return;
+    }
+    await this.client.request('/rest/v1/rpc/delete_user_collections', {
+      method: 'POST',
+      accessToken: this.session.access_token,
+      body: {
+        collection_ids: collectionIds,
+        delete_action: action,
+      },
+    });
+  }
+
+  async mergeCollections(
+    sourceCollectionIds: string[],
+    targetCollectionId: string,
+  ): Promise<void> {
+    const sources = sourceCollectionIds.filter((id) => id !== targetCollectionId);
+    if (sources.length === 0) {
+      return;
+    }
+    await this.client.request('/rest/v1/rpc/merge_user_collections', {
+      method: 'POST',
+      accessToken: this.session.access_token,
+      body: {
+        source_collection_ids: sources,
+        target_collection_id: targetCollectionId,
+      },
+    });
+  }
+
   private async fetchAllPages<T>(
     path: string,
     configure: (query: URLSearchParams) => void,

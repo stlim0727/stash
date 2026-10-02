@@ -1015,3 +1015,81 @@ test('createBookmark and createBookmarks pass collection_id in request body', as
   assert.equal(bulkPosts.length, 1);
   assert.equal(bulkPosts[0].collection_id, 'col-2');
 });
+
+test('updateCollection patches collection name and returns updated collection', async () => {
+  const calls: Array<{ path: string; options: Record<string, unknown> }> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      calls.push({ path, options });
+      return [
+        {
+          id: 'col-1',
+          user_id: 'user-1',
+          name: 'Renamed Col',
+          description: null,
+          created_at: '2026-06-12T00:00:00.000Z',
+          updated_at: '2026-10-02T00:00:00.000Z',
+        },
+      ];
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+  const result = await api.updateCollection('col-1', { name: ' Renamed Col ' });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.method, 'PATCH');
+  assert.ok(calls[0].path.includes('id=eq.col-1'));
+  const body = calls[0].options.body as Record<string, unknown>;
+  assert.equal(body.name, 'Renamed Col');
+  assert.equal(result.name, 'Renamed Col');
+});
+
+test('deleteCollection and deleteCollections invoke transactional RPC delete_user_collections', async () => {
+  const calls: Array<{ path: string; options: Record<string, unknown> }> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      calls.push({ path, options });
+      return null;
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  await api.deleteCollection('col-1', 'uncategorize');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, '/rest/v1/rpc/delete_user_collections');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.deepEqual(calls[0].options.body, {
+    collection_ids: ['col-1'],
+    delete_action: 'uncategorize',
+  });
+
+  calls.length = 0;
+  await api.deleteCollections(['col-2', 'col-3'], 'trash');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, '/rest/v1/rpc/delete_user_collections');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.deepEqual(calls[0].options.body, {
+    collection_ids: ['col-2', 'col-3'],
+    delete_action: 'trash',
+  });
+});
+
+test('mergeCollections invokes transactional RPC merge_user_collections', async () => {
+  const calls: Array<{ path: string; options: Record<string, unknown> }> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      calls.push({ path, options });
+      return null;
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  await api.mergeCollections(['col-a', 'col-b'], 'col-target');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, '/rest/v1/rpc/merge_user_collections');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.deepEqual(calls[0].options.body, {
+    source_collection_ids: ['col-a', 'col-b'],
+    target_collection_id: 'col-target',
+  });
+});
