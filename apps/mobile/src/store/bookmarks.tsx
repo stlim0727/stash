@@ -397,9 +397,16 @@ interface BookmarksContextValue {
   lastPulledAt: string | null;
   /** The user's cloud collections (assignable; refreshed by pull sync). */
   collections: Collection[];
+  /** All tags known to the user (refreshed by pull sync and local edits). */
+  tags: Tag[];
   /** Add tags locally, including before the bookmark has synced. Resolves to an error message, or null. */
   addTagsToBookmark: (
     bookmarkId: string,
+    names: string[],
+  ) => Promise<string | null>;
+  /** Add tags locally across multiple bookmarks. Resolves to an error message, or null. */
+  addTagsToBookmarks: (
+    bookmarkIds: string[],
     names: string[],
   ) => Promise<string | null>;
   /** Remove a tag locally, retaining a durable removal intent. Resolves to an error message, or null. */
@@ -4764,42 +4771,72 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // Serialize the whole local edit: compute against the latest identity and
   // journal first, then publish/persist its derived snapshot. A failed journal
   // changes neither memory nor the cache, and overlapping edits cannot clobber.
-  const commitTagEdit = useCallback(
-    (bookmarkId: string, names: Array<string | SuggestedTag>, operation: "add" | "remove"): Promise<string | null> => {
+  const commitBatchTagEdit = useCallback(
+    (bookmarkIds: string[], names: Array<string | SuggestedTag>, operation: "add" | "remove"): Promise<string | null> => {
       return serializeTagWork(async () => {
-        bookmarkId = resolveAliasedId(bookmarkId, idAliases.current);
-        if (!hasRemoteIdentity(bookmarkId) || !bookmarksRef.current?.some((bookmark) =>
-          resolveAliasedId(bookmark.id, idAliases.current) === bookmarkId)) {
-          return "This bookmark cannot be tagged.";
-        }
-        try {
-          await ensureRepositoryReady();
-          if (!(await repository.getBookmark(bookmarkId))) {
-            return "This bookmark is still being saved. Please retry.";
-          }
-        } catch (error) {
-          logStorageError("tag edit bookmark", error);
-          return "Could not save tags on this device. Please retry.";
-        }
+        if (bookmarkIds.length === 0) return null;
         const cleaned = names.map((value) => typeof value === "string"
           ? { name: value.trim(), source: "user" as const, confidence: null }
           : { name: value.name.trim(), source: "ai" as const, confidence: value.confidence }
         ).filter((value) => value.name.length > 0);
         if (cleaned.length === 0) return "Enter a tag name.";
+
+        try {
+          await ensureRepositoryReady();
+        } catch (error) {
+          logStorageError("tag edit bookmark", error);
+          return "Could not save tags on this device. Please retry.";
+        }
+
+        const validIds: string[] = [];
+        for (const rawId of bookmarkIds) {
+          const resolvedId = resolveAliasedId(rawId, idAliases.current);
+          if (
+            hasRemoteIdentity(resolvedId) &&
+            bookmarksRef.current?.some(
+              (bookmark) => resolveAliasedId(bookmark.id, idAliases.current) === resolvedId,
+            )
+          ) {
+            validIds.push(resolvedId);
+          }
+        }
+
+        if (validIds.length === 0) {
+          return "This bookmark cannot be tagged.";
+        }
+
+        const savedIds: string[] = [];
+        try {
+          await ensureRepositoryReady();
+          for (const id of validIds) {
+            if (await repository.getBookmark(id)) {
+              savedIds.push(id);
+            }
+          }
+        } catch (error) {
+          logStorageError("tag edit bookmark", error);
+          return "Could not save tags on this device. Please retry.";
+        }
+
+        if (savedIds.length === 0) {
+          return "This bookmark is still being saved. Please retry.";
+        }
+
         const userId = authRef.current.userId ?? mockUserId;
         const now = new Date().toISOString();
         let nextData = tagDataRef.current;
         let nextOps = pendingTagOpsRef.current;
-        for (const { name, source, confidence } of cleaned) {
-          const op: PendingTagOp = {
-            id: makeUuid(), bookmark_id: bookmarkId, tag_name: name,
-            op: operation, source, confidence, created_at: now,
-          };
-          nextData = applyTagOp(nextData, op, userId);
-          nextOps = enqueueTagOp(nextOps, op);
+        for (const bookmarkId of savedIds) {
+          for (const { name, source, confidence } of cleaned) {
+            const op: PendingTagOp = {
+              id: makeUuid(), bookmark_id: bookmarkId, tag_name: name,
+              op: operation, source, confidence, created_at: now,
+            };
+            nextData = applyTagOp(nextData, op, userId);
+            nextOps = enqueueTagOp(nextOps, op);
+          }
         }
         try {
-          await ensureRepositoryReady();
           await repository.setMeta(PENDING_TAG_OPS_KEY, JSON.stringify(nextOps));
           tagJournalHealthyRef.current = true;
           tagJournalRetryAtRef.current = 0;
@@ -4816,13 +4853,27 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [serializeTagWork, applyTagOps, applyTagData],
   );
 
-  const addTagsToBookmark = useCallback(
-    async (bookmarkId: string, names: string[]): Promise<string | null> => {
-      const error = await commitTagEdit(bookmarkId, names, "add");
+  const commitTagEdit = useCallback(
+    (bookmarkId: string, names: Array<string | SuggestedTag>, operation: "add" | "remove"): Promise<string | null> => {
+      return commitBatchTagEdit([bookmarkId], names, operation);
+    },
+    [commitBatchTagEdit],
+  );
+
+  const addTagsToBookmarks = useCallback(
+    async (bookmarkIds: string[], names: string[]): Promise<string | null> => {
+      const error = await commitBatchTagEdit(bookmarkIds, names, "add");
       if (!error) void syncTagOps();
       return error;
     },
-    [commitTagEdit, syncTagOps],
+    [commitBatchTagEdit, syncTagOps],
+  );
+
+  const addTagsToBookmark = useCallback(
+    async (bookmarkId: string, names: string[]): Promise<string | null> => {
+      return addTagsToBookmarks([bookmarkId], names);
+    },
+    [addTagsToBookmarks],
   );
 
   const removeTagFromBookmark = useCallback(
@@ -9086,7 +9137,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       setSyncPaused,
       lastPulledAt,
       collections: tagData.collections,
+      tags: tagData.tags,
       addTagsToBookmark,
+      addTagsToBookmarks,
       removeTagFromBookmark,
       requestAiEnrichment,
       aiSuggestionsMode,
@@ -9147,7 +9200,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       setSyncPaused,
       lastPulledAt,
       tagData.collections,
+      tagData.tags,
       addTagsToBookmark,
+      addTagsToBookmarks,
       removeTagFromBookmark,
       requestAiEnrichment,
       aiSuggestionsMode,

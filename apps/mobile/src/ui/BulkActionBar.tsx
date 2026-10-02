@@ -10,6 +10,7 @@ export interface BulkActionBarProps {
   isRefreshing?: boolean;
   onRefresh: () => void;
   onMove: () => void;
+  onTag: () => void;
   onDelete: () => void;
   maxWidth?: number;
   bottomInset?: number;
@@ -20,6 +21,7 @@ export function BulkActionBar({
   isRefreshing = false,
   onRefresh,
   onMove,
+  onTag,
   onDelete,
   maxWidth,
   bottomInset = 0,
@@ -107,6 +109,38 @@ export function BulkActionBar({
           numberOfLines={1}
         >
           {t('inbox.bulkMove')}
+        </Text>
+      </Pressable>
+
+      <View style={[styles.separator, { backgroundColor: palette.border }]} />
+
+      <Pressable
+        testID="inbox-bulk-tag"
+        accessibilityRole="button"
+        accessibilityLabel={t('inbox.bulkTagA11y')}
+        accessibilityState={{ disabled: disabled || isRefreshing }}
+        disabled={disabled || isRefreshing}
+        hitSlop={8}
+        onPress={onTag}
+        style={({ pressed }) => [
+          styles.actionButton,
+          { opacity: disabled ? 0.4 : pressed ? 0.7 : 1 },
+        ]}
+      >
+        <Ionicons
+          name="pricetag-outline"
+          size={20}
+          color={disabled ? palette.textSecondary : palette.text}
+          style={styles.iconSlot}
+        />
+        <Text
+          style={[
+            styles.actionLabel,
+            { color: disabled ? palette.textSecondary : palette.text },
+          ]}
+          numberOfLines={1}
+        >
+          {t('inbox.bulkTag')}
         </Text>
       </Pressable>
 
