@@ -3231,12 +3231,13 @@ export default function InboxScreen() {
             };
 
             const handleFolderLongPress = () => {
+              if (!collectionId) {
+                return;
+              }
               if (folderSelectionMode) {
-                if (collectionId) {
-                  toggleFolderSelect(collectionId);
-                }
-              } else if (collectionObj) {
-                setFolderMenuItem(collectionObj);
+                toggleFolderSelect(collectionId);
+              } else {
+                enterFolderSelectionMode(collectionId);
               }
             };
 

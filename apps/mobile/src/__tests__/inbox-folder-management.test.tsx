@@ -203,6 +203,69 @@ describe('Folder View & Collection Management', () => {
     expect(screen.queryByTestId('folder-bulk-action-bar')).toBeNull();
   });
 
+  test('enters folder selection mode on folder tile long press and selects the pressed folder', async () => {
+    const colA = makeCollection('col-a', 'Engineering');
+    const colB = makeCollection('col-b', 'Design');
+
+    fakeRepo.__reset(
+      [
+        makeStoredBookmark({
+          id: '7e64cf1e-0000-4000-8000-000000000001',
+          title: 'React Native Docs',
+          collection_id: 'col-a',
+        }),
+      ],
+      { tags: [], bookmarkTags: [], collections: [colA, colB] },
+    );
+
+    const screen = await renderInbox();
+    await waitFor(() => expect(screen.getByText('React Native Docs')).toBeTruthy());
+
+    // Switch to folder view
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('inbox-view-options'));
+    });
+    await waitFor(() => expect(screen.getByTestId('inbox-view-folder')).toBeTruthy());
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('inbox-view-folder'));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('folder-tile-__folder-c:col-a')).toBeTruthy();
+      expect(screen.getByTestId('folder-tile-__folder-c:col-b')).toBeTruthy();
+    });
+
+    // Long press Engineering folder tile to enter selection mode
+    await act(async () => {
+      fireEvent(screen.getByTestId('folder-tile-__folder-c:col-a'), 'longPress');
+    });
+
+    // Selection mode active with 1 collection selected
+    await waitFor(() => {
+      expect(screen.getByTestId('folder-selection-count')).toBeTruthy();
+      expect(screen.getByText('1 collection selected')).toBeTruthy();
+      expect(screen.getByTestId('folder-bulk-action-bar')).toBeTruthy();
+    });
+
+    // Long press Design folder tile while in selection mode to toggle selection
+    await act(async () => {
+      fireEvent(screen.getByTestId('folder-tile-__folder-c:col-b'), 'longPress');
+    });
+    expect(screen.getByText('2 collections selected')).toBeTruthy();
+
+    // Long press Engineering folder tile again to toggle it off
+    await act(async () => {
+      fireEvent(screen.getByTestId('folder-tile-__folder-c:col-a'), 'longPress');
+    });
+    expect(screen.getByText('1 collection selected')).toBeTruthy();
+
+    // Close selection mode
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('folder-selection-close'));
+    });
+    expect(screen.queryByTestId('folder-bulk-action-bar')).toBeNull();
+  });
+
   test('opens collection options sheet via tile more button and triggers rename dialog', async () => {
     const colA = makeCollection('col-a', 'Research');
 
