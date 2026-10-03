@@ -274,8 +274,11 @@ export const en = {
   'folder.mergeTitle': 'Merge collections',
   'folder.mergePrompt': 'Select the destination collection:',
   'folder.mergeMultiPrompt': 'Which collection should hold everything?',
+  'folder.selectTargetBadge': 'Select',
   'folder.keepTargetBadge': 'Keep',
   'folder.mergeSourceBadge': 'Will be merged',
+  'folder.mergeTargetDisappearedNotice':
+    'The selected collection is no longer available. Please select another collection.',
   'folder.mergeConsequenceNotice': {
     one: '{count} bookmark from {sources} will move into “{target}”, and empty collections will be retired.',
     other: '{count} bookmarks from {sources} will move into “{target}”, and empty collections will be retired.',

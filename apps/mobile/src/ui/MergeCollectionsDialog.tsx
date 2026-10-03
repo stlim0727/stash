@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import {
   ActivityIndicator,
@@ -41,22 +41,46 @@ export function MergeCollectionsDialog({
   const t = useT();
   const insets = useSafeAreaInsets();
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
+  const [targetLost, setTargetLost] = useState(false);
+  const prevVisibleRef = useRef(false);
 
   const isMultiSource = sourceCollections.length > 1;
 
   useEffect(() => {
-    if (visible && availableTargets.length > 0) {
-      if (!selectedTargetId || !availableTargets.some((c) => c.id === selectedTargetId)) {
-        setSelectedTargetId(availableTargets[0]?.id ?? null);
+    if (visible && !prevVisibleRef.current) {
+      setSelectedTargetId(null);
+      setTargetLost(false);
+    } else if (!visible && prevVisibleRef.current) {
+      setSelectedTargetId(null);
+      setTargetLost(false);
+    }
+    prevVisibleRef.current = visible;
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible) return;
+    if (selectedTargetId !== null) {
+      const stillAvailable = availableTargets.some((c) => c.id === selectedTargetId);
+      if (!stillAvailable) {
+        setSelectedTargetId(null);
+        setTargetLost(true);
       }
     }
   }, [visible, availableTargets, selectedTargetId]);
+
+  const handleSelectTarget = (id: string) => {
+    if (busy) return;
+    setSelectedTargetId(id);
+    setTargetLost(false);
+  };
 
   const selectedTarget = availableTargets.find((col) => col.id === selectedTargetId);
 
   const otherSources = isMultiSource && selectedTarget
     ? sourceCollections.filter((c) => c.id !== selectedTarget.id)
-    : [];
+    : selectedTarget
+      ? sourceCollections
+      : [];
   const otherSourcesNames = otherSources.map((c) => `“${c.name}”`).join(', ');
   const targetCount = selectedTarget ? (collectionCounts?.get(selectedTarget.id) ?? 0) : 0;
   const movingCount = otherSources.reduce(
@@ -106,6 +130,27 @@ export function MergeCollectionsDialog({
               const colorKey = collectionColorKey(col.id);
 
               if (isMultiSource) {
+                const hasSelection = selectedTargetId !== null;
+                let badgeIcon: keyof typeof Ionicons.glyphMap = 'radio-button-off';
+                let badgeLabel = t('folder.selectTargetBadge');
+                let badgeBg: string = palette.surfaceElevated;
+                let badgeBorder: string = palette.border;
+                let badgeTextColor: string = palette.textSecondary;
+
+                if (isSelected) {
+                  badgeIcon = 'checkmark-circle';
+                  badgeLabel = t('folder.keepTargetBadge');
+                  badgeBg = palette.accent;
+                  badgeBorder = palette.accent;
+                  badgeTextColor = palette.accentForeground;
+                } else if (hasSelection) {
+                  badgeIcon = 'arrow-forward';
+                  badgeLabel = t('folder.mergeSourceBadge');
+                  badgeBg = palette.surfaceElevated;
+                  badgeBorder = palette.border;
+                  badgeTextColor = palette.textSecondary;
+                }
+
                 return (
                   <Pressable
                     key={col.id}
@@ -114,7 +159,7 @@ export function MergeCollectionsDialog({
                     accessibilityState={{ selected: isSelected }}
                     accessibilityLabel={`${col.name}, ${t('inbox.collectionTileCount', { count })}`}
                     disabled={busy}
-                    onPress={() => setSelectedTargetId(col.id)}
+                    onPress={() => handleSelectTarget(col.id)}
                     style={({ pressed }) => [
                       styles.vesselCard,
                       {
@@ -152,33 +197,24 @@ export function MergeCollectionsDialog({
                         style={[
                           styles.vesselBadge,
                           {
-                            backgroundColor: isSelected ? palette.accent : palette.surfaceElevated,
-                            borderColor: isSelected ? palette.accent : palette.border,
+                            backgroundColor: badgeBg,
+                            borderColor: badgeBorder,
                           },
                         ]}
                       >
-                        {isSelected ? (
-                          <Ionicons
-                            name="checkmark-circle"
-                            size={14}
-                            color={palette.accentForeground}
-                            style={styles.vesselBadgeIcon}
-                          />
-                        ) : (
-                          <Ionicons
-                            name="arrow-forward"
-                            size={12}
-                            color={palette.textSecondary}
-                            style={styles.vesselBadgeIcon}
-                          />
-                        )}
+                        <Ionicons
+                          name={badgeIcon}
+                          size={14}
+                          color={badgeTextColor}
+                          style={styles.vesselBadgeIcon}
+                        />
                         <Text
                           style={[
                             styles.vesselBadgeText,
-                            { color: isSelected ? palette.accentForeground : palette.textSecondary },
+                            { color: badgeTextColor },
                           ]}
                         >
-                          {isSelected ? t('folder.keepTargetBadge') : t('folder.mergeSourceBadge')}
+                          {badgeLabel}
                         </Text>
                       </View>
                     </View>
@@ -194,7 +230,7 @@ export function MergeCollectionsDialog({
                   accessibilityState={{ selected: isSelected }}
                   accessibilityLabel={col.name}
                   disabled={busy}
-                  onPress={() => setSelectedTargetId(col.id)}
+                  onPress={() => handleSelectTarget(col.id)}
                   style={({ pressed }) => [
                     styles.targetItem,
                     {
@@ -223,7 +259,22 @@ export function MergeCollectionsDialog({
             })}
           </ScrollView>
 
-          {isMultiSource && selectedTarget ? (
+          {targetLost ? (
+            <View
+              testID="merge-target-lost-notice"
+              style={[
+                styles.noticeBanner,
+                { backgroundColor: palette.dangerSoft, borderColor: palette.danger },
+              ]}
+            >
+              <Ionicons name="alert-circle" size={16} color={palette.danger} />
+              <Text style={[styles.noticeBannerText, { color: palette.danger }]}>
+                {t('folder.mergeTargetDisappearedNotice')}
+              </Text>
+            </View>
+          ) : null}
+
+          {selectedTarget ? (
             <View
               testID="merge-collections-notice"
               style={[
@@ -251,7 +302,16 @@ export function MergeCollectionsDialog({
           ) : null}
 
           {error ? (
-            <Text style={[styles.error, { color: palette.danger }]}>{error}</Text>
+            <View
+              testID="merge-collections-error"
+              style={[
+                styles.noticeBanner,
+                { backgroundColor: palette.dangerSoft, borderColor: palette.danger },
+              ]}
+            >
+              <Ionicons name="alert-circle" size={16} color={palette.danger} />
+              <Text style={[styles.noticeBannerText, { color: palette.danger }]}>{error}</Text>
+            </View>
           ) : null}
 
           <View style={styles.actions}>
@@ -409,9 +469,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
   },
-  error: {
+  noticeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: 10,
+  },
+  noticeBannerText: {
+    flex: 1,
     fontSize: 13,
     fontWeight: '500',
+    lineHeight: 18,
   },
   actions: {
     flexDirection: 'row',

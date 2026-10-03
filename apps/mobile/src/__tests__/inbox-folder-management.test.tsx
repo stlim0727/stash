@@ -359,14 +359,19 @@ describe('Folder View & Collection Management', () => {
     // Marketing (col-c) was NOT selected, so it MUST NOT be an available target
     expect(screen.queryByTestId('merge-target-col-c')).toBeNull();
 
-    // Multi-source prompt and notice are present
+    // Multi-source prompt is present, initially no target is selected and submit is disabled
     expect(screen.getByText('Which collection should hold everything?')).toBeTruthy();
-    expect(screen.getByTestId('merge-collections-notice')).toBeTruthy();
+    expect(screen.getByTestId('merge-collections-submit').props.accessibilityState.disabled).toBe(true);
+    expect(screen.queryByTestId('merge-collections-notice')).toBeNull();
 
     // Select Design as target
     await act(async () => {
       fireEvent.press(screen.getByTestId('merge-target-col-b'));
     });
+
+    // Now submit is enabled and notice is present
+    expect(screen.getByTestId('merge-collections-submit').props.accessibilityState.disabled).toBe(false);
+    expect(screen.getByTestId('merge-collections-notice')).toBeTruthy();
 
     // Submit merge
     await act(async () => {

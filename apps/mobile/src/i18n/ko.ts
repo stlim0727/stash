@@ -203,8 +203,11 @@ export const ko: Catalog = {
   'folder.mergeTitle': '컬렉션 합치기',
   'folder.mergePrompt': '합칠 대상 컬렉션을 선택하세요:',
   'folder.mergeMultiPrompt': '어느 컬렉션에 모두 담을까요?',
+  'folder.selectTargetBadge': '선택',
   'folder.keepTargetBadge': '남겨둘 컬렉션',
   'folder.mergeSourceBadge': '합쳐질 예정',
+  'folder.mergeTargetDisappearedNotice':
+    '선택한 컬렉션이 더 이상 존재하지 않습니다. 다시 선택해주세요.',
   'folder.mergeConsequenceNotice': '{sources}의 북마크 {count}개가 ‘{target}’(으)로 이동하고, 비워진 컬렉션은 정리됩니다.',
   'folder.mergePreservedNotice': '북마크 총 {count}개는 모두 안전하게 보존됩니다.',
   'folder.mergeConfirm': '합치기',
