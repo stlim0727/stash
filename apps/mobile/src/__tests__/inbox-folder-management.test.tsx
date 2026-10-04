@@ -144,25 +144,23 @@ describe('Folder View & Collection Management', () => {
     const screen = await renderInbox();
     await waitFor(() => expect(screen.getByText('React Native Docs')).toBeTruthy());
 
-    // Switch to Folder (Collections) view via View Options
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('inbox-view-options'));
-    });
-
+    // Switch to Folder (Collections) view using the segmented control
     await waitFor(() => expect(screen.getByTestId('inbox-view-folder')).toBeTruthy());
     await act(async () => {
       fireEvent.press(screen.getByTestId('inbox-view-folder'));
     });
 
-    // In folder view: Collections heading and Select button appear
+    // Folder view retains the toolbar; selection lives in View Options.
     await waitFor(() => {
-      expect(screen.getByTestId('inbox-collections-heading')).toBeTruthy();
-      expect(screen.getByTestId('folder-select-button')).toBeTruthy();
+      expect(screen.getByTestId('inbox-view-folder').props.accessibilityState.selected).toBe(true);
+      expect(screen.queryByTestId('folder-select-button')).toBeNull();
       expect(screen.getByText('Engineering')).toBeTruthy();
       expect(screen.getByText('Design')).toBeTruthy();
     });
 
-    // Enter folder selection mode via "Select" button
+    await fireEvent.press(screen.getByTestId('inbox-view-options'));
+
+    // Enter folder selection mode from View Options
     await act(async () => {
       fireEvent.press(screen.getByTestId('folder-select-button'));
     });
@@ -222,9 +220,6 @@ describe('Folder View & Collection Management', () => {
     await waitFor(() => expect(screen.getByText('React Native Docs')).toBeTruthy());
 
     // Switch to folder view
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('inbox-view-options'));
-    });
     await waitFor(() => expect(screen.getByTestId('inbox-view-folder')).toBeTruthy());
     await act(async () => {
       fireEvent.press(screen.getByTestId('inbox-view-folder'));
@@ -284,9 +279,6 @@ describe('Folder View & Collection Management', () => {
     await waitFor(() => expect(screen.getByText('Paper')).toBeTruthy());
 
     // Switch to folder view
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('inbox-view-options'));
-    });
     await waitFor(() => expect(screen.getByTestId('inbox-view-folder')).toBeTruthy());
     await act(async () => {
       fireEvent.press(screen.getByTestId('inbox-view-folder'));
@@ -330,9 +322,6 @@ describe('Folder View & Collection Management', () => {
     await waitFor(() => expect(screen.getByText('Article')).toBeTruthy());
 
     // Switch to folder view
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('inbox-view-options'));
-    });
     await waitFor(() => expect(screen.getByTestId('inbox-view-folder')).toBeTruthy());
     await act(async () => {
       fireEvent.press(screen.getByTestId('inbox-view-folder'));
@@ -382,15 +371,13 @@ describe('Folder View & Collection Management', () => {
     await waitFor(() => expect(screen.getByText('React Native Docs')).toBeTruthy());
 
     // Switch to folder view
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('inbox-view-options'));
-    });
     await waitFor(() => expect(screen.getByTestId('inbox-view-folder')).toBeTruthy());
     await act(async () => {
       fireEvent.press(screen.getByTestId('inbox-view-folder'));
     });
 
-    // Enter selection mode
+    // Enter selection mode from View Options
+    await fireEvent.press(screen.getByTestId('inbox-view-options'));
     await waitFor(() => expect(screen.getByTestId('folder-select-button')).toBeTruthy());
     await act(async () => {
       fireEvent.press(screen.getByTestId('folder-select-button'));

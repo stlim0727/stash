@@ -98,7 +98,6 @@ import {
 import {
   DEFAULT_VIEW_MODE,
   INBOX_VIEW_PREF_KEY,
-  VIEW_MODES,
   parseViewMode,
   serializeViewMode,
   type ViewMode,
@@ -199,7 +198,7 @@ interface FacetChip {
 
 // Glyph for each layout in the view-mode segmented control.
 const VIEW_MODE_ICON: Record<ViewMode, ComponentProps<typeof Ionicons>['name']> = {
-  card: 'albums-outline',
+  card: 'grid-outline',
   list: 'list-outline',
   folder: 'folder-outline',
 };
@@ -2782,29 +2781,42 @@ export default function InboxScreen() {
             query={debouncedQuery}
           />
         ) : null}
-        {!selectionMode && !folderSelectionMode && !searchFocused && !searchOpen ? (
+        {(isLoading || showControls) && !selectionMode && !folderSelectionMode && !searchFocused && !searchOpen ? (
         <View testID="inbox-filter-options-row" style={[styles.filterOptionsRow, { maxWidth: contentMaxWidth }]}>
-          {viewMode === 'folder' ? (
-            <View style={styles.folderHeaderRow}>
-              <Text testID="inbox-collections-heading" style={[styles.controlsHeading, { color: palette.text }]}>{t('inbox.collectionsHeading')}</Text>
-              {collections.length > 0 ? (
-                <Pressable
-                  testID="folder-select-button"
-                  accessibilityRole="button"
-                  accessibilityLabel={t('folder.selectAction')}
-                  onPress={() => enterFolderSelectionMode()}
-                  style={({ pressed }) => [
-                    styles.folderSelectButton,
-                    { borderColor: palette.controlBorder, opacity: pressed ? 0.7 : 1 },
-                  ]}
-                >
-                  <Text style={[styles.folderSelectButtonText, { color: palette.textSecondary }]}>
-                    {t('common.select')}
-                  </Text>
-                </Pressable>
-              ) : null}
-            </View>
-          ) : (
+          <View testID="inbox-view-mode-control" style={[styles.viewModeControl, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+            {(['list', 'card', 'folder'] as const).map((mode) => (
+              <Pressable
+                key={mode}
+                testID={`inbox-view-${mode}`}
+                accessibilityRole="button"
+                accessibilityLabel={t(VIEW_MODE_LABEL_KEY[mode])}
+                accessibilityState={{ selected: viewMode === mode, disabled: isLoading || !viewOptionsReady }}
+                disabled={isLoading || !viewOptionsReady}
+                onPress={() => {
+                  setViewMode(mode);
+                  void setPreference(INBOX_VIEW_PREF_KEY, serializeViewMode(mode)).catch(() => {});
+                  setSortMenuOpen(false);
+                }}
+                style={({ pressed }) => [styles.viewModeButton, {
+                  backgroundColor: viewMode === mode ? palette.mutedSurface : 'transparent',
+                  opacity: pressed || isLoading || !viewOptionsReady ? 0.6 : 1,
+                }]}
+              >
+                <Ionicons name={VIEW_MODE_ICON[mode]} size={20} color={viewMode === mode ? palette.text : palette.textSecondary} />
+              </Pressable>
+            ))}
+          </View>
+          <Pressable testID="inbox-view-options" accessibilityRole="button"
+            accessibilityLabel={t('inbox.viewOptions')}
+            accessibilityState={{ disabled: isLoading || !viewOptionsReady }} disabled={isLoading || !viewOptionsReady}
+            onPress={() => setSortMenuOpen(true)} style={styles.viewOptions}>
+            <Text style={[styles.viewOptionsLabel, { color: palette.text }]}>{t('inbox.viewOptions')}</Text>
+            <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
+          </Pressable>
+        </View>
+        ) : null}
+        {(isLoading || showControls) && !selectionMode && !folderSelectionMode && !searchFocused && !searchOpen && viewMode !== 'folder' ? (
+          <View style={[styles.scopeRow, { maxWidth: contentMaxWidth }]}>
             <Pressable testID="inbox-scope-picker" accessibilityRole="button"
               accessibilityLabel={t('inbox.scopePickerA11y')} accessibilityState={{ expanded: scopeMenuOpen }}
               onPress={() => setScopeMenuOpen(true)} style={[styles.scopePicker, { borderColor: palette.controlBorder }]}>
@@ -2813,15 +2825,7 @@ export default function InboxScreen() {
               </Text>
               <Ionicons name="chevron-down" size={14} color={palette.textSecondary} />
             </Pressable>
-          )}
-          <Pressable testID="inbox-view-options" accessibilityRole="button"
-            accessibilityLabel={t('inbox.viewOptions')}
-            accessibilityState={{ disabled: isLoading || !viewOptionsReady }} disabled={isLoading || !viewOptionsReady}
-            onPress={() => setSortMenuOpen(true)} style={styles.viewOptions}>
-            <Ionicons name="options-outline" size={18} color={palette.textSecondary} />
-            <Text style={[styles.viewOptionsLabel, { color: palette.text }]}>{t('inbox.viewOptions')}</Text>
-          </Pressable>
-        </View>
+          </View>
         ) : null}
         </View>
       </WebCrispAnimatedSurface>
@@ -4023,18 +4027,16 @@ export default function InboxScreen() {
         visible={sortMenuOpen}
         title={t('inbox.viewOptions')}
         actions={[
-          ...VIEW_MODES.filter((mode) => mode !== 'folder' || collections.length > 0 || viewMode === 'folder').map((mode) => ({
-            key: `layout-${mode}`,
-            testID: `inbox-view-${mode}`,
-            label: t(VIEW_MODE_LABEL_KEY[mode]),
-            icon: VIEW_MODE_ICON[mode],
-            selected: viewMode === mode,
+          ...(isFolderSort && collections.length > 0 ? [{
+            key: 'select-collections',
+            testID: 'folder-select-button',
+            label: t('folder.selectAction'),
+            icon: 'checkmark-circle-outline' as const,
             onPress: () => {
-              setViewMode(mode);
-              void setPreference(INBOX_VIEW_PREF_KEY, serializeViewMode(mode)).catch(() => {});
               setSortMenuOpen(false);
+              enterFolderSelectionMode();
             },
-          })),
+          }] : []),
           ...(isFolderSort
             ? FOLDER_SORT_PRESETS.map((option) => ({
                 key: serializeFolderSort(option),
@@ -4388,7 +4390,25 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
   },
-  controlsHeading: { fontSize: 16, fontWeight: '700', flexShrink: 1 },
+  viewModeControl: {
+    flexDirection: 'row',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 16,
+    padding: 3,
+  },
+  viewModeButton: {
+    width: 48,
+    minHeight: 48,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scopeRow: {
+    paddingHorizontal: uiMetrics.screenGutter,
+    paddingBottom: 8,
+    width: '100%',
+    alignSelf: 'center',
+  },
   scopePicker: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 48, maxWidth: '55%', borderWidth: 1, borderRadius: 10, padding: 8 },
   viewOptions: {
     flexDirection: 'row',
@@ -4650,21 +4670,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     ...overlayLayer(2),
-  },
-  folderHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  folderSelectButton: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  folderSelectButtonText: {
-    fontSize: 12,
-    fontWeight: '600',
   },
   filterBarOptions: {
     padding: 6,
