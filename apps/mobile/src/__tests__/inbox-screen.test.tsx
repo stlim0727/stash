@@ -1440,6 +1440,48 @@ test('when search is active, folder view shows matching item counts instead of t
   });
 });
 
+test.each(['list', 'card'] as const)('empty collections remain reachable from saved %s view', async (layout) => {
+  fakeRepo.__reset([], { tags: [], bookmarkTags: [], collections: [makeCollection('col-empty', 'Empty collection')] });
+  fakeRepo.__setMeta(INBOX_VIEW_PREF_KEY, layout);
+  const screen = await renderInbox({ layout: null });
+  await waitFor(() => expect(screen.getByTestId(`inbox-view-${layout}`).props.accessibilityState.disabled).toBe(false));
+  expect(screen.getByTestId(`inbox-view-${layout}`).props.accessibilityState.selected).toBe(true);
+
+  await chooseLayout(screen, 'folder');
+  await waitFor(() => expect(screen.getByTestId('folder-tile-__folder-c:col-empty')).toBeTruthy());
+  expect(screen.getByTestId('folder-tile-new')).toBeTruthy();
+  await openViewOptions(screen);
+  await fireEvent.press(screen.getByTestId('folder-select-button'));
+  expect(screen.getByTestId('folder-selection-count')).toBeTruthy();
+});
+
+test.each(['list', 'card'] as const)('trashing the last bookmark in %s view keeps collections reachable', async (layout) => {
+  const id = '7e64cf1e-0000-4000-8000-000000000148';
+  fakeRepo.__reset([makeStoredBookmark({ id, title: 'Last bookmark', collection_id: 'col-work' })],
+    { tags: [], bookmarkTags: [], collections: [makeCollection('col-work', 'Work')] });
+  fakeRepo.__setMeta(INBOX_VIEW_PREF_KEY, layout);
+  const storeRef: { current: ReturnType<typeof useBookmarks> | null } = { current: null };
+  function Probe() {
+    storeRef.current = useBookmarks();
+    return null;
+  }
+  const screen = await render(
+    <BookmarksProvider>
+      <CaptureToastProvider>
+        <Probe />
+        <InboxScreen />
+      </CaptureToastProvider>
+    </BookmarksProvider>,
+  );
+  await waitFor(() => expect(screen.getByText('Last bookmark')).toBeTruthy());
+  await act(async () => { storeRef.current!.trashBookmark(id); });
+  await waitFor(() => expect(screen.queryByText('Last bookmark')).toBeNull());
+  expect(screen.getByTestId('inbox-view-folder')).toBeTruthy();
+  await chooseLayout(screen, 'folder');
+  await waitFor(() => expect(screen.getByTestId('folder-tile-__folder-c:col-work')).toBeTruthy());
+  expect(within(screen.getByTestId('folder-tile-__folder-c:col-work')).getByText('0 items')).toBeTruthy();
+});
+
 test('the view-mode toggle stays reachable in Folder View even if the library empties out from under it (Sentry STASH-4T)', async () => {
   // Reported bug: resetting the library while sitting in Folder View left the
   // user stuck there with no way back to Card/List. Folder View never

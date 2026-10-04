@@ -2781,7 +2781,7 @@ export default function InboxScreen() {
             query={debouncedQuery}
           />
         ) : null}
-        {(isLoading || showControls) && !selectionMode && !folderSelectionMode && !searchFocused && !searchOpen ? (
+        {(isLoading || showControls || collections.length > 0) && !selectionMode && !folderSelectionMode && !searchFocused && !searchOpen ? (
         <View testID="inbox-filter-options-row" style={[styles.filterOptionsRow, { maxWidth: contentMaxWidth }]}>
           <View testID="inbox-view-mode-control" style={[styles.viewModeControl, { backgroundColor: palette.surface, borderColor: palette.border }]}>
             {(['list', 'card', 'folder'] as const).map((mode) => (
