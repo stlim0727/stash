@@ -149,10 +149,9 @@ function renderInbox({ layout = 'card' }: { layout?: 'card' | null } = {}) {
 }
 
 async function openViewOptions(screen: Awaited<ReturnType<typeof renderInbox>>) {
-  if (!screen.queryByTestId('inbox-view-card')) await fireEvent.press(screen.getByTestId('inbox-view-options'));
+  if (!screen.queryByText('Newest') && !screen.queryByText('Name A–Z')) await fireEvent.press(screen.getByTestId('inbox-view-options'));
 }
 async function chooseLayout(screen: Awaited<ReturnType<typeof renderInbox>>, mode: string) {
-  await openViewOptions(screen);
   await fireEvent.press(screen.getByTestId(`inbox-view-${mode}`));
 }
 async function openHomeMenu(screen: Awaited<ReturnType<typeof renderInbox>>) {
@@ -1246,7 +1245,7 @@ test('every image-less card shows a site wordmark', async () => {
   expect(screen.queryByTestId('inbox-card-preview')).toBeNull();
 });
 
-test('View options switches between saved Card and List layouts', async () => {
+test('the toolbar switches between saved Card and List layouts', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({
       id: '7e64cf1e-0000-4000-8000-000000000041',
@@ -1276,7 +1275,7 @@ test('View options switches between saved Card and List layouts', async () => {
   expect(screen.queryByTestId('inbox-list-title')).toBeNull();
 });
 
-test('the folder view toggle is hidden until the library has a real collection', async () => {
+test('all three view modes are available before creating a collection', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000f0', title: 'Loose link' }),
   ]);
@@ -1284,11 +1283,28 @@ test('the folder view toggle is hidden until the library has a real collection',
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Loose link')).toBeTruthy());
 
-  await openViewOptions(screen);
-  expect(screen.getByTestId('inbox-view-card')).toBeTruthy();
-  await openViewOptions(screen);
+  expect(screen.getByTestId('inbox-view-card').props.accessibilityState.selected).toBe(true);
   expect(screen.getByTestId('inbox-view-list')).toBeTruthy();
-  expect(screen.queryByTestId('inbox-view-folder')).toBeNull();
+  expect(screen.getByTestId('inbox-view-folder')).toBeTruthy();
+  await chooseLayout(screen, 'folder');
+  await waitFor(() => expect(screen.getByTestId('folder-tile-new')).toBeTruthy());
+  expect(screen.getByTestId('inbox-view-folder').props.accessibilityState.selected).toBe(true);
+  await waitFor(() => expect(fakeRepo.__meta(INBOX_VIEW_PREF_KEY)).toBe('folder'));
+  await chooseLayout(screen, 'list');
+  await waitFor(() => expect(screen.getByTestId('inbox-list-title')).toBeTruthy());
+});
+
+test('view options contains sorting without duplicating the view mode controls', async () => {
+  fakeRepo.__reset([makeStoredBookmark({ title: 'Toolbar bookmark' })]);
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Toolbar bookmark')).toBeTruthy());
+  await openViewOptions(screen);
+  expect(screen.getByText('Newest')).toBeTruthy();
+  for (const mode of ['list', 'card', 'folder']) {
+    expect(screen.getAllByTestId(`inbox-view-${mode}`)).toHaveLength(1);
+  }
+  expect(screen.queryByText('Cards')).toBeNull();
+  expect(screen.queryByTestId('folder-select-button')).toBeNull();
 });
 
 test('folder view shows a tile per collection, the uncollected bucket, and a New Folder tile', async () => {
@@ -1422,6 +1438,48 @@ test('when search is active, folder view shows matching item counts instead of t
     expect(within(recipesTile).getByText('1 item')).toBeTruthy();
     expect(within(emptyTile).getByText('0 items')).toBeTruthy();
   });
+});
+
+test.each(['list', 'card'] as const)('empty collections remain reachable from saved %s view', async (layout) => {
+  fakeRepo.__reset([], { tags: [], bookmarkTags: [], collections: [makeCollection('col-empty', 'Empty collection')] });
+  fakeRepo.__setMeta(INBOX_VIEW_PREF_KEY, layout);
+  const screen = await renderInbox({ layout: null });
+  await waitFor(() => expect(screen.getByTestId(`inbox-view-${layout}`).props.accessibilityState.disabled).toBe(false));
+  expect(screen.getByTestId(`inbox-view-${layout}`).props.accessibilityState.selected).toBe(true);
+
+  await chooseLayout(screen, 'folder');
+  await waitFor(() => expect(screen.getByTestId('folder-tile-__folder-c:col-empty')).toBeTruthy());
+  expect(screen.getByTestId('folder-tile-new')).toBeTruthy();
+  await openViewOptions(screen);
+  await fireEvent.press(screen.getByTestId('folder-select-button'));
+  expect(screen.getByTestId('folder-selection-count')).toBeTruthy();
+});
+
+test.each(['list', 'card'] as const)('trashing the last bookmark in %s view keeps collections reachable', async (layout) => {
+  const id = '7e64cf1e-0000-4000-8000-000000000148';
+  fakeRepo.__reset([makeStoredBookmark({ id, title: 'Last bookmark', collection_id: 'col-work' })],
+    { tags: [], bookmarkTags: [], collections: [makeCollection('col-work', 'Work')] });
+  fakeRepo.__setMeta(INBOX_VIEW_PREF_KEY, layout);
+  const storeRef: { current: ReturnType<typeof useBookmarks> | null } = { current: null };
+  function Probe() {
+    storeRef.current = useBookmarks();
+    return null;
+  }
+  const screen = await render(
+    <BookmarksProvider>
+      <CaptureToastProvider>
+        <Probe />
+        <InboxScreen />
+      </CaptureToastProvider>
+    </BookmarksProvider>,
+  );
+  await waitFor(() => expect(screen.getByText('Last bookmark')).toBeTruthy());
+  await act(async () => { storeRef.current!.trashBookmark(id); });
+  await waitFor(() => expect(screen.queryByText('Last bookmark')).toBeNull());
+  expect(screen.getByTestId('inbox-view-folder')).toBeTruthy();
+  await chooseLayout(screen, 'folder');
+  await waitFor(() => expect(screen.getByTestId('folder-tile-__folder-c:col-work')).toBeTruthy());
+  expect(within(screen.getByTestId('folder-tile-__folder-c:col-work')).getByText('0 items')).toBeTruthy();
 });
 
 test('the view-mode toggle stays reachable in Folder View even if the library empties out from under it (Sentry STASH-4T)', async () => {
@@ -1905,7 +1963,7 @@ test('selecting the All chip also strips the URL facet params (STASH-T, all rese
   });
 });
 
-test('View options offers Cards and List (no Tag-cloud option)', async () => {
+test('the toolbar offers three layouts without a Tag-cloud option', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000a1', title: 'Kimchi jjigae' }),
   ]);
@@ -1913,7 +1971,7 @@ test('View options offers Cards and List (no Tag-cloud option)', async () => {
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
 
-  // The segment renders exactly the two item layouts.
+  // The segment includes item layouts and collections.
   await openViewOptions(screen);
   expect(screen.getByTestId('inbox-view-card')).toBeTruthy();
   await openViewOptions(screen);
@@ -2578,7 +2636,8 @@ test('a fresh install defaults to List while keeping search visible without open
   await waitFor(() => expect(screen.getByTestId('inbox-list-title')).toBeTruthy());
   expect(screen.getByTestId('inbox-search-input')).toBeTruthy();
   expect(screen.queryByTestId('inbox-card-title')).toBeNull();
-  expect(screen.queryByTestId('inbox-view-card')).toBeNull();
+  expect(screen.getByTestId('inbox-view-card')).toBeTruthy();
+  expect(screen.getByTestId('inbox-view-list').props.accessibilityState.selected).toBe(true);
   expect(fakeRepo.__meta(INBOX_VIEW_PREF_KEY)).toBeNull();
 });
 
@@ -2652,7 +2711,11 @@ test('View options waits for all three preference reads before accepting choices
     await waitFor(() => expect(releases).toHaveLength(3));
     expect(screen.getByTestId('inbox-view-options').props.accessibilityState.disabled).toBe(true);
     await fireEvent.press(screen.getByTestId('inbox-view-options'));
-    expect(screen.queryByTestId('inbox-view-list')).toBeNull();
+    expect(screen.getByTestId('inbox-view-list').props.accessibilityState.disabled).toBe(true);
+    await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+    expect(fakeRepo.__meta(INBOX_VIEW_PREF_KEY)).toBe('card');
+    expect(screen.queryByTestId('folder-tile-new')).toBeNull();
+    expect(screen.queryByText('Newest')).toBeNull();
     for (const release of releases.slice(0, 2)) await act(async () => release());
     expect(screen.getByTestId('inbox-view-options').props.accessibilityState.disabled).toBe(true);
     await act(async () => releases[2]());
