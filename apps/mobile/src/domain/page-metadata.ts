@@ -259,7 +259,11 @@ interface CappedBody {
  * Content-Length so an oversized body is refused rather than buffered. Returns
  * null when the body is too large to read safely.
  */
-async function readCappedBody(response: Response, byteLimit = MAX_HTML_BYTES): Promise<CappedBody | null> {
+async function readCappedBody(
+  response: Response,
+  byteLimit = MAX_HTML_BYTES,
+  needsMore?: (prefix: Uint8Array) => Promise<boolean>,
+): Promise<CappedBody | null> {
   const reader = response.body?.getReader?.();
   if (!reader) {
     const declared = Number(response.headers.get('content-length'));
@@ -278,6 +282,18 @@ async function readCappedBody(response: Response, byteLimit = MAX_HTML_BYTES): P
   const chunks: Uint8Array[] = [];
   let read = 0;
   let doneReading = false;
+  let checkedPrefix = false;
+  const snapshot = (limit: number): Uint8Array => {
+    const bytes = new Uint8Array(Math.min(read, limit));
+    let offset = 0;
+    for (const chunk of chunks) {
+      const take = Math.min(chunk.length, bytes.length - offset);
+      if (take <= 0) break;
+      bytes.set(chunk.subarray(0, take), offset);
+      offset += take;
+    }
+    return bytes;
+  };
   try {
     while (read < byteLimit) {
       const { done, value } = await reader.read();
@@ -288,6 +304,15 @@ async function readCappedBody(response: Response, byteLimit = MAX_HTML_BYTES): P
       if (!value || value.length === 0) continue;
       chunks.push(value);
       read += value.length;
+      // Keep this response open while checking the normal prefix. Continue only
+      // when YouTube still lacks a usable title or image; never refetch it.
+      if (needsMore && !checkedPrefix && read >= MAX_HTML_BYTES) {
+        checkedPrefix = true;
+        if (!(await needsMore(snapshot(MAX_HTML_BYTES)))) {
+          byteLimit = MAX_HTML_BYTES;
+          break;
+        }
+      }
     }
   } finally {
     // Stops the native body pump. Without it the rest of a huge body keeps
@@ -296,16 +321,7 @@ async function readCappedBody(response: Response, byteLimit = MAX_HTML_BYTES): P
     await reader.cancel().catch(() => {});
   }
 
-  const size = Math.min(read, byteLimit);
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    if (offset >= size) break;
-    const take = Math.min(chunk.length, size - offset);
-    bytes.set(chunk.subarray(0, take), offset);
-    offset += take;
-  }
-  return { bytes, read, truncated: !doneReading || read > byteLimit };
+  return { bytes: snapshot(byteLimit), read, truncated: !doneReading || read > byteLimit };
 }
 
 /** Fetch and parse a page's HTML metadata with a specific User-Agent. */
@@ -328,7 +344,16 @@ async function fetchHtmlMetadata(url: string, userAgent: string): Promise<HtmlFe
     // sites serve legacy encodings (EUC-KR, Shift_JIS, …), often declared only
     // in a <meta> tag, so decoding as UTF-8 produces mojibake.
     const finalUrl = response.url || url;
-    const body = await readCappedBody(response, htmlByteLimit(finalUrl));
+    const byteLimit = htmlByteLimit(finalUrl);
+    const needsMore = byteLimit > MAX_HTML_BYTES
+      ? async (prefix: Uint8Array) => {
+        const charset = detectCharset(contentType, prefix);
+        const metadata = parsePageMetadata(await decodeHtml(prefix, charset), finalUrl);
+        return !metadata.title || isChallengeOrBoilerplateTitle(metadata.title)
+          || !metadata.preview_image_url;
+      }
+      : undefined;
+    const body = await readCappedBody(response, byteLimit, needsMore);
     if (!body) {
       const declared = response.headers.get('content-length') ?? 'unknown';
       return { metadata: null, outcome: `too_large:${declared}` };

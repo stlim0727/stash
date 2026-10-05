@@ -1457,6 +1457,48 @@ test('YouTube HTML streaming remains capped at 1 MiB and cancels the native body
   }
 });
 
+for (const missing of ['none', 'title', 'image'] as const) {
+  test(`YouTube staged stream extends only for missing metadata (${missing})`, async () => {
+    const originalFetch = globalThis.fetch;
+    const url = 'https://www.youtube.com/watch?v=8G9lmG11pOM';
+    const title = '<meta property="og:title" content="Real video">';
+    const image = '<meta property="og:image" content="https://i.ytimg.com/vi/8G9lmG11pOM/maxresdefault.jpg">';
+    const early = `<head>${missing === 'title' ? '' : title}${missing === 'image' ? '' : image}`;
+    const late = missing === 'title' ? title : missing === 'image' ? image : '';
+    const bytes = new TextEncoder().encode(early + `<script>${'x'.repeat(700 * 1024)}</script>` + late + '</head>' + ' '.repeat(400 * 1024));
+    let reads = 0;
+    let cancelled = false;
+    let htmlRequests = 0;
+    const response = {
+      ok: true, url,
+      headers: { get: (name: string) => name === 'content-type' ? 'text/html; charset=utf-8' : null },
+      arrayBuffer: async () => { throw new Error('must stream'); },
+      body: { getReader: () => ({
+        read: async () => {
+          const offset = reads++ * 64 * 1024;
+          return { done: offset >= bytes.length, value: bytes.subarray(offset, offset + 64 * 1024) };
+        },
+        cancel: async () => { cancelled = true; },
+      }) },
+    } as unknown as Response;
+    globalThis.fetch = (async (target: string) => {
+      if (String(target).includes('/oembed?')) return { ok: false, status: 401 } as Response;
+      htmlRequests += 1;
+      return response;
+    }) as typeof fetch;
+    try {
+      const metadata = await fetchPageMetadata(url);
+      assert.equal(metadata?.title, 'Real video');
+      assert.equal(metadata?.preview_image_url, 'https://i.ytimg.com/vi/8G9lmG11pOM/maxresdefault.jpg');
+      assert.equal(reads, missing === 'none' ? 8 : 16);
+      assert.equal(htmlRequests, 1, 'both stages must use the same response');
+      assert.equal(cancelled, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+}
+
 test('YouTube non-streaming HTML retains the 2 MiB allocation guard', async () => {
   const originalFetch = globalThis.fetch;
   let buffered = false;
