@@ -13,9 +13,15 @@ import { recordLog } from '../observability/log-buffer.ts';
 const FETCH_TIMEOUT_MS = 8000;
 /** Metadata lives in <head>; don't parse unbounded documents. */
 const MAX_HTML_BYTES = 512 * 1024;
+// YouTube watch pages place metadata after ~710 KB of bootstrap scripts.
+// Keep a bounded 1 MiB fallback when oEmbed is unavailable (STASH-7C).
+const MAX_YOUTUBE_HTML_BYTES = 1024 * 1024;
+function htmlByteLimit(url?: string): number {
+  return url && youtubeVideoId(url) ? MAX_YOUTUBE_HTML_BYTES : MAX_HTML_BYTES;
+}
 /**
  * Hard ceiling on what a *non-streaming* runtime may buffer. The streaming path
- * in `readCappedBody` stops at MAX_HTML_BYTES and never reaches this, but the
+ * in `readCappedBody` stops at the page's bounded budget, but the
  * `arrayBuffer()` fallback has no such control — so a body declaring more than
  * this is refused outright rather than allocated (Sentry STASH-3C).
  */
@@ -51,14 +57,14 @@ function htmlHeaders(userAgent: string, targetUrl?: string): Record<string, stri
     'User-Agent': userAgent,
     Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'en;q=0.9,*;q=0.5',
-    // Metadata lives in <head>, so ask for only the first MAX_HTML_BYTES. A
+    // Metadata lives in <head>, so ask for only the page's bounded prefix. A
     // server that honors ranges (GitHub Pages, most CDNs) then sends a 206 with
     // just that slice instead of the whole document — the difference between a
     // few KB and, for one reported page, a 24 MB body inlining megabytes of
     // base64 in <body>. Servers that ignore the header return the full 200 body,
-    // which `readCappedBody` still bounds — it stops reading at MAX_HTML_BYTES
+    // which `readCappedBody` still bounds — it stops reading at that budget
     // rather than letting the whole body buffer.
-    Range: `bytes=0-${MAX_HTML_BYTES - 1}`,
+    Range: `bytes=0-${htmlByteLimit(targetUrl) - 1}`,
   };
   if (targetUrl) {
     try {
@@ -94,7 +100,7 @@ function resolveHref(href: string, baseUrl: string): string | undefined {
 }
 
 /** Parse the bounded HTML prefix without allocating a document tree. */
-function parseHtmlHead(html: string) {
+function parseHtmlHead(html: string, baseUrl?: string) {
   const meta = new Map<string, string>();
   const links: Record<string, string>[] = [];
   const keys = new Set<string>();
@@ -124,7 +130,7 @@ function parseHtmlHead(html: string) {
       if (name === 'title') inTitle = false;
     },
   });
-  parser.end(html.slice(0, MAX_HTML_BYTES));
+  parser.end(html.slice(0, htmlByteLimit(baseUrl)));
   return { meta, links, title: clean(title), metaCount, keys, hasTitleTag };
 }
 
@@ -149,7 +155,7 @@ export function isChallengeOrBoilerplateTitle(title: string | undefined): boolea
 }
 
 export function parsePageMetadata(html: string, baseUrl: string): FetchedMetadata {
-  const { meta, links, title } = parseHtmlHead(html);
+  const { meta, links, title } = parseHtmlHead(html, baseUrl);
 
   let favicon: string | undefined;
   for (const attributes of links) {
@@ -186,7 +192,7 @@ export function parsePageMetadata(html: string, baseUrl: string): FetchedMetadat
  * native-fetch HTML can omit discovery and expose only a generic app title.
  */
 export function discoverOembedEndpoint(html: string, baseUrl: string): string | null {
-  for (const attributes of parseHtmlHead(html).links) {
+  for (const attributes of parseHtmlHead(html, baseUrl).links) {
     const type = (attributes.type ?? '').toLowerCase().split(';')[0]?.trim();
     if (type !== 'application/json+oembed') {
       continue;
@@ -208,8 +214,8 @@ export function discoverOembedEndpoint(html: string, baseUrl: string): string | 
  * `og/tw=[og:image] title=false` → had cards but no title) — so a failed
  * preview tells us *why* from the logs/Sentry alone, without re-capturing HTML.
  */
-export function htmlHeadSummary(html: string): string {
-  const { metaCount, keys, hasTitleTag } = parseHtmlHead(html);
+export function htmlHeadSummary(html: string, baseUrl?: string): string {
+  const { metaCount, keys, hasTitleTag } = parseHtmlHead(html, baseUrl);
   return `metas=${metaCount} og/tw=[${[...keys].join(',')}] title=${hasTitleTag}`;
 }
 
@@ -229,7 +235,7 @@ interface HtmlFetchResult {
 }
 
 interface CappedBody {
-  /** At most MAX_HTML_BYTES, ready to decode. */
+  /** At most the requested byte budget, ready to decode. */
   bytes: Uint8Array;
   /** Bytes actually pulled off the wire — equals `bytes.length` unless truncated. */
   read: number;
@@ -237,7 +243,7 @@ interface CappedBody {
 }
 
 /**
- * Read at most MAX_HTML_BYTES of a response body.
+ * Read at most the requested byte budget of a response body.
  *
  * Bounding the *decode* is not enough: `response.arrayBuffer()` materializes the
  * WHOLE body before any JS-side slice can run, so a page that ignores our Range
@@ -253,7 +259,7 @@ interface CappedBody {
  * Content-Length so an oversized body is refused rather than buffered. Returns
  * null when the body is too large to read safely.
  */
-async function readCappedBody(response: Response): Promise<CappedBody | null> {
+async function readCappedBody(response: Response, byteLimit = MAX_HTML_BYTES): Promise<CappedBody | null> {
   const reader = response.body?.getReader?.();
   if (!reader) {
     const declared = Number(response.headers.get('content-length'));
@@ -261,9 +267,9 @@ async function readCappedBody(response: Response): Promise<CappedBody | null> {
       return null;
     }
     const raw = new Uint8Array(await response.arrayBuffer());
-    const truncated = raw.length > MAX_HTML_BYTES;
+    const truncated = raw.length > byteLimit;
     return {
-      bytes: truncated ? raw.subarray(0, MAX_HTML_BYTES) : raw,
+      bytes: truncated ? raw.subarray(0, byteLimit) : raw,
       read: raw.length,
       truncated,
     };
@@ -273,7 +279,7 @@ async function readCappedBody(response: Response): Promise<CappedBody | null> {
   let read = 0;
   let doneReading = false;
   try {
-    while (read < MAX_HTML_BYTES) {
+    while (read < byteLimit) {
       const { done, value } = await reader.read();
       if (done) {
         doneReading = true;
@@ -290,7 +296,7 @@ async function readCappedBody(response: Response): Promise<CappedBody | null> {
     await reader.cancel().catch(() => {});
   }
 
-  const size = Math.min(read, MAX_HTML_BYTES);
+  const size = Math.min(read, byteLimit);
   const bytes = new Uint8Array(size);
   let offset = 0;
   for (const chunk of chunks) {
@@ -299,7 +305,7 @@ async function readCappedBody(response: Response): Promise<CappedBody | null> {
     bytes.set(chunk.subarray(0, take), offset);
     offset += take;
   }
-  return { bytes, read, truncated: !doneReading || read > MAX_HTML_BYTES };
+  return { bytes, read, truncated: !doneReading || read > byteLimit };
 }
 
 /** Fetch and parse a page's HTML metadata with a specific User-Agent. */
@@ -321,7 +327,8 @@ async function fetchHtmlMetadata(url: string, userAgent: string): Promise<HtmlFe
     // Read raw bytes and decode with the page's real charset. Many Korean/CJK
     // sites serve legacy encodings (EUC-KR, Shift_JIS, …), often declared only
     // in a <meta> tag, so decoding as UTF-8 produces mojibake.
-    const body = await readCappedBody(response);
+    const finalUrl = response.url || url;
+    const body = await readCappedBody(response, htmlByteLimit(finalUrl));
     if (!body) {
       const declared = response.headers.get('content-length') ?? 'unknown';
       return { metadata: null, outcome: `too_large:${declared}` };
@@ -329,7 +336,6 @@ async function fetchHtmlMetadata(url: string, userAgent: string): Promise<HtmlFe
     const charset = detectCharset(contentType, body.bytes);
     const html = await decodeHtml(body.bytes, charset);
     // Redirects may have moved us; resolve relative URLs against the final URL.
-    const finalUrl = response.url || url;
     const metadata = parsePageMetadata(html, finalUrl);
     const discoveredOembedUrl = discoverOembedEndpoint(html, finalUrl) ?? undefined;
     if (!metadata.title) {
@@ -337,7 +343,7 @@ async function fetchHtmlMetadata(url: string, userAgent: string): Promise<HtmlFe
       // Note the final URL (so a redirect chain like naver.me → m.place shows)
       // and a structural head summary so the failure log says *why* on its own.
       const size = `${body.read}${body.truncated ? '+' : ''}`;
-      const detail = `${htmlHeadSummary(html)} bytes=${size} ct=${contentType.split(';')[0] || 'unknown'}`;
+      const detail = `${htmlHeadSummary(html, finalUrl)} bytes=${size} ct=${contentType.split(';')[0] || 'unknown'}`;
       return {
         metadata,
         outcome: `no_title@${finalUrl} {${detail}}`,
