@@ -49,6 +49,8 @@ const DEFAULT_MODEL = 'gemini-2.5-flash-lite';
 const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_TAGS = 5;
+export const MAX_PROMPT_CHARS = 16_384;
+export const MAX_OUTPUT_TOKENS = 512;
 const GENERIC_MEDIA_LABELS = new Set([
   'article',
   'articles',
@@ -206,7 +208,7 @@ function buildPrompt(input: EnrichmentInput): string {
   // (resolved by exact name in the edge function), so translating it would break
   // the lookup. The JSON keys themselves stay English so parsing is unchanged.
   lines.push(`Write the suggested_tags and topics in ${language}.`);
-  return `Assess this bookmark and return the structured fields.\n\n${lines.join('\n')}`;
+  return `Assess this bookmark and return the structured fields.\n\n${lines.join('\n')}`.slice(0, MAX_PROMPT_CHARS);
 }
 
 /** Thrown when Gemini responded (HTTP 200) but its content couldn't be turned
@@ -353,6 +355,7 @@ export class GeminiProvider implements EnrichmentProvider {
       contents: [{ role: 'user', parts: [{ text: buildPrompt(input) }] }],
       generationConfig: {
         temperature: 0.2,
+        maxOutputTokens: MAX_OUTPUT_TOKENS,
         responseMimeType: 'application/json',
         responseSchema: RESPONSE_SCHEMA,
       },

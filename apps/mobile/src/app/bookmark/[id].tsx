@@ -1,3 +1,4 @@
+import { ProtectedImage } from '@/ui/ProtectedImage';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
@@ -1135,9 +1136,9 @@ export default function BookmarkDetailScreen({
           isOpeningLink && { borderColor: palette.accent },
         ]}
       >
-        <Image
+        <ProtectedImage
           testID="bookmark-detail-preview"
-          source={{ uri: previewUri }}
+          uri={previewUri}
           style={styles.preview}
           resizeMode="cover"
           onError={() => markPreviewImageFailed(previewUri)}
@@ -1173,9 +1174,9 @@ export default function BookmarkDetailScreen({
       </Pressable>
     ) : (
       <View style={[styles.previewContainer, { backgroundColor: palette.mutedSurface }]}>
-        <Image
+        <ProtectedImage
           testID="bookmark-detail-preview"
-          source={{ uri: previewUri }}
+          uri={previewUri}
           style={styles.preview}
           resizeMode="cover"
           onError={() => markPreviewImageFailed(previewUri)}

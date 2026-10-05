@@ -442,3 +442,12 @@ test('two bookmarks go out as two calls that share no content', async () => {
   assert.match(second, /Beta/);
   assert.doesNotMatch(second, /Alpha/);
 });
+
+test('caps user-controlled prompt size and model output tokens on the wire', async () => {
+  const { calls, fetchImpl } = stubFetch({ topics: [], suggested_tags: [], suggested_collection: null, confidence: 0 });
+  const provider = new GeminiProvider({ apiKey: 'fake', fetchImpl });
+  await provider.enrich(input({ title: 'x'.repeat(100_000), notes: 'y'.repeat(100_000) }));
+  const body = JSON.parse(calls[0].init!.body!);
+  assert.ok(body.contents[0].parts[0].text.length <= 16_384);
+  assert.equal(body.generationConfig.maxOutputTokens, 512);
+});

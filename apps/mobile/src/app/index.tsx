@@ -1,3 +1,4 @@
+import { ProtectedImage } from '@/ui/ProtectedImage';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useLocalSearchParams, usePathname, useRouter } from 'expo-router';
 import { PostHogMaskView } from 'posthog-react-native';
@@ -3462,9 +3463,9 @@ export default function InboxScreen() {
                   ]}
                 >
                   {thumbUri ? (
-                    <Image
+                    <ProtectedImage
                       testID="inbox-compact-thumb"
-                      source={{ uri: thumbUri }}
+                      uri={thumbUri}
                       style={[styles.compactThumb, { backgroundColor: palette.mutedSurface }]}
                       onError={() => markPreviewImageFailed(thumbUri)}
                       onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
@@ -3631,9 +3632,9 @@ export default function InboxScreen() {
                       ]}
                     >
                       {previewUri ? (
-                        <Image
+                        <ProtectedImage
                           testID="inbox-card-preview-image"
-                          source={{ uri: previewUri }}
+                          uri={previewUri}
                           style={styles.cardPreview}
                           onError={() => markPreviewImageFailed(previewUri)}
                           onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {

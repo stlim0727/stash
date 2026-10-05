@@ -406,7 +406,9 @@ export class StashSupabaseClient {
       .join('/');
     return {
       uploadUrl: `${this.config.url}/storage/v1/object/${bucket}/${encodedPath}`,
-      publicUrl: `${this.config.url}/storage/v1/object/public/${bucket}/${encodedPath}`,
+      // Keep a stable reference in the bookmark; temporary signatures belong
+      // only in the view. The property name is retained for existing callers.
+      publicUrl: `${this.config.url}/storage/v1/object/${bucket === 'bookmark-images' ? 'authenticated' : 'public'}/${bucket}/${encodedPath}`,
       headers: {
         apikey: this.config.anonKey,
         Authorization: `Bearer ${options.accessToken}`,
