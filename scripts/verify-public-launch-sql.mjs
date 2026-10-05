@@ -39,8 +39,8 @@ try {
   `);
   console.log('Baseline: an authenticated caller can insert its own API key directly.');
 
-  await db.exec(await sql('supabase/migrations/20261005070404_public_launch_access_hardening.sql'));
-  await db.exec(await sql('supabase/migrations/20261005070406_ai_global_budget.sql'));
+  await db.exec(await sql('supabase/migrations/20261005091733_public_launch_access_hardening.sql'));
+  await db.exec(await sql('supabase/migrations/20261005091739_ai_global_budget.sql'));
   await db.exec(await sql('supabase/tests/public-launch-hardening.sql'));
   console.log('PASS: direct key CRUD/read denied, own enrichment update preserved, foreign reassignment denied, internal RPCs denied, global cap and kill switch enforced.');
   assert.equal((await db.query('select count(*)::int as count from auth.users')).rows[0].count, 0);
