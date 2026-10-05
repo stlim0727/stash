@@ -12,7 +12,7 @@ export function isPublicPreviewUrl(raw: string): boolean {
     const host = url.hostname.toLowerCase().replace(/\.+$/, '');
     // Reject all IPv6 literals, including mapped IPv4 and NAT64 encodings.
     if (host.includes(':') || !host.includes('.')) return false;
-    if (/\.(localhost|local|localdomain|internal|lan|home|test|invalid|onion)$/.test(host) || host.endsWith('.home.arpa')) return false;
+    if (/\.(localhost|local|localdomain|internal|lan|home|test|invalid|onion)$/.test(host) || host === 'home.arpa' || host.endsWith('.home.arpa')) return false;
     // Some native URL implementations do not canonicalize legacy IP notation.
     // Reject it rather than let the OS resolver interpret a different address.
     if (/^(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+))*$/i.test(host) &&
@@ -23,7 +23,7 @@ export function isPublicPreviewUrl(raw: string): boolean {
       if (a === 0 || a === 10 || a === 127 || a >= 224 ||
           (a === 100 && b >= 64 && b <= 127) ||
           (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
-          (a === 192 && (b === 168 || b === 0 || (b === 2))) ||
+          (a === 192 && (b === 168 || (b === 0 && (c === 0 || c === 2)))) ||
           (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) ||
           (a === 203 && b === 0 && c === 113)) return false;
     }

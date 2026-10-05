@@ -63,3 +63,26 @@ test('hidden browser redirects fail closed and long redirect chains stop', async
   await assert.rejects(fetchPublicPreview('https://example.com', {}, endless));
   assert.equal(calls, 6);
 });
+
+
+test('home.arpa apex and subdomains never become preview requests', async () => {
+  let requests = 0;
+  const fetcher = (async () => { requests += 1; return new Response('unexpected'); }) as typeof fetch;
+  for (const url of ['http://home.arpa/path', 'https://HOME.ARPA./path', 'http://router.home.arpa/path']) {
+    assert.equal(isPublicPreviewUrl(url), false, url);
+    await assert.rejects(fetchPublicPreview(url, {}, fetcher));
+  }
+  assert.equal(requests, 0);
+  const redirect = (async () => { requests += 1; return new Response(null, { status: 302, headers: { location: 'http://home.arpa/private' } }); }) as typeof fetch;
+  await assert.rejects(fetchPublicPreview('https://example.com', {}, redirect));
+  assert.equal(requests, 1);
+});
+
+test('192 protocol and documentation exclusions stop at their /24 boundaries', () => {
+  for (const ip of ['192.0.0.0', '192.0.0.255', '192.0.2.0', '192.0.2.255', '192.168.0.0', '192.168.255.255']) {
+    assert.equal(isPublicPreviewUrl(`https://${ip}/image`), false, ip);
+  }
+  for (const ip of ['192.0.1.0', '192.0.1.255', '192.0.3.0', '192.0.255.255', '192.2.0.0', '192.2.1.1', '192.2.255.255']) {
+    assert.equal(isPublicPreviewUrl(`https://${ip}/image`), true, ip);
+  }
+});
