@@ -306,6 +306,33 @@ export async function pullRemoteChanges(
       await repository.setMeta(SYNCED_USER_ANON_KEY, String(currentUser.isAnonymous));
     }
 
+    // STASH-7A: local edits can land during any of the storage awaits above,
+    // after the initial outbox check. A delayed remote write can even finish
+    // AFTER the edit's own write. Restore those live rows on disk and exclude
+    // the stale pull result so publishing it cannot undo a batch folder move.
+    const latestById = new Map(getLocalBookmarks().map((row) => [row.id, row]));
+    const changedDuringPull = (id: string) =>
+      hasQueuedWork(id) || (localById.has(id) && !latestById.has(id));
+    const affectedIds = [...upserts.map((row) => row.id), ...deletions]
+      .filter(changedDuringPull);
+    const restored = affectedIds.flatMap((id) => {
+      const latest = latestById.get(id);
+      return latest ? [latest] : [];
+    });
+    if (restored.length > 0) {
+      if (repository.upsertBookmarks) {
+        await repository.upsertBookmarks(restored);
+      } else {
+        for (const row of restored) await repository.insertBookmark(row);
+      }
+    }
+    for (const id of affectedIds) {
+      if (!latestById.has(id)) await repository.deleteBookmark(id);
+    }
+    const affected = new Set(affectedIds);
+    const effectiveUpserts = upserts.filter((row) => !affected.has(row.id));
+    const effectiveDeletions = deletions.filter((id) => !affected.has(id));
+
     recordPullAttempt({
       since,
       fullRefreshReason,
@@ -314,7 +341,7 @@ export async function pullRemoteChanges(
       durationMs: Date.now() - attemptStartedAt,
     });
 
-    return { upserts, deletions, enrichments, tagData: effectiveTagData, tagSnapshotReplaced: !skipTagReplace, pulledAt, userChanged };
+    return { upserts: effectiveUpserts, deletions: effectiveDeletions, enrichments, tagData: effectiveTagData, tagSnapshotReplaced: !skipTagReplace, pulledAt, userChanged };
   } catch (error) {
     recordPullAttempt({
       since,

@@ -7918,18 +7918,27 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               currentUser,
               () => !syncPausedRef.current,
             );
-            if (result.upserts.length > 0 || result.deletions.length > 0) {
-              const upsertIds = new Set(
-                result.upserts.map((bookmark) => bookmark.id),
+            // STASH-7A: the pull's storage awaits can span a local batch move.
+            // Recheck the outbox at publication time so an older snapshot never
+            // rolls back the optimistic edit while its upload is still pending.
+            const hasNewLocalWork = (id: string) =>
+              deletedIds.current.has(id) || queueRef.current.some(
+                (entry) => entry.local_id === id && entry.sync_status !== "synced",
               );
-              const removed = new Set(result.deletions);
+            const upserts = result.upserts.filter((row) => !hasNewLocalWork(row.id));
+            const deletions = result.deletions.filter((id) => !hasNewLocalWork(id));
+            if (upserts.length > 0 || deletions.length > 0) {
+              const upsertIds = new Set(
+                upserts.map((bookmark) => bookmark.id),
+              );
+              const removed = new Set(deletions);
               if (bookmarksRef.current) {
                 bookmarksRef.current = [
                   ...bookmarksRef.current.filter(
                     (bookmark) =>
                       !upsertIds.has(bookmark.id) && !removed.has(bookmark.id),
                   ),
-                  ...result.upserts,
+                  ...upserts,
                 ];
               }
               setBookmarks((current) => [
@@ -7937,7 +7946,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   (bookmark) =>
                     !upsertIds.has(bookmark.id) && !removed.has(bookmark.id),
                 ),
-                ...result.upserts,
+                ...upserts,
               ]);
             }
             // STASH-4P: enrichments this device never itself requested (the
