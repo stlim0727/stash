@@ -74,10 +74,15 @@ test('scope control grows with text and the redundant filter strip is absent', a
   expect(style.height).toBeUndefined();
 });
 
-test('Folder view keeps the mode control without a scope picker or filter strip', async () => {
+test('Folder view disables the All scope picker and keeps the mode control', async () => {
   const screen = await renderShelf();
   await fireEvent.press(screen.getByTestId('inbox-view-folder'));
   expect(screen.getByTestId('inbox-view-folder').props.accessibilityState.selected).toBe(true);
-  expect(screen.queryByTestId('inbox-scope-picker')).toBeNull();
+  const picker = screen.getByTestId('inbox-scope-picker');
+  expect(picker.props.accessibilityState.disabled).toBe(true);
+  await fireEvent.press(picker);
+  expect(screen.queryByText('Uncollected')).toBeNull();
+  await fireEvent.press(screen.getByTestId('inbox-view-list'));
+  expect(screen.getByTestId('inbox-scope-picker').props.accessibilityState.disabled).toBe(false);
   expect(screen.queryByTestId('browse-shelf')).toBeNull();
 });
