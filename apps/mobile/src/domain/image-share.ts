@@ -37,6 +37,17 @@ const DEFAULT_IMAGE_EXT = 'jpg';
  */
 export const MAX_UPLOAD_IMAGE_BYTES = 15 * 1024 * 1024;
 
+/** Match the staged bookmark-images bucket allowlist. Unsupported formats
+ * remain durable local captures; they must never enter an endless upload retry. */
+const CLOUD_IMAGE_MIME_TYPES = new Set([
+  'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif',
+  'image/gif', 'image/bmp', 'image/tiff', 'image/avif',
+]);
+
+export function isCloudUploadImageMime(mime: string): boolean {
+  return CLOUD_IMAGE_MIME_TYPES.has(canonicalizeImageMimeType(mime));
+}
+
 /**
  * The reverse of `MIME_TO_EXT`, for recovering a MIME type from a durable
  * local file's extension (the local copy's name is the only thing the

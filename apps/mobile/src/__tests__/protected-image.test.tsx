@@ -58,3 +58,34 @@ test('a failed signer never falls back to the public URL', async () => {
   await waitFor(() => expect(mockRequest).toHaveBeenCalledTimes(1));
   expect(screen.queryByTestId('image')).toBeNull();
 });
+
+
+test('a successful signing retry restores retry allowance for later renewal failures', async () => {
+  jest.useFakeTimers();
+  mockRequest.mockRejectedValueOnce(new Error('offline'))
+    .mockResolvedValueOnce({ signedURL: signed })
+    .mockRejectedValueOnce(new Error('offline again'))
+    .mockResolvedValueOnce({ signedURL: signed });
+  const screen = await render(<ProtectedImage uri={reference} testID="image" />);
+  expect(screen.queryByTestId('image')).toBeNull();
+  await act(async () => { jest.advanceTimersByTime(60_000); });
+  expect(mockRequest).toHaveBeenCalledTimes(2);
+  expect(screen.getByTestId('image')).toBeTruthy();
+  await act(async () => { jest.advanceTimersByTime(270_000); });
+  expect(screen.queryByTestId('image')).toBeNull();
+  await act(async () => { jest.advanceTimersByTime(60_000); });
+  expect(mockRequest).toHaveBeenCalledTimes(4);
+  expect(screen.getByTestId('image')).toBeTruthy();
+});
+
+test('successful signing does not create endless retries for an unreadable image', async () => {
+  mockRequest.mockResolvedValue({ signedURL: signed });
+  const onError = jest.fn();
+  const screen = await render(<ProtectedImage uri={reference} testID="image" onError={onError} />);
+  const event = { nativeEvent: { error: 'decode failed' } };
+  await act(async () => { screen.getByTestId('image').props.onError(event); });
+  expect(mockRequest).toHaveBeenCalledTimes(2);
+  await act(async () => { screen.getByTestId('image').props.onError(event); });
+  expect(mockRequest).toHaveBeenCalledTimes(2);
+  expect(onError).toHaveBeenCalledWith(event);
+});

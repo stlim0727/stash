@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, type ImageProps } from 'react-native';
 
 import { privateImageReference, signedImageUrl, PRIVATE_IMAGE_URL_TTL_SECONDS } from '@/domain/private-image';
@@ -22,7 +22,9 @@ export function ProtectedImage({ uri, onError, ...props }: Props) {
   const identity = `${usableSession?.user.id ?? ''}|${uri}`;
   const [resolved, setResolved] = useState<{ identity: string; url: string; expiresAt: number } | null>(null);
   const [refresh, setRefresh] = useState(0);
-  const [retry, setRetry] = useState<{ identity: string; count: number }>({ identity: '', count: 0 });
+  const signingRetry = useRef({ identity: '', count: 0 });
+  // Signing recovery and image decoding have independent retry allowances.
+  const [imageRetry, setImageRetry] = useState<{ identity: string; count: number }>({ identity: '', count: 0 });
 
   useEffect(() => {
     if (!path || !usableSession || config.status !== 'configured') return;
@@ -37,14 +39,15 @@ export function ProtectedImage({ uri, onError, ...props }: Props) {
     }).then((response) => {
       const url = signedImageUrl(config.config.url, path, response);
       if (!active) return;
+      signingRetry.current = { identity, count: 0 };
       setResolved({ identity, url, expiresAt: requestedAt + PRIVATE_IMAGE_URL_TTL_SECONDS * 1000 });
       timer = setTimeout(() => setRefresh((value) => value + 1), (PRIVATE_IMAGE_URL_TTL_SECONDS - 30) * 1000);
     }).catch(() => {
       if (!active) return;
       setResolved(null);
       // Retry once on a transient signing failure; never load the public URL.
-      if (retry.identity !== identity || retry.count === 0) {
-        setRetry({ identity, count: 1 });
+      if (signingRetry.current.identity !== identity || signingRetry.current.count === 0) {
+        signingRetry.current = { identity, count: 1 };
         timer = setTimeout(() => setRefresh((value) => value + 1), 60_000);
       }
     });
@@ -56,8 +59,8 @@ export function ProtectedImage({ uri, onError, ...props }: Props) {
     : reference.kind === 'private' && resolved?.identity === identity && resolved.expiresAt > Date.now() ? resolved.url : null;
   if (!displayUri) return null;
   return <Image {...props} source={{ uri: displayUri }} onError={(event) => {
-    if (reference.kind === 'private' && (retry.identity !== identity || retry.count === 0)) {
-      setRetry({ identity, count: 1 });
+    if (reference.kind === 'private' && (imageRetry.identity !== identity || imageRetry.count === 0)) {
+      setImageRetry({ identity, count: 1 });
       setResolved(null);
       setRefresh((value) => value + 1);
       return;

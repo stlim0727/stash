@@ -32,6 +32,7 @@ import { planTitleBackfill } from "@/domain/title-backfill";
 import type { TitleBackfillPatch } from "@/domain/title-backfill";
 import {
   canonicalizeImageMimeType,
+  isCloudUploadImageMime,
   imageTitleFromFileName,
   localImageFileName,
   MAX_UPLOAD_IMAGE_BYTES,
@@ -181,6 +182,7 @@ import {
   hasBulkCreateResultKey,
   hasRemoteIdentity,
   IMAGE_TOO_LARGE_ERROR_TEXT,
+  IMAGE_UNSUPPORTED_FORMAT_ERROR_TEXT,
   isLocalOnlyBookmark,
   isPermanentlyUnsyncableUrl,
   uploadRetryBackoffMs,
@@ -6625,6 +6627,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // this, an honestly-labeled but non-canonical Content-Type would
           // still be permanently rejected by Storage on every retry.
           const contentType = canonicalizeImageMimeType(reportedContentType);
+          if (!isCloudUploadImageMime(contentType)) {
+            throw new Error(
+              `${contentType}: ${IMAGE_UNSUPPORTED_FORMAT_ERROR_TEXT}. Image kept on this device; save as PNG or JPEG to sync.`,
+            );
+          }
           const target = api.imageUploadTarget(bookmark.id, contentType);
           await uploadImageFile(bookmark.local_image_uri, target.uploadUrl, target.headers);
           return target.publicUrl;

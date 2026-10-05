@@ -1224,6 +1224,7 @@ const URL_TOO_LONG_ERROR_TEXT = 'exceeds btree version';
  * retries, so the bucket's `file_size_limit` will reject it every time.
  */
 export const IMAGE_TOO_LARGE_ERROR_TEXT = 'exceeds the maximum upload size';
+export const IMAGE_UNSUPPORTED_FORMAT_ERROR_TEXT = 'unsupported image format for cloud sync';
 
 /** A bulk-chunk request fails as a whole even when only one row in it is
  *  actually bad (e.g. one legacy too-long URL), so the caller can't blindly
@@ -1238,7 +1239,7 @@ export const IMAGE_TOO_LARGE_ERROR_TEXT = 'exceeds the maximum upload size';
  *  outright), so this only ever matters for the single-entry syncQueueEntry
  *  path below for that case. */
 export function isRowSpecificPermanentSyncErrorText(message: string): boolean {
-  return message.includes(URL_TOO_LONG_ERROR_TEXT) || message.includes(IMAGE_TOO_LARGE_ERROR_TEXT);
+  return message.includes(URL_TOO_LONG_ERROR_TEXT) || message.includes(IMAGE_TOO_LARGE_ERROR_TEXT) || message.includes(IMAGE_UNSUPPORTED_FORMAT_ERROR_TEXT);
 }
 
 /** Exported so the caller can DRAIN these from the visible queue (see

@@ -18,12 +18,11 @@ const mockCopyImageToLibrary = jest.fn(
       resolveCopyImageToLibrary = (uri) => resolve(uri ?? `file:///docs/stash-images/${fileName}`);
     }),
 );
+const mockUploadImageFile = jest.fn(async (..._args: unknown[]) => { throw new Error('upload not stubbed'); });
 jest.mock('@/storage/image-store', () => ({
   copyImageToLibrary: (sourceUri: string, fileName: string) =>
     mockCopyImageToLibrary(sourceUri, fileName),
-  uploadImageFile: async () => {
-    throw new Error('not stubbed for this test — irrelevant to what it checks');
-  },
+  uploadImageFile: (...args: unknown[]) => mockUploadImageFile(...args),
   localFileSizeBytes: () => 1024,
 }));
 
@@ -474,4 +473,29 @@ test("syncNow defers while an image capture's durable write is still landing, in
   await waitFor(() =>
     expect(fakeRepo.__queue().find((e) => e.local_id === imageId)?.sync_status).toBe('failed'),
   );
+});
+
+
+test('SVG capture stays durable and reports unsupported cloud format without an upload or forced retry', async () => {
+  const { result } = await mountSettled(false);
+  resolveCopyImageToLibrary = null;
+  let added: ReturnType<typeof result.current.addBookmark> | undefined;
+  await act(async () => {
+    added = result.current.addBookmark({ image: { uri: 'file:///tmp/capture.svg', mimeType: 'image/svg+xml', fileName: 'capture.svg' } });
+  });
+  await waitFor(() => expect(resolveCopyImageToLibrary).not.toBeNull());
+  await act(async () => {
+    resolveCopyImageToLibrary?.('file:///docs/stash-images/capture.svg');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  if (!added || added.status !== 'created') throw new Error('capture was not created');
+  const id = added.bookmark.id;
+  await act(async () => { await result.current.syncNow({ force: true }); });
+  await waitFor(() => expect(fakeRepo.__queue().find((entry) => entry.local_id === id)?.last_error).toContain('unsupported image format for cloud sync'));
+  expect(fakeRepo.__bookmarks().find((bookmark) => bookmark.id === id)?.local_image_uri).toBe('file:///docs/stash-images/capture.svg');
+  expect(result.current.getBookmarkProcessing(id)?.sync.queue?.lastError).toContain('Image kept on this device');
+  const retries = fakeRepo.__queue().find((entry) => entry.local_id === id)?.retry_count;
+  await act(async () => { await result.current.syncNow({ force: true }); });
+  expect(fakeRepo.__queue().find((entry) => entry.local_id === id)?.retry_count).toBe(retries);
+  expect(mockUploadImageFile).not.toHaveBeenCalled();
 });

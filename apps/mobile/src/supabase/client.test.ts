@@ -217,7 +217,7 @@ test('request() leaves reason undefined when the response body has none', async 
   }
 });
 
-test('storageUploadTarget computes the object/authenticated URLs and auth headers without making a network call', () => {
+test('storageUploadTarget computes the object/public URLs and auth headers without making a network call', () => {
   const client = new StashSupabaseClient({
     url: 'https://proj.supabase.co',
     anonKey: 'anon-key',
@@ -231,7 +231,7 @@ test('storageUploadTarget computes the object/authenticated URLs and auth header
   assert.equal(target.uploadUrl, 'https://proj.supabase.co/storage/v1/object/bookmark-images/user-1/bookmark-1');
   assert.equal(
     target.publicUrl,
-    'https://proj.supabase.co/storage/v1/object/authenticated/bookmark-images/user-1/bookmark-1',
+    'https://proj.supabase.co/storage/v1/object/public/bookmark-images/user-1/bookmark-1',
   );
   assert.equal(target.headers.apikey, 'anon-key');
   assert.equal(target.headers.Authorization, 'Bearer access-token');

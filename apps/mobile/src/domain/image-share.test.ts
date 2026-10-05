@@ -6,6 +6,7 @@ import {
   extensionForImage,
   imageTitleFromFileName,
   isImageMime,
+  isCloudUploadImageMime,
   localImageFileName,
   mimeTypeForImageUri,
   pickSharedImage,
@@ -117,4 +118,15 @@ test('canonicalizeImageMimeType leaves an already-canonical or unmapped type unc
   // No established canonical form to normalize an unmapped format to — the
   // real, honest type is preserved rather than guessed at.
   assert.equal(canonicalizeImageMimeType('image/jxl'), 'image/jxl');
+});
+
+
+test('cloud upload permits raster allowlist and JPEG aliases while preserving unsupported captures', () => {
+  for (const mime of ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'image/gif', 'image/bmp', 'image/tiff', 'image/avif']) {
+    assert.equal(isCloudUploadImageMime(mime), true, mime);
+  }
+  for (const mime of ['image/svg+xml', 'image/jxl', 'text/plain']) {
+    assert.equal(isCloudUploadImageMime(mime), false, mime);
+  }
+  assert.equal(pickSharedImage([{ path: 'file:///capture.svg', mimeType: 'image/svg+xml', fileName: 'capture.svg' }])?.mimeType, 'image/svg+xml');
 });
