@@ -866,6 +866,38 @@ test('fetchPageMetadata parses the head of an oversized body (never the whole th
   }
 });
 
+test('STASH-7C: YouTube HTML recovers metadata beyond 512 KiB when oEmbed refuses the video', async () => {
+  const originalFetch = globalThis.fetch;
+  const watchUrl = 'https://www.youtube.com/watch?v=8G9lmG11pOM';
+  // This video's live watch page puts its metadata after ~710 KB of bootstrap
+  // scripts. oEmbed returns 401 even though the page and thumbnail are public.
+  const html = `<head><script>${'x'.repeat(700 * 1024)}</script>
+    <meta property="og:title" content="Inside Global Quantitative Strategies (GQS)">
+    <meta property="og:site_name" content="YouTube">
+    <meta property="og:image" content="https://i.ytimg.com/vi/8G9lmG11pOM/hqdefault.jpg"></head>`;
+  const ranges: string[] = [];
+  globalThis.fetch = (async (target: string, init?: RequestInit) => {
+    if (String(target).includes('/oembed?')) return { ok: false, status: 401 } as Response;
+    ranges.push((init?.headers as Record<string, string>).Range);
+    return htmlResponse(html, { url: watchUrl });
+  }) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata('https://youtu.be/8G9lmG11pOM?si=share-token');
+    assert.equal(meta?.title, 'Inside Global Quantitative Strategies (GQS)');
+    assert.equal(meta?.site_name, 'YouTube');
+    assert.equal(meta?.preview_image_url, 'https://i.ytimg.com/vi/8G9lmG11pOM/hqdefault.jpg');
+    assert.deepEqual(ranges, ['bytes=0-1048575']);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('YouTube metadata expansion does not extend the parser budget for other hosts', () => {
+  const html = `<head><script>${'x'.repeat(700 * 1024)}</script><title>Late title</title></head>`;
+  assert.equal(parsePageMetadata(html, 'https://example.com/watch?v=8G9lmG11pOM').title, undefined);
+  assert.equal(parsePageMetadata(html, 'https://youtube.com.example.com/watch?v=8G9lmG11pOM').title, undefined);
+});
+
 test('previewSourceUrl maps a Naver Map place entry to its server-rendered page', () => {
   assert.equal(
     previewSourceUrl('https://map.naver.com/p/entry/place/1887843614'),
@@ -1357,13 +1389,13 @@ test('normalizeCharsetLabel maps common aliases to WHATWG labels', () => {
 // cannot stream must be refused rather than buffered.
 
 /** A streaming Response stub that would emit `chunks` bytes forever. */
-function streamingResponse(head: string, opts: { chunkSize?: number } = {}) {
+function streamingResponse(head: string, opts: { chunkSize?: number; url?: string } = {}) {
   const chunkSize = opts.chunkSize ?? 64 * 1024;
   const headBytes = new TextEncoder().encode(head);
   const state = { reads: 0, cancelled: false };
   const response = {
     ok: true,
-    url: 'https://example.com/huge',
+    url: opts.url ?? 'https://example.com/huge',
     headers: {
       get: (name: string) =>
         name.toLowerCase() === 'content-type' ? 'text/html; charset=utf-8' : null,
@@ -1401,6 +1433,115 @@ test('fetchPageMetadata stops reading a huge streamed body at the head cap and c
     // that it terminates at all — an unbounded read never returns.
     assert.ok(state.reads <= 10, `pulled ${state.reads} chunks, expected the cap to stop it`);
     assert.equal(state.cancelled, true, 'the reader must be cancelled so the native pump stops');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('YouTube HTML streaming remains capped at 1 MiB and cancels the native body pump', async () => {
+  const originalFetch = globalThis.fetch;
+  const url = 'https://www.youtube.com/watch?v=8G9lmG11pOM';
+  const { response, state } = streamingResponse(
+    `<head><script>${'x'.repeat(700 * 1024)}</script><title>Video title</title></head>`,
+    { url },
+  );
+  globalThis.fetch = (async (target: string) => String(target).includes('/oembed?')
+    ? { ok: false, status: 401 } as Response : response) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata(url);
+    assert.equal(meta?.title, 'Video title');
+    assert.ok(state.reads <= 7, `read ${state.reads} chunks past the YouTube budget`);
+    assert.equal(state.cancelled, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+for (const missing of ['none', 'title', 'image'] as const) {
+  test(`YouTube staged stream extends only for missing metadata (${missing})`, async () => {
+    const originalFetch = globalThis.fetch;
+    const url = 'https://www.youtube.com/watch?v=8G9lmG11pOM';
+    const title = '<meta property="og:title" content="Real video">';
+    const image = '<meta property="og:image" content="https://i.ytimg.com/vi/8G9lmG11pOM/maxresdefault.jpg">';
+    const early = `<head>${missing === 'title' ? '' : title}${missing === 'image' ? '' : image}`;
+    const late = missing === 'title' ? title : missing === 'image' ? image : '';
+    const bytes = new TextEncoder().encode(early + `<script>${'x'.repeat(700 * 1024)}</script>` + late + '</head>' + ' '.repeat(400 * 1024));
+    let reads = 0;
+    let cancelled = false;
+    let htmlRequests = 0;
+    const response = {
+      ok: true, url,
+      headers: { get: (name: string) => name === 'content-type' ? 'text/html; charset=utf-8' : null },
+      arrayBuffer: async () => { throw new Error('must stream'); },
+      body: { getReader: () => ({
+        read: async () => {
+          const offset = reads++ * 64 * 1024;
+          return { done: offset >= bytes.length, value: bytes.subarray(offset, offset + 64 * 1024) };
+        },
+        cancel: async () => { cancelled = true; },
+      }) },
+    } as unknown as Response;
+    globalThis.fetch = (async (target: string) => {
+      if (String(target).includes('/oembed?')) return { ok: false, status: 401 } as Response;
+      htmlRequests += 1;
+      return response;
+    }) as typeof fetch;
+    try {
+      const metadata = await fetchPageMetadata(url);
+      assert.equal(metadata?.title, 'Real video');
+      assert.equal(metadata?.preview_image_url, 'https://i.ytimg.com/vi/8G9lmG11pOM/maxresdefault.jpg');
+      assert.equal(reads, missing === 'none' ? 8 : 16);
+      assert.equal(htmlRequests, 1, 'both stages must use the same response');
+      assert.equal(cancelled, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+}
+
+test('range-limited non-YouTube redirects retry only the final YouTube URL', async () => {
+  const originalFetch = globalThis.fetch;
+  const shortUrl = 'https://share.google/example';
+  const finalUrl = 'https://www.youtube.com/watch?v=8G9lmG11pOM';
+  const html = `<head><script>${'x'.repeat(700 * 1024)}</script><meta property="og:title" content="Redirected video"><meta property="og:image" content="https://i.ytimg.com/vi/8G9lmG11pOM/maxresdefault.jpg"></head>`;
+  const requests: { url: string; range: string | undefined }[] = [];
+  globalThis.fetch = (async (target: string, options?: RequestInit) => {
+    if (String(target).includes('/oembed?')) return { ok: false, status: 401 } as Response;
+    const range = (options?.headers as Record<string, string>)?.Range;
+    requests.push({ url: String(target), range });
+    const response = new Response(String(target) === shortUrl ? html.slice(0, 512 * 1024) : html, {
+      status: 206, headers: { 'content-type': 'text/html; charset=utf-8' },
+    });
+    Object.defineProperty(response, 'url', { value: finalUrl });
+    return response;
+  }) as typeof fetch;
+  try {
+    const metadata = await fetchPageMetadata(shortUrl);
+    assert.equal(metadata?.title, 'Redirected video');
+    assert.equal(metadata?.preview_image_url, 'https://i.ytimg.com/vi/8G9lmG11pOM/maxresdefault.jpg');
+    assert.deepEqual(requests, [
+      { url: shortUrl, range: 'bytes=0-524287' },
+      { url: finalUrl, range: 'bytes=0-1048575' },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('YouTube non-streaming HTML retains the 2 MiB allocation guard', async () => {
+  const originalFetch = globalThis.fetch;
+  let buffered = false;
+  globalThis.fetch = (async (target: string) => {
+    if (String(target).includes('/oembed?')) return { ok: false, status: 401 } as Response;
+    return {
+      ok: true, url: String(target),
+      headers: { get: (name: string) => name === 'content-type' ? 'text/html' : name === 'content-length' ? String(8 * 1024 * 1024) : null },
+      arrayBuffer: async () => { buffered = true; throw new Error('must not buffer'); },
+    } as unknown as Response;
+  }) as typeof fetch;
+  try {
+    assert.equal(await fetchPageMetadata('https://www.youtube.com/watch?v=8G9lmG11pOM'), null);
+    assert.equal(buffered, false);
   } finally {
     globalThis.fetch = originalFetch;
   }
