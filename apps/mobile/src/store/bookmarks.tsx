@@ -7904,6 +7904,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const pullReady = isPullReady(pullFailure?.userId === session.user.id ? pullFailure : null, Date.now(), force || (recoverAuth && pullFailure?.kind === "auth"));
         if (!syncPausedRef.current && pullReady) {
           try {
+            const getQueuedWorkIds = () => new Set([
+              ...deletedIds.current,
+              ...queueRef.current.filter((entry) => entry.sync_status !== "synced")
+                .map((entry) => entry.local_id),
+            ]);
             const result = await pullRemoteChanges(
               api,
               repository,
@@ -7917,16 +7922,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 ),
               currentUser,
               () => !syncPausedRef.current,
+              getQueuedWorkIds,
             );
             // STASH-7A: the pull's storage awaits can span a local batch move.
             // Recheck the outbox at publication time so an older snapshot never
             // rolls back the optimistic edit while its upload is still pending.
-            const hasNewLocalWork = (id: string) =>
-              deletedIds.current.has(id) || queueRef.current.some(
-                (entry) => entry.local_id === id && entry.sync_status !== "synced",
-              );
-            const upserts = result.upserts.filter((row) => !hasNewLocalWork(row.id));
-            const deletions = result.deletions.filter((id) => !hasNewLocalWork(id));
+            const queuedWorkIds = getQueuedWorkIds();
+            const upserts = result.upserts.filter((row) => !queuedWorkIds.has(row.id));
+            const deletions = result.deletions.filter((id) => !queuedWorkIds.has(id));
             if (upserts.length > 0 || deletions.length > 0) {
               const upsertIds = new Set(
                 upserts.map((bookmark) => bookmark.id),
