@@ -2783,49 +2783,49 @@ export default function InboxScreen() {
         ) : null}
         {(isLoading || showControls || collections.length > 0) && !selectionMode && !folderSelectionMode && !searchFocused && !searchOpen ? (
         <View testID="inbox-filter-options-row" style={[styles.filterOptionsRow, { maxWidth: contentMaxWidth }]}>
-          <View testID="inbox-view-mode-control" style={[styles.viewModeControl, { backgroundColor: palette.surface, borderColor: palette.border }]}>
-            {(['list', 'card', 'folder'] as const).map((mode) => (
-              <Pressable
-                key={mode}
-                testID={`inbox-view-${mode}`}
-                accessibilityRole="button"
-                accessibilityLabel={t(VIEW_MODE_LABEL_KEY[mode])}
-                accessibilityState={{ selected: viewMode === mode, disabled: isLoading || !viewOptionsReady }}
-                disabled={isLoading || !viewOptionsReady}
-                onPress={() => {
-                  setViewMode(mode);
-                  void setPreference(INBOX_VIEW_PREF_KEY, serializeViewMode(mode)).catch(() => {});
-                  setSortMenuOpen(false);
-                }}
-                style={({ pressed }) => [styles.viewModeButton, {
-                  backgroundColor: viewMode === mode ? palette.mutedSurface : 'transparent',
-                  opacity: pressed || isLoading || !viewOptionsReady ? 0.6 : 1,
-                }]}
-              >
-                <Ionicons name={VIEW_MODE_ICON[mode]} size={20} color={viewMode === mode ? palette.text : palette.textSecondary} />
-              </Pressable>
-            ))}
-          </View>
-          <Pressable testID="inbox-view-options" accessibilityRole="button"
-            accessibilityLabel={t('inbox.viewOptions')}
-            accessibilityState={{ disabled: isLoading || !viewOptionsReady }} disabled={isLoading || !viewOptionsReady}
-            onPress={() => setSortMenuOpen(true)} style={styles.viewOptions}>
-            <Text style={[styles.viewOptionsLabel, { color: palette.text }]}>{t('inbox.viewOptions')}</Text>
-            <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
+          <Pressable testID="inbox-scope-picker" accessibilityRole="button"
+            accessibilityLabel={t('inbox.scopePickerA11y')}
+            accessibilityState={{ expanded: viewMode === 'folder' ? false : scopeMenuOpen, disabled: viewMode === 'folder' || isLoading }}
+            disabled={viewMode === 'folder' || isLoading}
+            onPress={() => setScopeMenuOpen(true)}
+            style={[styles.scopePicker, { borderColor: palette.controlBorder, opacity: viewMode === 'folder' || isLoading ? 0.5 : 1 }]}>
+            <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.viewOptionsLabel, { color: palette.text }]}>
+              {viewMode === 'folder' || filter.kind === 'all' ? t('inbox.filterAll') : filter.kind === 'uncollected' ? t('inbox.filterNoCollection') : activeChip?.label ?? t('inbox.filterAll')}
+            </Text>
+            {viewMode !== 'folder' ? <Ionicons name="chevron-down" size={14} color={palette.textSecondary} /> : null}
           </Pressable>
-        </View>
-        ) : null}
-        {(isLoading || showControls) && !selectionMode && !folderSelectionMode && !searchFocused && !searchOpen && viewMode !== 'folder' ? (
-          <View style={[styles.scopeRow, { maxWidth: contentMaxWidth }]}>
-            <Pressable testID="inbox-scope-picker" accessibilityRole="button"
-              accessibilityLabel={t('inbox.scopePickerA11y')} accessibilityState={{ expanded: scopeMenuOpen }}
-              onPress={() => setScopeMenuOpen(true)} style={[styles.scopePicker, { borderColor: palette.controlBorder }]}>
-              <Text numberOfLines={2} style={[styles.viewOptionsLabel, { color: palette.text }]}>
-                {filter.kind === 'all' ? t('inbox.filterAll') : filter.kind === 'uncollected' ? t('inbox.filterNoCollection') : activeChip?.label ?? t('inbox.filterAll')}
-              </Text>
-              <Ionicons name="chevron-down" size={14} color={palette.textSecondary} />
+          <View testID="inbox-view-actions" style={styles.viewActions}>
+            <View testID="inbox-view-mode-control" style={[styles.viewModeControl, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+              {(['card', 'list', 'folder'] as const).map((mode) => (
+                <Pressable
+                  key={mode}
+                  testID={`inbox-view-${mode}`}
+                  accessibilityRole="button"
+                  accessibilityLabel={t(VIEW_MODE_LABEL_KEY[mode])}
+                  accessibilityState={{ selected: viewMode === mode, disabled: isLoading || !viewOptionsReady }}
+                  disabled={isLoading || !viewOptionsReady}
+                  onPress={() => {
+                    setViewMode(mode);
+                    void setPreference(INBOX_VIEW_PREF_KEY, serializeViewMode(mode)).catch(() => {});
+                    setSortMenuOpen(false);
+                  }}
+                  style={({ pressed }) => [styles.viewModeButton, {
+                    backgroundColor: viewMode === mode ? palette.mutedSurface : 'transparent',
+                    opacity: pressed || isLoading || !viewOptionsReady ? 0.6 : 1,
+                  }]}
+                >
+                  <Ionicons name={VIEW_MODE_ICON[mode]} size={20} color={viewMode === mode ? palette.text : palette.textSecondary} />
+                </Pressable>
+              ))}
+            </View>
+            <Pressable testID="inbox-view-options" accessibilityRole="button"
+              accessibilityLabel={t('inbox.viewOptions')}
+              accessibilityState={{ disabled: isLoading || !viewOptionsReady }} disabled={isLoading || !viewOptionsReady}
+              onPress={() => setSortMenuOpen(true)} style={styles.viewOptions}>
+              <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
             </Pressable>
           </View>
+        </View>
         ) : null}
         </View>
       </WebCrispAnimatedSurface>
@@ -4383,7 +4383,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    flexWrap: 'wrap',
     paddingHorizontal: uiMetrics.screenGutter,
     paddingVertical: 8,
     gap: 8,
@@ -4403,22 +4402,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  scopeRow: {
-    paddingHorizontal: uiMetrics.screenGutter,
-    paddingBottom: 8,
-    width: '100%',
-    alignSelf: 'center',
-  },
-  scopePicker: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 48, maxWidth: '55%', borderWidth: 1, borderRadius: 10, padding: 8 },
-  viewOptions: {
+  scopePicker: {
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: 48,
     gap: 8,
-    paddingHorizontal: 0,
-    paddingVertical: 8,
-    maxWidth: '100%',
-    flexShrink: 1,
+    minHeight: 48,
+    flex: 1,
+    minWidth: 0,
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 8,
+  },
+  viewActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 0,
+    gap: 4,
+  },
+  viewOptions: {
+    width: 48,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   viewOptionsLabel: {
     fontSize: 14,
