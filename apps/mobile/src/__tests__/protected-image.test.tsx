@@ -16,8 +16,16 @@ beforeEach(() => { mockUser = 'a'; mockStatus = 'authenticated'; mockRequest.moc
 afterEach(() => { jest.useRealTimers(); });
 
 test('external/local images do not make signing requests', async () => {
-  const screen = await render(<ProtectedImage uri="https://external.test/image.png" testID="image" />);
-  expect(screen.getByTestId('image').props.source.uri).toBe('https://external.test/image.png');
+  const screen = await render(<ProtectedImage uri="https://example.com/image.png" testID="image" />);
+  expect(screen.getByTestId('image').props.source.uri).toBe('https://example.com/image.png');
+  expect(mockRequest).not.toHaveBeenCalled();
+});
+
+test('private-network remote images are hidden while durable local images remain visible', async () => {
+  const screen = await render(<ProtectedImage uri="http://192.168.1.1/admin" testID="image" />);
+  expect(screen.queryByTestId('image')).toBeNull();
+  await screen.rerender(<ProtectedImage uri="file:///documents/stash-images/capture.png" testID="image" />);
+  expect(screen.getByTestId('image').props.source.uri).toBe('file:///documents/stash-images/capture.png');
   expect(mockRequest).not.toHaveBeenCalled();
 });
 

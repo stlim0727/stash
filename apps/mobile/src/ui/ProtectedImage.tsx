@@ -5,6 +5,7 @@ import { privateImageReference, signedImageUrl, PRIVATE_IMAGE_URL_TTL_SECONDS } 
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { StashSupabaseClient } from '@/supabase/client';
 import { getSupabaseConfigState } from '@/supabase/config';
+import { isPublicPreviewUrl } from '@/domain/preview-network';
 
 type Props = Omit<ImageProps, 'source'> & { uri: string };
 
@@ -50,7 +51,8 @@ export function ProtectedImage({ uri, onError, ...props }: Props) {
     return () => { active = false; controller.abort(); clearTimeout(timer); };
   }, [path, identity, usableSession?.access_token, config, refresh]);
 
-  const displayUri = reference.kind === 'external' ? uri
+  const displayUri = reference.kind === 'external' ?
+    (/^https?:/i.test(uri) && !isPublicPreviewUrl(uri) ? null : uri)
     : reference.kind === 'private' && resolved?.identity === identity && resolved.expiresAt > Date.now() ? resolved.url : null;
   if (!displayUri) return null;
   return <Image {...props} source={{ uri: displayUri }} onError={(event) => {

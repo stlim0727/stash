@@ -83,3 +83,27 @@ node scripts/verify-public-launch-sql.mjs /tmp/keepory-security-db/node_modules/
 전역 화폐 예산·계정 생성 CAPTCHA·직접 REST/Storage 총량 및 egress 제한·키 scope/만료·공개 API 재개 조건·파일 실제 형식/픽셀 검증·클라이언트 URL 내부망 방어·CSP·관측 개인정보·공급망·백업 복구는 [위협 모델](../architecture/public-launch-threat-model.md)에 남아 있다. 이 브랜치가 적용됐다는 이유만으로 모든 출시 게이트가 충족됐다고 판단하지 않는다.
 
 SQL·함수 변경은 유료 AI 가용성을 줄일 수 있지만 캡처·로컬 저장 경로를 차단하지 않는다. 한도·중지 상태 변경은 운영자만 수행하며 보수적인 기본값으로 시작한다.
+
+## 후속 클라이언트 변경: 자동 미리보기 네트워크
+
+`preview-network.ts`는 HTTP(S), 기본 웹 포트, 자격증명 없는 공개 주소만 자동 요청하도록 검사한다. localhost/내부 도메인·사설/loopback/link-local/CGNAT IPv4·IP 우회 표기·IPv6 literal을 거부한다. 북마크 저장·명시적으로 링크 열기는 변경하지 않는다. HTML, discovery oEmbed, provider 요청과 단축 링크 HEAD에 적용하고 OG/favicon/oEmbed 이미지 주소도 검사한다. 기존 저장된 내부망 이미지 주소는 ProtectedImage에서 숨기며 파일 로컬 이미지는 계속 표시한다.
+
+manual redirect는 다음 요청 전에 Location을 재검사하며 최대 5회, cycle은 거부한다. 브라우저의 opaque redirect는 미리보기 실패로 처리해 일부 웹 단축 링크의 자동 미리보기가 감소할 수 있다. 네이티브 `preview-fetch.native.ts`는 `expo/fetch`를 명시적으로 사용한다. 설치된 Expo SDK 56 Android NativeRequest의 manual-mode followRedirects=false 구현을 확인했다. global fetch가 RN XHR 구현으로 바뀌는 설정에도 자동 추적을 의존하지 않는다. [Expo fetch 문서](https://docs.expo.dev/versions/latest/sdk/expo/), [OWASP 리다이렉트·DNS 방어 지침](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html).
+
+이 변경은 DNS 조회·IP pinning·DNS rebinding 방어가 아니다. 공개 도메인이 사설 IP를 반환하거나 재해석되는 문제는 resolver-aware proxy/transport와 egress 제한이 필요하다. React Native Image 및 기존 favicon 표시의 DNS/리다이렉트 네트워크 격리도 아직 보장하지 않는다. 실제 기기에서 공개→내부망 redirect 수신 0건을 확인해야 한다. 새 클라이언트는 아직 운영에 출시하지 않았다.
+
+검증 완료: 모바일 Node 115개 테스트 파일, 변경된 메타데이터/네트워크 회귀 테스트, 이미지 컴포넌트 5개 테스트, TypeScript/lint, Expo 웹 export와 Android Hermes bundle export. Android export는 설치·실기기 네트워크 시험이 아니다.
+
+회귀 검증은 IP 별칭/자격증명/금지 scheme/내부망 주소, 사설 redirect의 다음 요청 0건, 상대 redirect/loop/최대 hop, opaque redirect 거부, 정상 메타데이터, private thumbnail 제외, signed image/계정 전환/로컬 이미지 보존을 포함한다.
+
+## 남은 출시 작업의 의존 관계
+
+| 항목 | 현재 상태 | 다음 적용 조건 |
+| --- | --- | --- |
+| 이미지 비공개 | 서명 클라이언트 및 deferred SQL 준비 | 호환 클라이언트 배포와 실기기/Storage HTTP 확인 후 버킷 전환 |
+| CAPTCHA | 익명 signup body에는 token 없음 | 공급자 사이트 설정·도전 UI·token 전달·실패 시 로컬 저장 유지 검증 후 Auth에서 활성화 |
+| REST/Storage 총량 | 개별 RLS/객체 15MiB만으로 총량은 막지 못함 | 계정별/프로젝트별 저장 예산과 bulk 정책 결정 후 원본 경로에서 동시성 포함 강제 |
+| 미리보기 내부망 | literal URL와 manual redirect 방어 구현 | 클라이언트 배포·실기기 확인·DNS/이미지 transport 격리 |
+| 화폐 예산 | AI 호출 60/시간·1000/24시간 | 공급자 프로젝트 billing cap/alert와 운영 kill switch 연결 |
+
+CAPTCHA를 지금 켜면 token 없이 로그인하는 현재 클라이언트가 실패할 수 있다. 클라이언트 제한만 추가해도 Supabase 원본 API로 우회할 수 있으므로 총량 방어 완료로 표시하지 않는다. 이미 저장된 데이터를 제거하거나 임의의 quota 값을 운영에 적용하지 않았다.
