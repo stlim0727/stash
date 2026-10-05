@@ -1215,7 +1215,7 @@ export default function InboxScreen() {
 
   // Browse facets derived from what is actually in the Inbox, so every chip
   // leads to at least one bookmark and the bar stays empty for fresh installs.
-  const { chips, hasUncollected, uncollectedCount, collectionCounts } = useMemo(() => {
+  const { chips, hasUncollected, collectionCounts } = useMemo(() => {
     const collectionCounts = new Map<string, number>();
     const tagsById = new Map<string, string>();
     let uncollected = 0;
@@ -1253,7 +1253,6 @@ export default function InboxScreen() {
     return {
       chips: [...collectionChips, ...tagChips],
       hasUncollected: uncollected > 0,
-      uncollectedCount: uncollected,
       collectionCounts,
     };
   }, [inbox, getTagsForBookmark, getCollection]);
@@ -1304,16 +1303,9 @@ export default function InboxScreen() {
   );
   const visible = useMemo(() => sortBookmarks(filtered, sort), [filtered, sort]);
 
-  // When search is active, Folder View tiles display the count of matching
-  // items in each folder (matching the "Matches (N)" total). When not searching,
-  // they reflect the full Inbox library.
+  // Folder View counts follow the active facet and search together (STASH-7D).
+  // With no narrowing, `filtered` contains the full Inbox library.
   const { folderCollectionCounts, folderUncollectedCount } = useMemo(() => {
-    if (!searching) {
-      return {
-        folderCollectionCounts: collectionCounts,
-        folderUncollectedCount: uncollectedCount,
-      };
-    }
     const counts = new Map<string, number>();
     let uncollected = 0;
     for (const bookmark of filtered) {
@@ -1330,7 +1322,7 @@ export default function InboxScreen() {
       folderCollectionCounts: counts,
       folderUncollectedCount: uncollected,
     };
-  }, [searching, collectionCounts, uncollectedCount, filtered]);
+  }, [filtered]);
 
   // Folder View tiles. Deliberately NOT filtered down to `chips`' collection
   // entries — those only include a collection that already holds an Inbox
@@ -1338,8 +1330,8 @@ export default function InboxScreen() {
   // below) would never appear as a tile. Folder View reads as a directory of
   // every real Collection (à la Drive/Files, empty folders included), so it
   // iterates the full `collections` list instead and looks up each one's count
-  // from the per-collection tally (0 if absent) — when search is active, counts
-  // reflect the search matches rather than the whole library.
+  // from the per-collection tally (0 if absent). Counts reflect the active
+  // filter and search, including zero matches in a populated folder.
   // Order: the uncollected/"받은함" bucket first (tray icon, `mutedSurface`, not
   // hash-colored), then real collections (alpha-sorted), then a trailing
   // "New folder" tile.
@@ -4115,7 +4107,7 @@ export default function InboxScreen() {
         error={mergeError}
         sourceCollections={mergeSources}
         availableTargets={availableMergeTargets}
-        collectionCounts={folderCollectionCounts}
+        collectionCounts={collectionCounts}
         onMerge={handleMergeFolders}
         onClose={() => {
           if (!mergeBusy) {

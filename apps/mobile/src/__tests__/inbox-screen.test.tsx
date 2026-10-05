@@ -2756,3 +2756,63 @@ test('card source announces and toggles selection instead of opening the URL', a
   const unchecked = screen.getAllByRole('checkbox', { checked: false });
   expect(unchecked.some((node) => within(node).queryByText('example.com'))).toBe(true);
 });
+
+test('STASH-7D: folder counts follow the selected tag, search, and clearing the filter', async () => {
+  const workTagged = '7e64cf1e-0000-4000-8000-000000000071';
+  const looseTagged = '7e64cf1e-0000-4000-8000-000000000072';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: workTagged, title: 'React design', collection_id: 'col-work' }),
+      makeStoredBookmark({ id: looseTagged, title: 'Design reference', collection_id: null }),
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-000000000073', title: 'Other work', collection_id: 'col-work' }),
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-000000000074', title: 'Pasta', collection_id: 'col-recipes' }),
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-000000000075', title: 'Loose note', collection_id: null }),
+    ],
+    {
+      tags: [makeTag('t-design', 'design')],
+      bookmarkTags: [workTagged, looseTagged].map((bookmark_id) => ({
+        bookmark_id, tag_id: 't-design', source: 'user' as const,
+        confidence: null, created_at: '2026-06-12T00:00:00.000Z',
+      })),
+      collections: [makeCollection('col-work', 'Work'), makeCollection('col-recipes', 'Recipes'), makeCollection('col-empty', 'Empty')],
+    },
+  );
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('React design')).toBeTruthy());
+  await selectScope(screen, '#design');
+  await chooseLayout(screen, 'folder');
+  const expectCount = (id: string, label: string) =>
+    expect(within(screen.getByTestId(`folder-tile-${id}`)).getByText(label)).toBeTruthy();
+  await waitFor(() => {
+    expectCount('__folder-c:col-work', '1 item');
+    expectCount('__folder-uncollected', '1 item');
+    expectCount('__folder-c:col-recipes', '0 items');
+    expectCount('__folder-c:col-empty', '0 items');
+  });
+  await fireEvent.press(screen.getByTestId('inbox-search-open'));
+  const input = screen.getByTestId('inbox-search-input');
+  await fireEvent.changeText(input, 'React');
+  await waitFor(() => {
+    expectCount('__folder-c:col-work', '1 item');
+    expectCount('__folder-uncollected', '0 items');
+  });
+  await fireEvent.changeText(input, '');
+  await waitFor(() => expectCount('__folder-uncollected', '1 item'));
+  await fireEvent.press(screen.getByTestId('inbox-search-open'));
+
+  // A folder merge moves all members, so its confirmation uses full counts.
+  await fireEvent(screen.getByTestId('folder-tile-__folder-c:col-work'), 'longPress');
+  await fireEvent.press(screen.getByTestId('folder-tile-__folder-c:col-recipes'));
+  await fireEvent.press(screen.getByTestId('folder-bulk-merge'));
+  expect(within(screen.getByTestId('merge-target-col-work')).getByText('2 items')).toBeTruthy();
+  expect(within(screen.getByTestId('merge-target-col-recipes')).getByText('1 item')).toBeTruthy();
+  await fireEvent.press(screen.getByTestId('merge-collections-cancel'));
+  await fireEvent.press(screen.getByTestId('folder-selection-close'));
+  await fireEvent.press(screen.getByTestId('inbox-filter-clear'));
+  await waitFor(() => {
+    expectCount('__folder-c:col-work', '2 items');
+    expectCount('__folder-uncollected', '2 items');
+    expectCount('__folder-c:col-recipes', '1 item');
+    expectCount('__folder-c:col-empty', '0 items');
+  });
+});
