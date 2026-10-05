@@ -130,3 +130,8 @@ P0 = 공개 전 해결 또는 영향 기능 서버 차단. P1 = 공개 전 검�
 - [OWASP 프롬프트 주입 방어](https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html): 비신뢰 입력·권한 분리·출력 검증.
 
 Supabase changelog markdown은 웹 도구의 content-type 오류로 읽지 못했다. 실제 구현 시 최신 변경 내역과 배포 버전을 다시 확인한다.
+
+
+### 2026-10-05 운영 후속: AI 한도 RPC 권한
+
+운영 점검에서 임의 user_id를 받는 `_ai_enrichment_slot`, `request_ai_enrichment_slot_for`, `refund_ai_enrichment_slot_for`의 클라이언트 실행 권한을 발견했다. 타인 quota 소진과 환불을 통한 사용자별 제한 우회 문제다. 정식 `20261005092956_ai_quota_rpc_access.sql` 적용으로 세 함수를 service_role 전용으로 제한했다. 로컬 취약점 재현·역할별 회귀 검사와 운영 임시 계정 HTTP 검사에서 클라이언트 403, 본인 한도 및 서버 예약·환불 정상 동작을 확인했다. 상세 증거와 남은 출시 항목은 [운영 적용 기록](../development/public-launch-hardening-rollout.md)에 있다.

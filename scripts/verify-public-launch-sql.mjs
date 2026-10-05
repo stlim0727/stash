@@ -39,6 +39,37 @@ try {
   `);
   console.log('Baseline: an authenticated caller can insert its own API key directly.');
 
+  await db.exec(`create function auth.jwt() returns jsonb language sql stable as
+    $$ select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $$;`);
+  for (const migration of [
+    '20260621044644_ai_enrichment_rate_limit.sql',
+    '20260731180000_ai_enrichment_slot_for_500.sql',
+    '20260802061500_ai_enrichment_slot_binding_window_wins.sql',
+    '20260803050000_ai_enrichment_slot_refund_serialize.sql',
+  ]) await db.exec(await sql(`supabase/migrations/${migration}`));
+  // Reproduce live inherited/explicit client EXECUTE grants, including PUBLIC.
+  await db.exec(`grant execute on all functions in schema public to public, anon, authenticated;`);
+  await db.exec(`
+    begin;
+    insert into auth.users(id, is_anonymous) values
+      ('00000000-0000-4000-8000-000000000011', true),
+      ('00000000-0000-4000-8000-000000000012', false);
+    select set_config('request.jwt.claim.sub', '00000000-0000-4000-8000-000000000011', true);
+    set local role authenticated;
+    select public.request_ai_enrichment_slot_for('00000000-0000-4000-8000-000000000012');
+    reset role;
+  `);
+  assert.equal((await db.query("select count(*)::int as count from public.ai_enrichment_requests where user_id='00000000-0000-4000-8000-000000000012'")).rows[0].count, 1);
+  await db.exec(`set local role anon;
+    select public.refund_ai_enrichment_slot_for('00000000-0000-4000-8000-000000000012');
+    reset role;`);
+  assert.equal((await db.query('select count(*)::int as count from public.ai_enrichment_requests')).rows[0].count, 0);
+  await db.exec('rollback;');
+  console.log('Baseline: a client reserves foreign quota and an unauthenticated caller refunds it.');
+  await db.exec(await sql('supabase/migrations/20261005092956_ai_quota_rpc_access.sql'));
+  await db.exec(await sql('supabase/tests/ai-quota-rpc-access.sql'));
+  console.log('PASS: quota RPCs deny unauthenticated and signed-in foreign reserve/refund; self admission and server reserve/refund remain functional.');
+
   await db.exec(await sql('supabase/migrations/20261005091733_public_launch_access_hardening.sql'));
   await db.exec(await sql('supabase/migrations/20261005091739_ai_global_budget.sql'));
   await db.exec(await sql('supabase/tests/public-launch-hardening.sql'));

@@ -54,7 +54,16 @@ node scripts/verify-public-launch-sql.mjs /tmp/keepory-security-db/node_modules/
 
 ### 운영 advisor 후속 항목
 
-새 private tables와 api_keys의 RLS 정책 없음 INFO는 클라이언트 접근을 차단하려는 의도와 일치한다. 기존 RPC `_ai_enrichment_slot`, `request_ai_enrichment_slot_for`, `refund_ai_enrichment_slot_for`는 anon/authenticated가 실행 가능하고 전달한 사용자 ID의 소유권 검사도 없다. 타인의 quota 소진/환불과 사용자별 한도 우회가 가능하므로 **공개 출시 차단 항목**으로 추가했다. 전역 provider 한도는 이 RPC로 해제되지 않는다. 추가 service-role 전용 권한 SQL은 `supabase/deferred-migrations/ai_quota_rpc_access.sql`에 준비했다. 이번 2개 승인 범위에 포함되지 않아 운영에 적용하지 않았으며, 정식 migration 생성과 소유자 self-quota/server 호출 검증이 필요하다. [SECURITY DEFINER 권한 점검](https://supabase.com/docs/guides/database/database-linter?lint=0028_anon_security_definer_function_executable).
+새 private tables와 api_keys의 RLS 정책 없음 INFO는 클라이언트 접근을 차단하려는 의도와 일치한다. 기존 RPC `_ai_enrichment_slot`, `request_ai_enrichment_slot_for`, `refund_ai_enrichment_slot_for`의 클라이언트 실행 권한 문제는 후속 진행 요청에 따라 정식 migration `20261005092956_ai_quota_rpc_access.sql`로 운영에서 해결했다. PUBLIC/anon/authenticated 실행을 제거하고 service_role 실행을 유지했다. 함수 본문·정상 사용자 self-quota 경로는 변경하지 않았다. [SECURITY DEFINER 권한 점검](https://supabase.com/docs/guides/database/database-linter?lint=0028_anon_security_definer_function_executable).
+
+후속 검증 결과:
+
+- 로컬 DB에서 타인 한도 예약과 무인증 환불을 먼저 재현했다. 수정 후 두 client 역할의 세 RPC 호출이 거부되고 ledger가 바뀌지 않는다.
+- 임시 등록 계정으로 운영 세 RPC 호출은 모두 403. 본인 `request_ai_enrichment_slot()`은 200/allowed, service_role 예약은 200/allowed, 환불은 204다. self 예약 1건만 남는 ledger도 확인한 뒤 시험 계정을 삭제했다.
+- 운영 권한 행렬에서 세 RPC는 anon/authenticated=false, service_role=true. self-quota RPC의 기존 권한은 유지된다.
+- 재실행 advisor에서 문제의 세 RPC는 두 SECURITY DEFINER 경고 그룹 모두에서 사라졌다. 나머지 경고는 trigger/self-quota/기존 클라이언트 RPC 검토 항목이다.
+- 임시 시험 계정 잔존 0건, 전역 AI enabled=true/60시간당/1000일당 설정을 확인했다. 전역 중지·provider 호출·외부 피드백 전달은 이번 후속 시험에서 하지 않았다.
+
 
 그 밖에 [유출 비밀번호 보호 OFF](https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection), [public 스키마 pg_net](https://supabase.com/docs/guides/database/database-linter?lint=0014_extension_in_public), [RLS 반복 평가 34건](https://supabase.com/docs/guides/database/database-linter?lint=0003_auth_rls_initplan), [외래키 인덱스 6건](https://supabase.com/docs/guides/database/database-linter?lint=0001_unindexed_foreign_keys)이 남는다. anonymous 접근 경고는 익명 우선 제품의 소유권 정책과 함께 개별 검토해야 한다. Trigger 함수와 정상 클라이언트 RPC의 SECURITY DEFINER 경고도 무조건 일괄 차단하지 않는다.
 
