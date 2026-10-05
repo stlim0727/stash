@@ -89,3 +89,26 @@ test('successful signing does not create endless retries for an unreadable image
   expect(mockRequest).toHaveBeenCalledTimes(2);
   expect(onError).toHaveBeenCalledWith(event);
 });
+
+
+test('consecutive signing failures keep bounded recovery attempts and stop after unmount', async () => {
+  jest.useFakeTimers();
+  mockRequest.mockRejectedValueOnce(new Error('offline'))
+    .mockRejectedValueOnce(new Error('still offline'))
+    .mockRejectedValueOnce(new Error('still offline'))
+    .mockRejectedValueOnce(new Error('still offline'))
+    .mockRejectedValueOnce(new Error('still offline'))
+    .mockResolvedValue({ signedURL: signed });
+  const screen = await render(<ProtectedImage uri={reference} testID="image" />);
+  for (const [index, delay] of [60_000, 120_000, 240_000, 300_000, 300_000].entries()) {
+    expect(screen.queryByTestId('image')).toBeNull();
+    await act(async () => { jest.advanceTimersByTime(delay - 1); });
+    expect(mockRequest).toHaveBeenCalledTimes(index + 1);
+    await act(async () => { jest.advanceTimersByTime(1); });
+    expect(mockRequest).toHaveBeenCalledTimes(index + 2);
+  }
+  expect(screen.getByTestId('image')).toBeTruthy();
+  await screen.unmount();
+  await act(async () => { jest.advanceTimersByTime(600_000); });
+  expect(mockRequest).toHaveBeenCalledTimes(6);
+});

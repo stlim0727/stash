@@ -45,11 +45,14 @@ export function ProtectedImage({ uri, onError, ...props }: Props) {
     }).catch(() => {
       if (!active) return;
       setResolved(null);
-      // Retry once on a transient signing failure; never load the public URL.
-      if (signingRetry.current.identity !== identity || signingRetry.current.count === 0) {
-        signingRetry.current = { identity, count: 1 };
-        timer = setTimeout(() => setRefresh((value) => value + 1), 60_000);
-      }
+      // Recover after a prolonged outage while mounted. Cap the retry rate,
+      // not the number of failures; never fall back to the public URL or mark
+      // a transient signing failure as a permanently broken image.
+      const count = signingRetry.current.identity === identity
+        ? Math.min(signingRetry.current.count + 1, 4) : 1;
+      signingRetry.current = { identity, count };
+      const delayMs = Math.min(60_000 * 2 ** (count - 1), 300_000);
+      timer = setTimeout(() => setRefresh((value) => value + 1), delayMs);
     });
     return () => { active = false; controller.abort(); clearTimeout(timer); };
   }, [path, identity, usableSession?.access_token, config, refresh]);
