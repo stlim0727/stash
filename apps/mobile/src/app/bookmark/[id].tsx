@@ -475,6 +475,11 @@ export default function BookmarkDetailScreen({
   // A folder chip (file-into or create) is currently on screen — so the tag
   // field's "Add all"/"Dismiss all" should sweep it too, like the Review screen.
   const isPreviewFailed = bookmark.metadata_status === 'failed';
+  const hasImageLoadFailed = Boolean(
+    bookmark.url &&
+    (bookmark.preview_image_url || bookmark.local_image_uri) &&
+    !rawPreviewUri
+  );
 
   const folderSuggestionVisible = !isPreviewFailed && suggestedFolder !== null;
 
@@ -1076,9 +1081,13 @@ export default function BookmarkDetailScreen({
 
   // Captured images are primary content; fetched URL previews follow the editors.
   const previewHero = (() => {
-    if (isPreviewFailed) {
+    if (hidePreviewHero) {
+      return null;
+    }
+    if (isPreviewFailed || hasImageLoadFailed) {
       return (
         <View
+          testID="bookmark-detail-preview-failed-banner"
           style={[
             styles.previewFailedBanner,
             { backgroundColor: palette.dangerSoft, borderColor: palette.danger },
@@ -1090,6 +1099,7 @@ export default function BookmarkDetailScreen({
           </Text>
           {bookmark.url ? (
             <Button
+              testID="bookmark-detail-refresh-preview"
               size="sm"
               variant="ghost"
               icon="refresh"
@@ -1102,9 +1112,6 @@ export default function BookmarkDetailScreen({
           ) : null}
         </View>
       );
-    }
-    if (hidePreviewHero) {
-      return null;
     }
     const previewUri = rawPreviewUri;
     if (!previewUri) {
@@ -1666,6 +1673,18 @@ export default function BookmarkDetailScreen({
                 </PostHogMaskView>
               </View>
             ))}
+            {bookmark.url ? (
+              <Button
+                testID="detail-drawer-refresh-preview"
+                variant="ghost"
+                icon="refresh"
+                disabled={busy || previewRefreshing}
+                onPress={handleRefreshPreview}
+                accessibilityLabel={t('detail.previewRefresh')}
+              >
+                {previewRefreshing ? t('detail.previewRefreshing') : t('detail.previewRefresh')}
+              </Button>
+            ) : null}
             <Text style={[styles.detailLabel, { color: palette.textSecondary }]}>
               {t('detail.stateHelp')}
             </Text>

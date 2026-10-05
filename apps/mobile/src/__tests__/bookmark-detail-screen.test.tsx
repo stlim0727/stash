@@ -1638,6 +1638,31 @@ test('unmounts preview hero when the image fails to load so it does not occupy e
   await waitFor(() => {
     expect(screen.queryByTestId('bookmark-detail-preview')).toBeNull();
   });
+  expect(screen.getByTestId('bookmark-detail-refresh-preview')).toBeTruthy();
+});
+
+test('details drawer exposes preview refresh for URL bookmarks', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      title: 'Site without preview failure',
+      url: 'https://example.com/clean',
+      metadata_status: 'complete',
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('Site without preview failure')).toBeTruthy());
+
+  // Details drawer is initially collapsed
+  expect(screen.queryByTestId('detail-drawer-refresh-preview')).toBeNull();
+
+  // Expand details drawer
+  fireEvent.press(screen.getByLabelText('Toggle details'));
+  await waitFor(() => {
+    expect(screen.getByTestId('detail-drawer-refresh-preview')).toBeTruthy();
+  });
 });
 
 test('Detail prioritizes website opening and provides direct 1-tap share, copy, and trash actions', async () => {

@@ -4068,6 +4068,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         if (bookmark.preview_image_url) {
           clearPreviewImageFailed(bookmark.preview_image_url);
         }
+        if (bookmark.local_image_uri) {
+          clearPreviewImageFailed(bookmark.local_image_uri);
+        }
         // Older Android captures marked Reddit's generic EXTRA_TITLE
         // ("Reddit") as user-authored. Preview Refresh is an explicit request
         // to fetch better metadata, so repair that one known provenance mistake
