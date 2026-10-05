@@ -1499,6 +1499,35 @@ for (const missing of ['none', 'title', 'image'] as const) {
   });
 }
 
+test('range-limited non-YouTube redirects retry only the final YouTube URL', async () => {
+  const originalFetch = globalThis.fetch;
+  const shortUrl = 'https://share.google/example';
+  const finalUrl = 'https://www.youtube.com/watch?v=8G9lmG11pOM';
+  const html = `<head><script>${'x'.repeat(700 * 1024)}</script><meta property="og:title" content="Redirected video"><meta property="og:image" content="https://i.ytimg.com/vi/8G9lmG11pOM/maxresdefault.jpg"></head>`;
+  const requests: { url: string; range: string | undefined }[] = [];
+  globalThis.fetch = (async (target: string, options?: RequestInit) => {
+    if (String(target).includes('/oembed?')) return { ok: false, status: 401 } as Response;
+    const range = (options?.headers as Record<string, string>)?.Range;
+    requests.push({ url: String(target), range });
+    const response = new Response(String(target) === shortUrl ? html.slice(0, 512 * 1024) : html, {
+      status: 206, headers: { 'content-type': 'text/html; charset=utf-8' },
+    });
+    Object.defineProperty(response, 'url', { value: finalUrl });
+    return response;
+  }) as typeof fetch;
+  try {
+    const metadata = await fetchPageMetadata(shortUrl);
+    assert.equal(metadata?.title, 'Redirected video');
+    assert.equal(metadata?.preview_image_url, 'https://i.ytimg.com/vi/8G9lmG11pOM/maxresdefault.jpg');
+    assert.deepEqual(requests, [
+      { url: shortUrl, range: 'bytes=0-524287' },
+      { url: finalUrl, range: 'bytes=0-1048575' },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('YouTube non-streaming HTML retains the 2 MiB allocation guard', async () => {
   const originalFetch = globalThis.fetch;
   let buffered = false;

@@ -362,6 +362,15 @@ async function fetchHtmlMetadata(url: string, userAgent: string): Promise<HtmlFe
     const html = await decodeHtml(body.bytes, charset);
     // Redirects may have moved us; resolve relative URLs against the final URL.
     const metadata = parsePageMetadata(html, finalUrl);
+    // A range-honoring redirect may have already ended at the original host's
+    // smaller budget. Only that case needs a new request to the final URL;
+    // ordinary YouTube streams continue within the original response.
+    if (
+      response.status === 206 && byteLimit > htmlByteLimit(url)
+      && (!metadata.title || isChallengeOrBoilerplateTitle(metadata.title) || !metadata.preview_image_url)
+    ) {
+      return await fetchHtmlMetadata(finalUrl, userAgent);
+    }
     const discoveredOembedUrl = discoverOembedEndpoint(html, finalUrl) ?? undefined;
     if (!metadata.title) {
       // A 200 with no parseable title is the classic "content-free JS shell".
