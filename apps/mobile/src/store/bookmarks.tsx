@@ -7904,6 +7904,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const pullReady = isPullReady(pullFailure?.userId === session.user.id ? pullFailure : null, Date.now(), force || (recoverAuth && pullFailure?.kind === "auth"));
         if (!syncPausedRef.current && pullReady) {
           try {
+            const getQueuedWorkIds = () => new Set([
+              ...deletedIds.current,
+              ...queueRef.current.filter((entry) => entry.sync_status !== "synced")
+                .map((entry) => entry.local_id),
+            ]);
             const result = await pullRemoteChanges(
               api,
               repository,
@@ -7917,19 +7922,26 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 ),
               currentUser,
               () => !syncPausedRef.current,
+              getQueuedWorkIds,
             );
-            if (result.upserts.length > 0 || result.deletions.length > 0) {
+            // STASH-7A: the pull's storage awaits can span a local batch move.
+            // Recheck the outbox at publication time so an older snapshot never
+            // rolls back the optimistic edit while its upload is still pending.
+            const queuedWorkIds = getQueuedWorkIds();
+            const upserts = result.upserts.filter((row) => !queuedWorkIds.has(row.id));
+            const deletions = result.deletions.filter((id) => !queuedWorkIds.has(id));
+            if (upserts.length > 0 || deletions.length > 0) {
               const upsertIds = new Set(
-                result.upserts.map((bookmark) => bookmark.id),
+                upserts.map((bookmark) => bookmark.id),
               );
-              const removed = new Set(result.deletions);
+              const removed = new Set(deletions);
               if (bookmarksRef.current) {
                 bookmarksRef.current = [
                   ...bookmarksRef.current.filter(
                     (bookmark) =>
                       !upsertIds.has(bookmark.id) && !removed.has(bookmark.id),
                   ),
-                  ...result.upserts,
+                  ...upserts,
                 ];
               }
               setBookmarks((current) => [
@@ -7937,7 +7949,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   (bookmark) =>
                     !upsertIds.has(bookmark.id) && !removed.has(bookmark.id),
                 ),
-                ...result.upserts,
+                ...upserts,
               ]);
             }
             // STASH-4P: enrichments this device never itself requested (the

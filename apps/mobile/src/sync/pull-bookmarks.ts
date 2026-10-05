@@ -82,6 +82,8 @@ export async function pullRemoteChanges(
   hasQueuedWork: (bookmarkId: string) => boolean,
   currentUser?: PullUser | null,
   shouldContinue: () => boolean = () => true,
+  /** Snapshot the live outbox once per merge boundary for large pulls. */
+  getQueuedWorkIds?: () => ReadonlySet<string>,
 ): Promise<PullResult> {
   // Diagnostics span the WHOLE attempt, including the metadata preflight
   // below (previous-user / watermark reads) — a rejected `repository.getMeta`
@@ -181,18 +183,19 @@ export async function pullRemoteChanges(
     // STASH-K: everything from here to the record call below runs without an
     // await, so its elapsed time is JS-thread block time — what the loop-stall
     // watchdog measures from the outside but cannot attribute. This region is the
-    // pull-side counterpart to the bulk-create brackets in store/bookmarks.tsx:
-    // `hasQueuedWork` is a linear scan of the pending queue in the store, called
-    // once per remote row here and once per local row in the deletion diff, so the
-    // work is O(rows x queue) — which is exactly the shape of a stall reported
-    // with `syncing=true queue=685`.
+    // pull-side counterpart to the bulk-create brackets in store/bookmarks.tsx.
+    // The store supplies a pending-ID snapshot so each lookup is constant time;
+    // scanning the live queue per row caused O(rows x queue) stalls, including
+    // the report with `syncing=true queue=685`.
     const mergeStartedAt = Date.now();
     const locals = getLocalBookmarks();
     const localById = new Map(locals.map((bookmark) => [bookmark.id, bookmark]));
+    const queuedIds = getQueuedWorkIds?.();
+    const isQueued = (id: string) => queuedIds ? queuedIds.has(id) : hasQueuedWork(id);
 
     const upserts: Bookmark[] = [];
     for (const remote of remoteRows) {
-      if (hasQueuedWork(remote.id)) {
+      if (isQueued(remote.id)) {
         continue;
       }
       const local = localById.get(remote.id);
@@ -243,7 +246,7 @@ export async function pullRemoteChanges(
               bookmark.sync_status === 'synced' &&
               !isLocalOnlyBookmark(bookmark) &&
               !remoteIdSet.has(bookmark.id) &&
-              !hasQueuedWork(bookmark.id),
+              !isQueued(bookmark.id),
           )
           .map((bookmark) => bookmark.id);
 
@@ -306,6 +309,35 @@ export async function pullRemoteChanges(
       await repository.setMeta(SYNCED_USER_ANON_KEY, String(currentUser.isAnonymous));
     }
 
+    // STASH-7A: local edits can land during any of the storage awaits above,
+    // after the initial outbox check. A delayed remote write can even finish
+    // AFTER the edit's own write. Restore those live rows on disk and exclude
+    // the stale pull result so publishing it cannot undo a batch folder move.
+    const latestById = new Map(getLocalBookmarks().map((row) => [row.id, row]));
+    const latestQueuedIds = getQueuedWorkIds?.();
+    const changedDuringPull = (id: string) =>
+      (latestQueuedIds ? latestQueuedIds.has(id) : hasQueuedWork(id)) ||
+      (localById.has(id) && !latestById.has(id));
+    const affectedIds = [...upserts.map((row) => row.id), ...deletions]
+      .filter(changedDuringPull);
+    const restored = affectedIds.flatMap((id) => {
+      const latest = latestById.get(id);
+      return latest ? [latest] : [];
+    });
+    if (restored.length > 0) {
+      if (repository.upsertBookmarks) {
+        await repository.upsertBookmarks(restored);
+      } else {
+        for (const row of restored) await repository.insertBookmark(row);
+      }
+    }
+    for (const id of affectedIds) {
+      if (!latestById.has(id)) await repository.deleteBookmark(id);
+    }
+    const affected = new Set(affectedIds);
+    const effectiveUpserts = upserts.filter((row) => !affected.has(row.id));
+    const effectiveDeletions = deletions.filter((id) => !affected.has(id));
+
     recordPullAttempt({
       since,
       fullRefreshReason,
@@ -314,7 +346,7 @@ export async function pullRemoteChanges(
       durationMs: Date.now() - attemptStartedAt,
     });
 
-    return { upserts, deletions, enrichments, tagData: effectiveTagData, tagSnapshotReplaced: !skipTagReplace, pulledAt, userChanged };
+    return { upserts: effectiveUpserts, deletions: effectiveDeletions, enrichments, tagData: effectiveTagData, tagSnapshotReplaced: !skipTagReplace, pulledAt, userChanged };
   } catch (error) {
     recordPullAttempt({
       since,

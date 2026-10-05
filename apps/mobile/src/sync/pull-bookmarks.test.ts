@@ -125,6 +125,41 @@ function fakeApi(overrides: Partial<PullApi> = {}): PullApi {
   };
 }
 
+test('pull snapshots queued IDs once per boundary and rechecks edits after persistence', async () => {
+  const { repository } = fakeRepository();
+  const a = makeBookmark();
+  const b = makeBookmark({ id: REMOTE_ID_B });
+  let locals = [a, b];
+  const queued = new Set([b.id]);
+  let snapshots = 0;
+  let linearChecks = 0;
+  const writes: Bookmark[] = [];
+  repository.insertBookmark = async (row) => { writes.push(row); };
+  repository.replaceTagData = async () => {
+    locals = [{ ...a, collection_id: 'folder-new', sync_status: 'pending' }, b];
+    queued.add(a.id);
+  };
+  const result = await pullRemoteChanges(
+    fakeApi({
+      listBookmarksUpdatedSince: async () => [a, b].map((row) => ({
+        ...row, updated_at: '2026-06-12T01:00:00.000Z',
+      })),
+      listBookmarkIds: async () => [a.id, b.id],
+    }),
+    repository,
+    () => locals,
+    (id) => { linearChecks += 1; return queued.has(id); },
+    undefined,
+    () => true,
+    () => { snapshots += 1; return new Set(queued); },
+  );
+  assert.equal(snapshots, 2);
+  assert.equal(linearChecks, 0);
+  assert.deepEqual(result.upserts, []);
+  assert.deepEqual(writes.map((row) => row.id), [a.id, a.id]);
+  assert.equal(writes.at(-1)?.collection_id, 'folder-new');
+});
+
 test('a pause during pull pagination aborts without applying a partial snapshot', async () => {
   const { calls, meta, repository } = fakeRepository();
   const remote = makeBookmark();
