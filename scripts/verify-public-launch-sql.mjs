@@ -107,6 +107,18 @@ try {
   await db.exec('rollback;');
   console.log('PASS: daily cap, missing configuration and rollback cleanup.');
 
+  await db.exec(`insert into auth.users(id,is_anonymous) values ('00000000-0000-4000-8000-000000000028',true);
+    insert into public.bookmarks(user_id,title)
+      select '00000000-0000-4000-8000-000000000028','preexisting preserved' from generate_series(1,3);`);
+  await db.exec(await sql('supabase/migrations/20261005113906_bookmark_capacity_limits.sql'));
+  assert.equal((await db.query('select bookmark_count::int as count from public.bookmark_capacity_limits')).rows[0].count, 3);
+  assert.equal((await db.query('select bookmark_count::int as count from public.bookmark_capacity_usage')).rows[0].count, 3);
+  assert.equal((await db.query("select count(*)::int as count from public.bookmarks where title='preexisting preserved'")).rows[0].count, 3);
+  await db.exec("delete from auth.users where id='00000000-0000-4000-8000-000000000028';");
+  assert.equal((await db.query('select bookmark_count::int as count from public.bookmark_capacity_limits')).rows[0].count, 0);
+  await db.exec(await sql('supabase/tests/bookmark-capacity.sql'));
+  console.log('PASS: account/project bookmark caps, bulk atomic rollback, updates/trash/permanent deletion, auth cascade, protected usage and disabled accounting.');
+
   // Model the Storage metadata schema and owner-policy helper; this verifies
   // SQL policy/configuration only, not the deployed HTTP/CDN behavior.
   await db.exec(`

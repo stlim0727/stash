@@ -102,8 +102,30 @@ manual redirect는 다음 요청 전에 Location을 재검사하며 최대 5회,
 | --- | --- | --- |
 | 이미지 비공개 | 서명 클라이언트 및 deferred SQL 준비 | 호환 클라이언트 배포와 실기기/Storage HTTP 확인 후 버킷 전환 |
 | CAPTCHA | 익명 signup body에는 token 없음 | 공급자 사이트 설정·도전 UI·token 전달·실패 시 로컬 저장 유지 검증 후 Auth에서 활성화 |
-| REST/Storage 총량 | 개별 RLS/객체 15MiB만으로 총량은 막지 못함 | 계정별/프로젝트별 저장 예산과 bulk 정책 결정 후 원본 경로에서 동시성 포함 강제 |
+| REST/Storage 총량 | 북마크 개수 제한은 운영 비활성, 파일 용량 제한은 미구현 | 계정/프로젝트 한도 확정·활성화, 파일은 업로드 승인·원본 우회 차단 포함 |
 | 미리보기 내부망 | literal URL와 manual redirect 방어 구현 | 클라이언트 배포·실기기 확인·DNS/이미지 transport 격리 |
 | 화폐 예산 | AI 호출 60/시간·1000/24시간 | 공급자 프로젝트 billing cap/alert와 운영 kill switch 연결 |
 
 CAPTCHA를 지금 켜면 token 없이 로그인하는 현재 클라이언트가 실패할 수 있다. 클라이언트 제한만 추가해도 Supabase 원본 API로 우회할 수 있으므로 총량 방어 완료로 표시하지 않는다. 이미 저장된 데이터를 제거하거나 임의의 quota 값을 운영에 적용하지 않았다.
+
+## 후속 운영 변경: 북마크 개수 제한
+
+`20261005113906_bookmark_capacity_limits.sql`을 정식 운영 migration으로 적용했다. 초기 `enabled=false`, 계정·프로젝트 한도는 NULL이다. 현재는 집계만 수행하며 새 저장을 제한하지 않는다. 적용 시 기존 북마크 3,637개를 보존하고 전역/사용자 집계를 초기화했다. 사용자별 내용이나 URL은 조회하지 않았다.
+
+`bookmarks` AFTER trigger가 실제 행 수를 private usage ledger에 반영한다. 계정 유형은 서버 `auth.users.is_anonymous`로 확인하며, 임의 클라이언트 metadata를 신뢰하지 않는다. 행 잠금으로 프로젝트→계정 순서를 직렬화하고, 동시 요청이 stale count로 한도를 초과하지 않도록 한다. 클라이언트는 설정/집계를 직접 읽거나 쓸 수 없으며 `get_bookmark_capacity()`로 본인 used/limit만 읽는다. 활성화되면 초과 INSERT는 HTTP 429 `bookmark_capacity_limit`으로 거부된다. 이미 저장된 행 수정과 삭제는 허용하고, trash도 개수에 포함한다. 영구 삭제·계정 삭제는 집계를 줄인다. 기존 ID의 upsert는 중복 차감하지 않고 소유자 이동은 목적 계정 한도를 검사한다. 실패한 bulk 요청은 모든 행/집계를 rollback한다.
+
+운영 smoke: 임시 등록 사용자 상태 RPC 200, 원장/설정 SELECT와 설정 PATCH 403, bulk 저장 201, 수정·삭제 정상, own used 0→2→0. 시험 계정 잔존 0건, 전역 및 사용자 집계가 실제 북마크 행 수와 모두 일치한다. Auth 삭제 외에 기존 사용자 자료는 변경하지 않았다. 새로운 private 테이블의 RLS 정책 없음 INFO와 self status RPC의 SECURITY DEFINER 경고는 의도한 접근 모델과 함께 검토했다. [권한 점검 지침](https://supabase.com/docs/guides/database/database-linter?lint=0029_authenticated_security_definer_function_executable).
+
+검증: PGlite의 기존 행 보존·계정/프로젝트 cap·bulk rollback·upsert·소유자 이동·한도 하향·삭제/cascade·비활성 집계. 추가로 **격리 PostgreSQL 17.10의 20개 독립 연결**에서 계정 cap=1 및 서로 다른 계정의 project cap=1 모두 정확히 한 요청만 허용했다. 열린 첫 트랜잭션의 rollback 후 대기 요청이 허용되고 row/사용자/project ledger가 일치함도 확인했다. 이 시험은 운영 DB를 사용하지 않는다.
+
+```sh
+node scripts/verify-bookmark-capacity-concurrency.mjs \
+  /tmp/keepory-security-pg/node_modules/@embedded-postgres/linux-x64/native \
+  /tmp/keepory-security-pg/node_modules/pg/lib/index.js
+```
+
+격리 도구 버전: `@embedded-postgres/linux-x64@17.10.0-beta.17`(PostgreSQL binary 17.10), `pg@8.16.3`. 앱 의존성과 lockfile은 변경하지 않았다. 바이너리의 hydration script로 상대 symlink를 복원한 뒤 실행했다. 시험 서버는 127.0.0.1만 listen하며 종료/fixture 디렉터리 삭제까지 수행한다.
+
+활성화 전에는 익명·등록·프로젝트 한도를 모두 정하고 최대 기존 usage, bulk import 제품 정책, 429 표시/재시도 UX를 확인한다. 설정 행 잠금으로 모든 신규 북마크 거래가 직렬화되므로 활성화 여부와 무관하게 쓰기 지연을 관측해야 한다. 단일 호출/본문 크기·테이블별 bytes·태그/폴더/feedback·가입률·저장 파일·egress는 이 개수 제한의 보장 범위 밖이다. 다계정 공격은 project cap까지 필요하며 해당 값도 아직 미설정이다.
+
+파일 용량 한도는 업로드 전 예약·검증된 실제 크기·재시도/교체/삭제 정산·프로젝트 cap·기존 직접 upload RLS 경로 차단을 함께 구현해야 한다. `storage.objects` 직접 DML이나 강제 트리거로 Storage 본체와 메타데이터를 어긋나게 만들지 않는다. [Supabase Storage 스키마 운영 지침](https://supabase.com/docs/guides/storage/schema/design). CAPTCHA 또한 공급자 사이트 설정과 호환 도전 UI가 필요하다. [Supabase CAPTCHA 적용 순서](https://supabase.com/docs/guides/auth/auth-captcha).

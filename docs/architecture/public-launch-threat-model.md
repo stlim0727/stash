@@ -135,3 +135,8 @@ Supabase changelog markdown은 웹 도구의 content-type 오류로 읽지 못�
 ### 2026-10-05 운영 후속: AI 한도 RPC 권한
 
 운영 점검에서 임의 user_id를 받는 `_ai_enrichment_slot`, `request_ai_enrichment_slot_for`, `refund_ai_enrichment_slot_for`의 클라이언트 실행 권한을 발견했다. 타인 quota 소진과 환불을 통한 사용자별 제한 우회 문제다. 정식 `20261005092956_ai_quota_rpc_access.sql` 적용으로 세 함수를 service_role 전용으로 제한했다. 로컬 취약점 재현·역할별 회귀 검사와 운영 임시 계정 HTTP 검사에서 클라이언트 403, 본인 한도 및 서버 예약·환불 정상 동작을 확인했다. 상세 증거와 남은 출시 항목은 [운영 적용 기록](../development/public-launch-hardening-rollout.md)에 있다.
+
+
+### 2026-10-05 후속: 원본 REST의 북마크 개수 제한
+
+계정별/프로젝트별 북마크 개수 제한과 private usage ledger를 운영에 **비활성 상태**로 적용했다. 기본 한도는 아직 선택하지 않았고 기존 행은 보존했다. PostgreSQL 17.10의 20개 독립 연결 경쟁 및 rollback 검증을 통과했다. 이 기능은 북마크 개수만 다루며 저장 파일 bytes, 다른 테이블, 가입률, egress 제한을 해결하지 않는다. 집계 비용·클라우드 quota UX·제품 한도를 검토한 뒤 활성화한다. [상세 운영 기록](../development/public-launch-hardening-rollout.md).
