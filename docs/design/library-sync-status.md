@@ -104,9 +104,12 @@ account switch cannot expose the previous account's cache. Already-running
 requests are not cancelled or assumed to have failed by a connectivity event.
 
 Connectivity uses the SDK-compatible `expo-network` observer, with cleanup,
-unknown-state fallback, and protection against a late initial observation
-overwriting a newer event. Uninformative listener events do not supersede
-authoritative observations or erase known connectivity. A new native build is needed for the added module.
+unknown-state fallback, and a fresh query whenever the app returns to the
+foreground so a missed reconnect cannot leave sync blocked. Queries from an
+earlier foreground session and queries followed by a definite listener event
+cannot overwrite newer connectivity. Uninformative observations, including
+native `UNKNOWN` results with false flags, do not supersede authoritative
+observations or erase known connectivity. A new native build is needed for the added module.
 See the [Expo Network documentation](https://docs.expo.dev/versions/v56.0.0/sdk/network/).
 
 Tests cover transition sequences, all cloud channels, HTTP provenance,

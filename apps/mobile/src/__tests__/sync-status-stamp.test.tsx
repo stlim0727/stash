@@ -1,4 +1,5 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
+import { AppState, type AppStateStatus } from 'react-native';
 import type { ReactNode } from 'react';
 import type { NetworkState } from 'expo-network';
 
@@ -258,6 +259,36 @@ test.each([['paused', 'paused'], ['offline', 'offline'], ['session_expired', 'si
     await screen.unmount();
   },
 );
+
+test('STASH-7E: returning online without a network event clears the banner and resumes a due pull', async () => {
+  jest.useFakeTimers();
+  const listeners = new Set<(state: AppStateStatus) => void>();
+  const originalObserver = AppState.addEventListener;
+  AppState.addEventListener = jest.fn((_event, listener) => {
+    listeners.add(listener);
+    return { remove: () => { listeners.delete(listener); } };
+  });
+  try {
+    apiMock.__listBookmarksUpdatedSinceMock.mockRejectedValueOnce(new Error('Network request failed'));
+    const screen = await renderHook(() => useBookmarks(), { wrapper });
+    await waitFor(() => expect(screen.result.current.librarySyncFlow.phase).toBe('retrying'));
+    await act(async () => { mockNetworkListener({ isConnected: false }); });
+    expect(screen.result.current.librarySyncFlow.phase).toBe('offline');
+    await act(async () => { listeners.forEach((listener) => listener('background')); });
+    await act(async () => { await jest.advanceTimersByTimeAsync(30000); });
+    expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(1);
+    // The query says online, but no reconnect event was delivered while away.
+    await act(async () => { listeners.forEach((listener) => listener('active')); });
+    await waitFor(() => expect(screen.result.current.librarySyncFlow.phase).toBe('idle'));
+    await act(async () => { await jest.advanceTimersByTimeAsync(100); });
+    expect(apiMock.__listBookmarksUpdatedSinceMock).toHaveBeenCalledTimes(2);
+    expect(screen.result.current.librarySyncFlow.remaining).toBe(0);
+    await screen.unmount();
+    expect(listeners.size).toBe(0);
+  } finally {
+    AppState.addEventListener = originalObserver;
+  }
+});
 
 test.each([[401, 'sign_in'], [403, 'permission']])('HTTP %s requests user action instead of auto-retrying', async (status, phase) => {
   jest.useFakeTimers();
