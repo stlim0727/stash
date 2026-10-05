@@ -111,3 +111,18 @@ test('native UNKNOWN false flags are not an offline diagnosis or a newer observa
   await act(async () => { mockAppStateListener('background'); mockAppStateListener('active'); });
   expect(screen.result.current).toBe(true);
 });
+
+test('web UNKNOWN online states clear offline through both events and foreground queries', async () => {
+  const online = { type: 'UNKNOWN' as NetworkState['type'], isConnected: true, isInternetReachable: true };
+  const offline = { type: 'NONE' as NetworkState['type'], isConnected: false, isInternetReachable: false };
+  mockGet.mockResolvedValue(online);
+  const screen = await renderHook(() => useNetworkOffline());
+  await act(async () => { mockListener(offline); });
+  expect(screen.result.current).toBe(true);
+  await act(async () => { mockListener(online); });
+  expect(screen.result.current).toBe(false);
+  await act(async () => { mockListener(offline); });
+  expect(screen.result.current).toBe(true);
+  await act(async () => { mockAppStateListener('background'); mockAppStateListener('active'); });
+  expect(screen.result.current).toBe(false);
+});

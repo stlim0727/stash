@@ -12,8 +12,9 @@ export function useNetworkOffline(): boolean {
     let subscription: ReturnType<typeof addNetworkStateListener> | undefined;
     const accept = (state: NetworkState | undefined) => {
       // Android's observer also returns UNKNOWN with false flags when reading
-      // connectivity fails. That is not evidence of a disconnected device.
-      if (state?.type === 'UNKNOWN') return false;
+      // connectivity fails. That is not evidence of a disconnected device;
+      // web's UNKNOWN with true flags still provides a useful online signal.
+      if (state?.type === 'UNKNOWN' && state.isConnected !== true && state.isInternetReachable !== true) return false;
       const definite = typeof state?.isConnected === 'boolean' || typeof state?.isInternetReachable === 'boolean';
       if (active && definite) setOffline(state?.isConnected === false || state?.isInternetReachable === false);
       return definite;

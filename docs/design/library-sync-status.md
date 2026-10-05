@@ -108,8 +108,10 @@ unknown-state fallback, and a fresh query whenever the app returns to the
 foreground so a missed reconnect cannot leave sync blocked. Queries from an
 earlier foreground session and queries followed by a definite listener event
 cannot overwrite newer connectivity. Uninformative observations, including
-native `UNKNOWN` results with false flags, do not supersede authoritative
-observations or erase known connectivity. A new native build is needed for the added module.
+native `UNKNOWN` results without an affirmative connection signal, do not
+supersede authoritative observations or erase known connectivity. Web's
+`UNKNOWN` results with true connectivity flags are accepted as online.
+A new native build is needed for the added module.
 See the [Expo Network documentation](https://docs.expo.dev/versions/v56.0.0/sdk/network/).
 
 Tests cover transition sequences, all cloud channels, HTTP provenance,
