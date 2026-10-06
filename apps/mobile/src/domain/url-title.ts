@@ -15,8 +15,12 @@
  * URL *path* is the richest human signal we have, and it needs no fetch.
  */
 
-// Relative .ts import (not the @ alias) so Node's test runner can resolve it.
-import { youtubeVideoId } from './page-metadata.ts';
+import {
+  extractGoogleSearchQuery,
+  isGoogleHost,
+  isGoogleSearchUrl,
+  youtubeVideoId,
+} from './page-metadata.ts';
 
 export interface UrlTitle {
   title: string;
@@ -59,6 +63,16 @@ export function describeKnownUrl(rawUrl: string): UrlTitle | null {
       title: 'YouTube video',
       preview_image_url: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
     };
+  }
+
+  if (isGoogleSearchUrl(rawUrl)) {
+    const query = extractGoogleSearchQuery(rawUrl);
+    if (query) {
+      return {
+        title: query,
+        preview_image_url: null,
+      };
+    }
   }
 
   // Each social handler matches only the *post* URL shape it recognizes and
@@ -212,6 +226,29 @@ export function isRepairableSourceTitle(bookmark: { url: string | null; title: s
         trimmed === '네이버 지도' ||
         trimmed === '네이버지도 저장') &&
       (host === 'naver.me' || host === 'map.naver.com' || host.endsWith('.naver.com'))
+    ) {
+      return true;
+    }
+    if (
+      (trimmed === 'google' ||
+        trimmed === 'google search' ||
+        trimmed === 'google 검색' ||
+        trimmed === 'google 탐색' ||
+        trimmed === 'google 検索' ||
+        trimmed === 'share.google') &&
+      isGoogleHost(host)
+    ) {
+      return true;
+    }
+    if (
+      (trimmed === 'youtube' ||
+        trimmed === 'before you continue to youtube' ||
+        trimmed === 'before you continue') &&
+      (host === 'youtube.com' ||
+        host.endsWith('.youtube.com') ||
+        host === 'youtu.be' ||
+        host === 'youtube-nocookie.com' ||
+        host === 'music.youtube.com')
     ) {
       return true;
     }

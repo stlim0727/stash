@@ -6,11 +6,16 @@ import {
   checkYoutubeAvailability,
   detectCharset,
   discoverOembedEndpoint,
+  extractGoogleSearchQuery,
   fetchNaverMapFolderMetadata,
   fetchPageMetadata,
   htmlHeadSummary,
   isChallengeOrBoilerplateTitle,
+  isGenericGoogleSearchTitle,
   isGenericNaverMapTitle,
+  isGenericYouTubeTitle,
+  isGoogleHost,
+  isGoogleSearchUrl,
   isNaverMapUrl,
   isYoutubeAvailabilityCandidate,
   naverMapFolderShareId,
@@ -1627,6 +1632,98 @@ test('fetchNaverMapFolderMetadata refuses an oversized non-streaming response in
     const meta = await fetchNaverMapFolderMetadata('f65cd3df');
     assert.equal(meta, null);
     assert.equal(bufferedBytes, false, 'the oversized body must never be materialized');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('isGoogleHost identifies Google domains and share.google', () => {
+  assert.equal(isGoogleHost('google.com'), true);
+  assert.equal(isGoogleHost('www.google.com'), true);
+  assert.equal(isGoogleHost('google.co.kr'), true);
+  assert.equal(isGoogleHost('google.co.jp'), true);
+  assert.equal(isGoogleHost('google.de'), true);
+  assert.equal(isGoogleHost('share.google'), true);
+  assert.equal(isGoogleHost('https://www.google.com/search?q=test'), true);
+  assert.equal(isGoogleHost('example.com'), false);
+  assert.equal(isGoogleHost('notgoogle.com'), false);
+});
+
+test('isGoogleSearchUrl recognizes search URLs with query parameter q', () => {
+  assert.equal(isGoogleSearchUrl('https://www.google.com/search?q=pizza'), true);
+  assert.equal(isGoogleSearchUrl('https://google.co.kr/search?q=%ED%94%BC%EC%9E%90&oq=pizza'), true);
+  assert.equal(isGoogleSearchUrl('https://www.google.com/search?q=   '), false);
+  assert.equal(isGoogleSearchUrl('https://www.google.com/maps?q=pizza'), false);
+  assert.equal(isGoogleSearchUrl('https://www.google.com/'), false);
+  assert.equal(isGoogleSearchUrl('https://example.com/search?q=pizza'), false);
+});
+
+test('extractGoogleSearchQuery decodes and normalizes search query from URL', () => {
+  assert.equal(extractGoogleSearchQuery('https://www.google.com/search?q=react+native'), 'react native');
+  assert.equal(extractGoogleSearchQuery('https://www.google.com/search?q=%EC%8A%A4%ED%83%80%EB%B2%85%EC%8A%A4'), '스타벅스');
+  assert.equal(extractGoogleSearchQuery('https://google.com/search?q=multiple+++spaces'), 'multiple spaces');
+  assert.equal(extractGoogleSearchQuery('https://google.com/search?q='), null);
+  assert.equal(extractGoogleSearchQuery('https://example.com/search?q=test'), null);
+});
+
+test('isGenericGoogleSearchTitle identifies generic Google titles only on search URLs', () => {
+  assert.equal(isGenericGoogleSearchTitle('Google Search', 'https://www.google.com/search?q=pizza'), true);
+  assert.equal(isGenericGoogleSearchTitle('Google 검색', 'https://www.google.com/search?q=pizza'), true);
+  assert.equal(isGenericGoogleSearchTitle('Google', 'https://www.google.com/search?q=pizza'), true);
+  assert.equal(isGenericGoogleSearchTitle('Google Search', 'https://example.com/article'), false);
+  assert.equal(isGenericGoogleSearchTitle('Pizza Recipes - Google Search', 'https://www.google.com/search?q=pizza'), false);
+});
+
+test('youtubeVideoId extracts id from music.youtube.com', () => {
+  assert.equal(youtubeVideoId('https://music.youtube.com/watch?v=l7x7LyApZxE'), 'l7x7LyApZxE');
+});
+
+test('isGenericYouTubeTitle recognizes boilerplate and consent titles', () => {
+  assert.equal(isGenericYouTubeTitle('YouTube', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'), true);
+  assert.equal(isGenericYouTubeTitle('Before you continue to YouTube', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'), true);
+  assert.equal(isGenericYouTubeTitle('My Cool Video', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'), false);
+  assert.equal(isGenericYouTubeTitle('YouTube', 'https://example.com/article'), false);
+});
+
+test('parsePageMetadata extracts Google search query as title when page title is generic', () => {
+  const html = '<head><title>Google Search</title></head>';
+  const meta = parsePageMetadata(html, 'https://www.google.com/search?q=low+latency+sw');
+  assert.equal(meta.title, 'low latency sw');
+  assert.equal(meta.site_name, 'Google');
+  assert.equal(meta.favicon_url, 'https://www.google.com/favicon.ico');
+});
+
+test('fetchPageMetadata recovers Google search query title and site info', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (target: string) => {
+    return htmlResponse('<head><title>Google Search</title></head>', {
+      url: String(target),
+    });
+  }) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata('https://www.google.com/search?q=react+native+performance');
+    assert.equal(meta?.title, 'react native performance');
+    assert.equal(meta?.site_name, 'Google');
+    assert.equal(meta?.favicon_url, 'https://www.google.com/favicon.ico');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchPageMetadata recovers Google search query after share.google redirect', async () => {
+  const originalFetch = globalThis.fetch;
+  const shortUrl = 'https://share.google/aimode/M1uHHzZc6idF8H9Ig';
+  const finalUrl = 'https://www.google.com/search?q=janestreet+or+citadel+hardware&source=sh/x/aim';
+  globalThis.fetch = (async (_target: string) => {
+    return htmlResponse('<head><title>Google Search</title></head>', {
+      url: finalUrl,
+    });
+  }) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata(shortUrl);
+    assert.equal(meta?.title, 'janestreet or citadel hardware');
+    assert.equal(meta?.site_name, 'Google');
+    assert.equal(meta?.favicon_url, 'https://www.google.com/favicon.ico');
   } finally {
     globalThis.fetch = originalFetch;
   }

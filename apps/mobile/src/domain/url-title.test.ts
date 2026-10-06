@@ -199,6 +199,55 @@ test('isRepairableSourceTitle recognizes legacy Reddit and GeekNews Topic placeh
     }),
     false,
   );
+  assert.equal(
+    isRepairableSourceTitle({
+      url: 'https://www.google.com/search?q=expo+sqlite',
+      title: 'Google Search',
+    }),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle({
+      url: 'https://www.google.co.kr/search?q=expo+sqlite',
+      title: 'Google 검색',
+    }),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle({
+      url: 'https://www.google.com/search?q=expo+sqlite',
+      title: 'Google',
+    }),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle({
+      url: 'https://www.google.com/search?q=expo+sqlite',
+      title: 'share.google',
+    }),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle({
+      url: 'https://www.youtube.com/watch?v=LNysDlsp26Q',
+      title: 'YouTube',
+    }),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle({
+      url: 'https://www.youtube.com/watch?v=LNysDlsp26Q',
+      title: 'Before you continue to YouTube',
+    }),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle({
+      url: 'https://music.youtube.com/watch?v=LNysDlsp26Q',
+      title: 'YouTube',
+    }),
+    true,
+  );
 });
 
 test('describeKnownUrl identifies Naver Map URLs', () => {
@@ -213,5 +262,20 @@ test('describeKnownUrl identifies Naver Map URLs', () => {
   assert.equal(
     describeKnownUrl('https://map.naver.com/')?.title,
     'Naver Map',
+  );
+});
+
+test('describeKnownUrl derives search query for Google search URLs', () => {
+  assert.equal(
+    describeKnownUrl('https://www.google.com/search?q=expo+sqlite')?.title,
+    'expo sqlite',
+  );
+  assert.equal(
+    describeKnownUrl('https://google.co.kr/search?q=%ED%85%8C%EC%8A%A4%ED%8A%B8')?.title,
+    '테스트',
+  );
+  assert.equal(
+    describeKnownUrl('https://www.google.com/search'),
+    null,
   );
 });

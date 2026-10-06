@@ -16,6 +16,14 @@ const MAX_HTML_BYTES = 512 * 1024;
 // YouTube watch pages place metadata after ~710 KB of bootstrap scripts.
 // Keep a bounded 1 MiB fallback when oEmbed is unavailable (STASH-7C).
 const MAX_YOUTUBE_HTML_BYTES = 1024 * 1024;
+export function isKnownYoutubeShortenerHost(rawUrl: string): boolean {
+  try {
+    return new URL(rawUrl).hostname.replace(/^www\./, '') === 'share.google';
+  } catch {
+    return false;
+  }
+}
+
 function htmlByteLimit(url?: string): number {
   return url && youtubeVideoId(url) ? MAX_YOUTUBE_HTML_BYTES : MAX_HTML_BYTES;
 }
@@ -150,7 +158,84 @@ export function isChallengeOrBoilerplateTitle(title: string | undefined): boolea
     lower === 'just a moment...' ||
     lower.startsWith('attention required! | cloudflare') ||
     lower === 'checking your browser...' ||
-    lower.startsWith('checking your browser before accessing')
+    lower.startsWith('checking your browser before accessing') ||
+    lower === 'before you continue to youtube' ||
+    lower === 'before you continue'
+  );
+}
+
+export function isGoogleHost(hostOrUrl: string): boolean {
+  try {
+    const host = (hostOrUrl.includes('://') ? new URL(hostOrUrl).hostname : hostOrUrl)
+      .replace(/^www\./, '')
+      .toLowerCase();
+    return (
+      host === 'google.com' ||
+      host === 'share.google' ||
+      host.endsWith('.google.com') ||
+      /^google\.[a-z]{2,3}(\.[a-z]{2})?$/.test(host)
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function isGoogleSearchUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    if (!isGoogleHost(parsed.hostname)) {
+      return false;
+    }
+    return parsed.pathname === '/search' && Boolean(parsed.searchParams.get('q')?.trim());
+  } catch {
+    return false;
+  }
+}
+
+export function extractGoogleSearchQuery(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(rawUrl);
+    if (!isGoogleHost(parsed.hostname)) {
+      return null;
+    }
+    const q = parsed.searchParams.get('q')?.trim();
+    return q ? q.replace(/\s+/g, ' ') : null;
+  } catch {
+    return null;
+  }
+}
+
+export function isGenericGoogleSearchTitle(title: string | undefined, url?: string): boolean {
+  if (!title) {
+    return true;
+  }
+  if (url && !isGoogleSearchUrl(url)) {
+    return false;
+  }
+  const t = title.trim().toLowerCase();
+  return (
+    t === 'google search' ||
+    t === 'google 검색' ||
+    t === 'google' ||
+    t === 'google 탐색' ||
+    t === 'google 検索' ||
+    t === 'recherche google' ||
+    t === 'google-suche'
+  );
+}
+
+export function isGenericYouTubeTitle(title: string | undefined, url?: string): boolean {
+  if (!title) {
+    return true;
+  }
+  if (url && !youtubeVideoId(url)) {
+    return false;
+  }
+  const t = title.trim().toLowerCase();
+  return (
+    t === 'youtube' ||
+    t === 'before you continue to youtube' ||
+    t === 'before you continue'
   );
 }
 
@@ -173,14 +258,25 @@ export function parsePageMetadata(html: string, baseUrl: string): FetchedMetadat
   }
 
   const image = meta.get('og:image') ?? meta.get('og:image:url') ?? meta.get('twitter:image');
-  const candidateTitle = [meta.get('og:title'), meta.get('twitter:title'), title].find(
+  let candidateTitle = [meta.get('og:title'), meta.get('twitter:title'), title].find(
     (t) => t && !isChallengeOrBoilerplateTitle(t),
   );
 
+  if (isGoogleSearchUrl(baseUrl) && isGenericGoogleSearchTitle(candidateTitle, baseUrl)) {
+    const query = extractGoogleSearchQuery(baseUrl);
+    if (query) {
+      candidateTitle = query;
+    }
+  }
+
+  const isGoogle = isGoogleHost(baseUrl);
+  const candidateSiteName = meta.get('og:site_name') || (isGoogle ? 'Google' : undefined);
+  const candidateFavicon = favicon || (isGoogle ? 'https://www.google.com/favicon.ico' : undefined);
+
   return {
     title: candidateTitle,
-    site_name: meta.get('og:site_name'),
-    favicon_url: favicon,
+    site_name: candidateSiteName,
+    favicon_url: candidateFavicon,
     preview_image_url: image ? resolveHref(image, baseUrl) : undefined,
   };
 }
@@ -691,6 +787,8 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
   if (
     bot.metadata?.title &&
     !isGenericNaverMapTitle(bot.metadata.title, botTargetUrl) &&
+    !isGenericGoogleSearchTitle(bot.metadata.title, botTargetUrl) &&
+    !isGenericYouTubeTitle(bot.metadata.title, botTargetUrl) &&
     !isChallengeOrBoilerplateTitle(bot.metadata.title)
   ) {
     return bot.metadata;
@@ -727,7 +825,13 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
   // SPA shell with no title: if we landed on a page that has a server-rendered
   // sibling (e.g. a Naver Map place entry), fetch that for the real metadata.
   let spa: HtmlFetchResult | null = null;
-  if (!result?.title || isGenericNaverMapTitle(result.title, landedUrl) || isChallengeOrBoilerplateTitle(result.title)) {
+  if (
+    !result?.title ||
+    isGenericNaverMapTitle(result.title, landedUrl) ||
+    isGenericGoogleSearchTitle(result.title, landedUrl) ||
+    isGenericYouTubeTitle(result.title, landedUrl) ||
+    isChallengeOrBoilerplateTitle(result.title)
+  ) {
     const altUrl = landedOn ? previewSourceUrl(landedOn) : null;
     if (altUrl) {
       spa = await fetchHtmlMetadata(altUrl, BROWSER_USER_AGENT);
@@ -757,7 +861,36 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
     }
   }
 
-  if (!result?.title || isGenericNaverMapTitle(result.title, landedUrl)) {
+  // Google Search fallback: if HTML was a shell or generic title, recover query from URL.
+  if (result && isGoogleSearchUrl(landedUrl) && (!result.title || isGenericGoogleSearchTitle(result.title, landedUrl))) {
+    const query = extractGoogleSearchQuery(landedUrl);
+    if (query) {
+      result = {
+        title: query,
+        site_name: result.site_name || 'Google',
+        favicon_url: result.favicon_url || 'https://www.google.com/favicon.ico',
+        preview_image_url: result.preview_image_url,
+      };
+    }
+  }
+
+  // YouTube video fallback: if HTML was a consent wall or generic title, recover deterministic metadata.
+  if (result && youtubeVideoId(landedUrl) && (!result.title || isGenericYouTubeTitle(result.title, landedUrl))) {
+    const videoId = youtubeVideoId(landedUrl)!;
+    result = {
+      title: 'YouTube video',
+      site_name: result.site_name || 'YouTube',
+      favicon_url: result.favicon_url || 'https://www.youtube.com/favicon.ico',
+      preview_image_url: result.preview_image_url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    };
+  }
+
+  if (
+    !result?.title ||
+    isGenericNaverMapTitle(result.title, landedUrl) ||
+    isGenericGoogleSearchTitle(result.title, landedUrl) ||
+    isGenericYouTubeTitle(result.title, landedUrl)
+  ) {
     // Full failure: no title from any attempt. Warn level — enrichment is
     // fire-and-forget and no-title is expected for JS-heavy or dead-link pages,
     // so this does not warrant a Sentry error.
@@ -871,7 +1004,10 @@ export function youtubeVideoId(rawUrl: string): string | null {
     return null;
   }
   const host = parsed.hostname.replace(/^www\./, '').replace(/^m\./, '');
-  const isYouTubeHost = host === 'youtube.com' || host === 'youtube-nocookie.com';
+  const isYouTubeHost =
+    host === 'youtube.com' ||
+    host === 'youtube-nocookie.com' ||
+    host === 'music.youtube.com';
 
   if (host === 'youtu.be') {
     const id = parsed.pathname.split('/').filter(Boolean)[0];
@@ -1003,9 +1139,13 @@ async function fetchKnownOembedMetadata(
  * these directly since the video id only appears after following the
  * redirect — see `resolveKnownYoutubeShortener` below.
  */
-function isKnownYoutubeShortenerHost(rawUrl: string): boolean {
+function isGoogleShareHostOrTrampoline(urlStr: string): boolean {
   try {
-    return new URL(rawUrl).hostname.replace(/^www\./, '') === 'share.google';
+    const parsed = new URL(urlStr);
+    const host = parsed.hostname.replace(/^www\./, '');
+    if (host === 'share.google') return true;
+    if ((host === 'google.com' || host.endsWith('.google.com')) && parsed.pathname === '/share.google') return true;
+    return false;
   } catch {
     return false;
   }
@@ -1050,8 +1190,27 @@ async function resolveKnownYoutubeShortener(rawUrl: string): Promise<string | nu
     if (!response.ok) {
       return null;
     }
-    const finalUrl = response.url || null;
-    if (!finalUrl || isKnownYoutubeShortenerHost(finalUrl)) {
+    let finalUrl = response.url || null;
+    if (finalUrl && isGoogleShareHostOrTrampoline(finalUrl)) {
+      try {
+        const trampolineRes = await fetch(finalUrl, {
+          method: 'GET',
+          headers: { Range: 'bytes=0-0' },
+          redirect: 'manual',
+          signal: controller.signal,
+        });
+        const loc = trampolineRes.headers.get('location');
+        if (loc) {
+          try {
+            finalUrl = new URL(loc, finalUrl).toString();
+          } catch {
+            finalUrl = loc;
+          }
+        }
+        await trampolineRes.body?.cancel?.().catch(() => {});
+      } catch {}
+    }
+    if (!finalUrl || isKnownYoutubeShortenerHost(finalUrl) || isGoogleShareHostOrTrampoline(finalUrl)) {
       return null;
     }
     return finalUrl;
