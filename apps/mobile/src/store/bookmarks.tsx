@@ -6308,16 +6308,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           currentUser,
           bookmarksRef.current ?? [],
         );
-        if (plan.kind === "none") {
-          if (plan.resetWatermark) {
-            await ensureRepositoryReady();
-            await repository.setMeta(LAST_PULLED_AT_KEY, "");
-          }
-          if (authRef.current.userId === currentUser.id) {
-            setReconciledCacheUserId(currentUser.id);
-          }
-          return true;
-        }
         await serializeTagWork(() => applyAccountTransition(
           plan,
           repository,
@@ -6529,7 +6519,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const priorCredentials = syncCredentialsRef.current;
         const recoverAuth = !!restoredSession && (recoveryRequested ||
           (!!priorCredentials && (priorCredentials.userId !== session.user.id || priorCredentials.accessToken !== session.access_token)));
-        const durableBookmarks = bookmarksRef.current ?? (await repository.listBookmarks());
+        const durableBookmarks = await repository.listBookmarks();
         const durableQueue = await repository.listQueue();
         if (restoredSession) {
           syncCredentialsRef.current = { userId: session.user.id, accessToken: session.access_token };
