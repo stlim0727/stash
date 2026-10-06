@@ -86,18 +86,27 @@ await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const origin = `http://127.0.0.1:${server.address().port}`;
 const profile = await mkdtemp(join(tmpdir(), 'keepory-web-security-'));
 const chrome = spawn(process.argv[3] ?? '/usr/bin/google-chrome', [
-  '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
+  '--headless=new', '--disable-gpu', '--disable-dev-shm-usage',
+  '--disable-background-networking', '--no-first-run', '--no-default-browser-check',
   `--user-data-dir=${profile}`, '--remote-debugging-port=0', 'about:blank',
-], { stdio: 'ignore' });
+], { stdio: ['ignore', 'ignore', 'pipe'] });
+let chromeError;
+let chromeStderr = '';
+chrome.on('error', (error) => { chromeError = error; });
+chrome.stderr.on('data', (chunk) => { chromeStderr = (chromeStderr + chunk.toString()).slice(-4096); });
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 let socket;
 try {
   let port;
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+  const startupDeadline = Date.now() + 30_000;
+  while (Date.now() < startupDeadline) {
     try { port = Number((await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')[0]); break; }
-    catch { if (chrome.exitCode !== null) throw new Error('Chrome exited before startup'); await delay(100); }
+    catch {
+      if (chromeError || chrome.exitCode !== null) throw new Error(`Chrome exited before startup: ${chromeError?.message ?? chromeStderr}`);
+      await delay(100);
+    }
   }
-  assert.ok(port, 'Chrome must start');
+  assert.ok(port, `Chrome must start within 30 seconds. Browser diagnostics: ${chromeStderr}`);
   const target = await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' })).json();
   socket = new WebSocket(target.webSocketDebuggerUrl);
   await Promise.race([once(socket, 'open'), delay(5000).then(() => { throw new Error('CDP connection timeout'); })]);
@@ -225,10 +234,10 @@ try {
   console.log(JSON.stringify({ status: 'pass', pages: 4, blockedAttacks: ['inline', 'event-handler', 'foreign-script', 'data-script', 'eval', 'new-function', 'base', 'object', 'iframe'], sameOriginScript: true, webAssembly: true, captcha: 'isolated adapter and hosted-page lifecycle passed; real Siteverify pending' }));
 } finally {
   socket?.close();
-  if (chrome.exitCode === null) {
+  if (!chromeError && chrome.exitCode === null) {
     const ended = once(chrome, 'exit'); chrome.kill('SIGTERM');
     await Promise.race([ended, delay(2000)]);
-    if (chrome.exitCode === null) { chrome.kill('SIGKILL'); await ended; }
+    if (!chromeError && chrome.exitCode === null) { chrome.kill('SIGKILL'); await ended; }
   }
   await Promise.all([new Promise((r) => server.close(r)), new Promise((r) => foreign.close(r))]);
   await rm(profile, { recursive: true, force: true });
