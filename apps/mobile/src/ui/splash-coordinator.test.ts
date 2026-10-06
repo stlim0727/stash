@@ -188,3 +188,13 @@ test('startWatchdog is idempotent and does not create duplicate timers', () => {
 
   assert.equal(timersCreated, 1);
 });
+
+test('signalUpdateRequired dismisses splash immediately with update_required reason', async () => {
+  const { coordinator, getHiddenCalls } = makeCoordinator();
+  coordinator.updateRoute('/');
+  coordinator.signalUpdateRequired();
+
+  assert.equal(coordinator.isDismissed(), true);
+  assert.equal(coordinator.getDismissReason(), 'update_required');
+  assert.equal(getHiddenCalls(), 1);
+});

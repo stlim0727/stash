@@ -33,6 +33,7 @@ export type SplashDismissReason =
   | 'inbox_ready'
   | 'route_ready'
   | 'storage_error'
+  | 'update_required'
   | 'timeout'
   | 'manual';
 
@@ -118,6 +119,13 @@ export class SplashCoordinator {
     }
     this.isInboxReady = true;
     this.evaluateReadiness();
+  }
+
+  public signalUpdateRequired(): void {
+    if (this.hasDismissed) {
+      return;
+    }
+    void this.hideSplash('update_required');
   }
 
   private evaluateReadiness(): void {

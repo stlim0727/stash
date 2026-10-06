@@ -1,11 +1,17 @@
+import { useEffect } from 'react';
 import { Linking, StyleSheet, Text, View } from 'react-native';
 
 import { DEFAULT_UPDATE_URL } from '@/domain/app-config';
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
 import { Button } from '@/ui/Button';
+import { splashCoordinator } from '@/ui/splash-coordinator';
 
 export function UpdateRequired({ message, updateUrl }: { message?: string | null; updateUrl?: string | null }) {
+  useEffect(() => {
+    splashCoordinator.signalUpdateRequired();
+  }, []);
+
   const palette = usePalette();
   const t = useT();
   const targetUrl = updateUrl?.trim() || DEFAULT_UPDATE_URL;

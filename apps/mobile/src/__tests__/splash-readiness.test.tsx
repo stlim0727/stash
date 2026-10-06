@@ -15,6 +15,8 @@ jest.mock('@/store/bookmarks', () => ({
 
 import { splashCoordinator } from '@/ui/splash-coordinator';
 import { SplashReadinessObserver } from '@/ui/SplashReadinessObserver';
+import { UpdateRequired } from '@/ui/UpdateRequired';
+import { I18nProvider } from '@/i18n';
 
 describe('SplashReadinessObserver', () => {
   beforeEach(() => {
@@ -92,5 +94,21 @@ describe('SplashReadinessObserver', () => {
     await screen.unmount();
     expect(disarmSpy).toHaveBeenCalled();
     disarmSpy.mockRestore();
+  });
+
+  test('rendering UpdateRequired dismisses splash immediately', async () => {
+    const hideSpy = jest.spyOn(splashCoordinator, 'hideSplash');
+    const screen = await render(
+      <I18nProvider>
+        <UpdateRequired message="Version outdated" updateUrl="https://example.com" />
+      </I18nProvider>,
+    );
+
+    await waitFor(() => expect(splashCoordinator.isDismissed()).toBe(true));
+    expect(splashCoordinator.getDismissReason()).toBe('update_required');
+    expect(hideSpy).toHaveBeenCalledWith('update_required');
+
+    await screen.unmount();
+    hideSpy.mockRestore();
   });
 });
