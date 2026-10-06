@@ -335,6 +335,12 @@ function createUploadPayload(
   if (latestAtUpload.preview_image_url !== null) {
     payload.preview_image_url = latestAtUpload.preview_image_url;
   }
+  if (latestAtUpload.canonical_url !== null) {
+    payload.canonical_url = latestAtUpload.canonical_url;
+  }
+  if (latestAtUpload.content_type && latestAtUpload.content_type !== 'url') {
+    payload.content_type = latestAtUpload.content_type;
+  }
   if (latestAtUpload.metadata_status !== 'pending') {
     payload.metadata_status = latestAtUpload.metadata_status;
   }

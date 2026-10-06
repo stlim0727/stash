@@ -1016,6 +1016,48 @@ test('createBookmark and createBookmarks pass collection_id in request body', as
   assert.equal(bulkPosts[0].collection_id, 'col-2');
 });
 
+test('createBookmark and createBookmarks preserve canonical_url and content_type in request body (#700)', async () => {
+  const singlePosts: Array<Record<string, unknown>> = [];
+  const bulkPosts: Array<Record<string, unknown>> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.includes('url_hash=') || path.includes('client_id=')) return [];
+      if (path === '/rest/v1/bookmarks' && options.method === 'POST') {
+        if (Array.isArray(options.body)) {
+          bulkPosts.push(...options.body);
+          return options.body.map((item: Record<string, unknown>) => remoteBookmark(item));
+        }
+        singlePosts.push(options.body as Record<string, unknown>);
+        return [remoteBookmark(options.body as Record<string, unknown>)];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  await api.createBookmark({
+    id: 'b1',
+    url: 'https://example.com/article',
+    canonical_url: 'https://example.com/canonical-article',
+    content_type: 'article',
+  });
+  assert.equal(singlePosts.length, 1);
+  assert.equal(singlePosts[0].canonical_url, 'https://example.com/canonical-article');
+  assert.equal(singlePosts[0].content_type, 'article');
+
+  await api.createBookmarks([
+    {
+      id: 'b2',
+      url: 'https://example.com/video',
+      canonical_url: 'https://example.com/canonical-video',
+      content_type: 'video',
+    },
+  ]);
+  assert.equal(bulkPosts.length, 1);
+  assert.equal(bulkPosts[0].canonical_url, 'https://example.com/canonical-video');
+  assert.equal(bulkPosts[0].content_type, 'video');
+});
+
 test('updateCollection patches collection name and returns updated collection', async () => {
   const calls: Array<{ path: string; options: Record<string, unknown> }> = [];
   const client = {

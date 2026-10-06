@@ -258,6 +258,7 @@ export interface CreateBookmarkInput {
    */
   id?: string;
   url?: string;
+  canonical_url?: string | null;
   title?: string;
   description?: string;
   notes?: string;
@@ -267,12 +268,10 @@ export interface CreateBookmarkInput {
   shared_text?: string;
   collection_id?: string | null;
   /**
-   * Explicit content-type override for a create that carries neither `url`
-   * nor `shared_text`. `'image'` supports an image-only capture and requires
-   * an already-uploaded `preview_image_url`; `'text'` preserves a restored
-   * memo whose body is empty but whose other authored fields remain.
+   * Explicit content-type for a create. Supports image captures, restored memos,
+   * and losslessly restored page content types ('article', 'video', etc.).
    */
-  content_type?: 'image' | 'text';
+  content_type?: ContentType;
   site_name?: string | null;
   favicon_url?: string | null;
   preview_image_url?: string | null;

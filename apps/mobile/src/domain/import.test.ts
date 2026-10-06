@@ -331,6 +331,49 @@ test('a Stash JSON backup round-trips generated metadata and the AI enrichment s
   });
 });
 
+test('parseJsonBackup normalizes canonical_url and drops invalid URL string (#700)', () => {
+  const json = JSON.stringify({
+    bookmarks: [
+      {
+        url: 'https://example.com/a',
+        canonical_url: 'not a url',
+        content_type: 'article',
+      },
+      {
+        url: 'https://example.com/b',
+        canonical_url: 'https://example.com/canonical-b/',
+        content_type: 'invalid-type',
+      },
+    ],
+  });
+  const [itemA, itemB] = parseJsonBackup(json);
+  assert.equal(itemA?.metadata?.canonical_url, null);
+  assert.equal(itemA?.metadata?.content_type, 'article');
+  assert.equal(itemB?.metadata?.canonical_url, 'https://example.com/canonical-b/');
+  assert.equal(itemB?.metadata?.content_type, 'url');
+});
+
+test('parseJsonBackup recognizes non-url content_type (e.g. video) as metadata signal (#700)', () => {
+  const json = JSON.stringify({
+    bookmarks: [
+      {
+        url: 'https://example.com/video',
+        content_type: 'video',
+      },
+    ],
+  });
+  const [item] = parseJsonBackup(json);
+  assert.deepEqual(item?.metadata, {
+    description: null,
+    raw_description: null,
+    preview_image_url: null,
+    favicon_url: null,
+    site_name: null,
+    canonical_url: null,
+    content_type: 'video',
+  });
+});
+
 test('a Stash HTML export round-trips back through parseNetscapeHtml', () => {
   const input = exportInput({
     bookmarks: [

@@ -45,6 +45,28 @@ test('rebuilds a URL bookmark payload from its row', () => {
   });
 });
 
+test('carries canonical_url and non-url content_type for a URL bookmark (#700)', () => {
+  const payload = createPayloadFromBookmark(
+    bookmark({
+      id: 'b1',
+      url: 'https://example.com/x',
+      canonical_url: 'https://example.com/x/canonical',
+      content_type: 'article',
+      title: 'T',
+    }),
+  );
+  assert.deepEqual(payload, {
+    id: 'b1',
+    created_at: '2026-06-20T00:00:00.000Z',
+    url: 'https://example.com/x',
+    canonical_url: 'https://example.com/x/canonical',
+    content_type: 'article',
+    title: 'T',
+    notes: undefined,
+    client_id: undefined,
+  });
+});
+
 test('carries a text note body back as shared_text (not url)', () => {
   const payload = createPayloadFromBookmark(
     bookmark({ id: 'b1', url: null, content_type: 'text', description: 'a thought', title: 'Note' }),

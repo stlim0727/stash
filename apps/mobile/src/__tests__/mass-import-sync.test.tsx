@@ -660,6 +660,8 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
       preview_image_url: "https://example.com/preview.png",
       favicon_url: "https://example.com/favicon.ico",
       site_name: "Example",
+      canonical_url: "https://example.com/restored-metadata/",
+      content_type: "article",
     });
     expect(enrichmentMock.enrichBookmark).not.toHaveBeenCalled();
 
@@ -679,6 +681,8 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
       site_name: "Example",
       favicon_url: "https://example.com/favicon.ico",
       preview_image_url: "https://example.com/preview.png",
+      canonical_url: "https://example.com/restored-metadata/",
+      content_type: "article",
     });
   });
 
@@ -1334,6 +1338,77 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     // Ensure library total count is exactly 3 (no duplication of duplicate item)
     expect(result.current.inbox).toHaveLength(3);
     expect(fakeRepo.__bookmarks()).toHaveLength(3);
+  });
+
+  test("bulk Stash JSON backup restore preserves canonical_url and content_type across bulk create sync (#700)", async () => {
+    const { result } = await renderReadyStore();
+
+    const importItems = [
+      {
+        source: "stash-backup" as const,
+        url: "https://example.com/bulk-restore-1",
+        title: "Bulk 1",
+        notes: null,
+        tags: [],
+        collection: null,
+        metadata: {
+          description: "Desc 1",
+          raw_description: "Desc 1",
+          preview_image_url: null,
+          favicon_url: null,
+          site_name: null,
+          canonical_url: "https://example.com/canonical-bulk-1/",
+          content_type: "article" as const,
+        },
+      },
+      {
+        source: "stash-backup" as const,
+        url: "https://example.com/bulk-restore-2",
+        title: "Bulk 2",
+        notes: null,
+        tags: [],
+        collection: null,
+        metadata: {
+          description: "Desc 2",
+          raw_description: "Desc 2",
+          preview_image_url: null,
+          favicon_url: null,
+          site_name: null,
+          canonical_url: "https://example.com/canonical-bulk-2/",
+          content_type: "video" as const,
+        },
+      },
+    ];
+
+    await act(async () => {
+      result.current.importBookmarks(importItems);
+    });
+
+    expect(result.current.inbox.find((b) => b.url === "https://example.com/bulk-restore-1")).toMatchObject({
+      canonical_url: "https://example.com/canonical-bulk-1/",
+      content_type: "article",
+    });
+    expect(result.current.inbox.find((b) => b.url === "https://example.com/bulk-restore-2")).toMatchObject({
+      canonical_url: "https://example.com/canonical-bulk-2/",
+      content_type: "video",
+    });
+
+    await waitFor(() => expect(apiMock.__createBookmarksMock).toHaveBeenCalledTimes(1));
+    const batch = apiMock.__createBookmarksMock.mock.calls[0]?.[0] as Array<Record<string, unknown>>;
+    expect(batch).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          url: "https://example.com/bulk-restore-1",
+          canonical_url: "https://example.com/canonical-bulk-1/",
+          content_type: "article",
+        }),
+        expect.objectContaining({
+          url: "https://example.com/bulk-restore-2",
+          canonical_url: "https://example.com/canonical-bulk-2/",
+          content_type: "video",
+        }),
+      ]),
+    );
   });
 
   test("tracks inbox counter stability and pending queue counter reduction during chunked bulk sync", async () => {

@@ -38,12 +38,13 @@ import {
   mimeTypeForImageUri,
   type SharedImage,
 } from "@/domain/image-share";
-import type { ImportItem } from "@/domain/import";
+import { isContentType, type ImportItem } from "@/domain/import";
 import type {
   AIEnrichment,
   Bookmark,
   BookmarkTag,
   Collection,
+  ContentType,
   LocalPendingBookmark,
   MetadataStatus,
   SuggestedTag,
@@ -3641,6 +3642,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           const previewImageUrl = restoredMetadata?.preview_image_url ?? null;
           const faviconUrl = restoredMetadata?.favicon_url ?? null;
           const siteName = restoredMetadata?.site_name ?? null;
+          const rawCanonicalUrl = restoredMetadata?.canonical_url?.trim();
+          const canonicalUrl =
+            isBackupRestore && rawCanonicalUrl && normalizeUrl(rawCanonicalUrl)
+              ? normalizeUrl(rawCanonicalUrl)
+              : null;
+          const contentType: ContentType =
+            isBackupRestore &&
+            restoredMetadata?.content_type &&
+            isContentType(restoredMetadata.content_type)
+              ? restoredMetadata.content_type
+              : "url";
           const metadataStatus: MetadataStatus = isBackupRestore
             ? restoredMetadata
               ? "complete"
@@ -3650,7 +3662,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             id,
             user_id: mockUserId,
             url: normalized,
-            canonical_url: null,
+            canonical_url: canonicalUrl,
             url_hash: dedupeKey,
             title,
             title_is_derived: title ? false : undefined,
@@ -3660,7 +3672,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             notes_format: item.notes_format,
             notes,
             source_app: null,
-            content_type: "url",
+            content_type: contentType,
             preview_image_url: previewImageUrl,
             favicon_url: faviconUrl,
             site_name: siteName,
@@ -3681,6 +3693,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             payload: {
               id,
               url: normalized,
+              canonical_url: canonicalUrl,
+              content_type: contentType,
               title: title ?? undefined,
               notes: notes ?? undefined,
               description_format: item.description_format,
