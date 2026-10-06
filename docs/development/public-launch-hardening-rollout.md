@@ -145,7 +145,7 @@ Actions, 임의 npx/curl 설치 및 CircleCI secret 격리는 추가 검토 대�
 | 항목 | 현재 상태 | 다음 적용 조건 |
 | --- | --- | --- |
 | 이미지 비공개 | 서명 클라이언트 및 deferred SQL 준비 | 호환 클라이언트 배포와 실기기/Storage HTTP 확인 후 버킷 전환 |
-| CAPTCHA | 익명 signup body에는 token 없음 | 공급자 사이트 설정·도전 UI·token 전달·실패 시 로컬 저장 유지 검증 후 Auth에서 활성화 |
+| CAPTCHA | 기존 Turnstile 사이트 키와 도전·GoTrue 토큰 전달 구현, 클라이언트 기본 활성 | 실제 웹/기기 도전·서버 실패/재사용 검증 및 호환 배포 후 Auth에서 활성화 |
 | REST/Storage 총량 | 북마크 개수 제한은 운영 비활성, 파일 용량 제한은 미구현 | 계정/프로젝트 한도 확정·활성화, 파일은 업로드 승인·원본 우회 차단 포함 |
 | 미리보기 내부망 | literal URL와 manual redirect 방어 구현 | 클라이언트 배포·실기기 확인·DNS/이미지 transport 격리 |
 | 화폐 예산 | AI 호출 60/시간·1000/24시간 | 공급자 프로젝트 billing cap/alert와 운영 kill switch 연결 |
@@ -209,3 +209,54 @@ PR 미리보기 커밋 `517d47a`의 배포 성공을 확인하고 격리 Chrome�
 - 각 메타데이터가 50,000자인 경우에도 기존 컬렉션·태그와 한국어 지침이 남는지, 모든 필드·vocabulary가 매우 커도 고정 지침과 512 output token 한도가 유지되는지 provider 전송 본문으로 검증했다. 유료 API는 테스트에서 호출하지 않았다.
 
 AI 함수 후속 배포: `ai-enrich` v31 ACTIVE. 원격 소스 readback의 provider가 검증한 로컬 파일과 일치하고 무인증 HTTP 요청은 401이다. JWT 자체 검증·프로젝트 AI 예산·사용자 quota 경로는 그대로 유지했다. 이 smoke에서는 유료 모델 호출과 사용자 자료 변경을 하지 않았다.
+
+
+### Turnstile 단계적 연결
+
+사용자가 생성한 기존 위젯의 공개 Site Key는 `0x4AAAAAAFPASxaYl2wtIAFc`이다.
+`captcha.ts`에 기본값으로 포함해 웹·APK 빌드에 추가 CI 변수가 필요하지 않다.
+`EXPO_PUBLIC_TURNSTILE_SITE_KEY`로 다른 환경의 공개 키를 지정할 수 있다.
+클라이언트 도전은 기본 활성이고, `EXPO_PUBLIC_TURNSTILE_ENABLED=false`는
+보호하지 않는 별도 개발용 Auth 환경에서만 사용한다. 운영 위젯은
+`keepory.app`만 허용하고 개발/미리보기는 별도 위젯·Auth 환경을 사용한다.
+Secret Key는 저장소나 채팅에 넣지 않으며 Supabase Auth의
+Authentication → Bot and Abuse Protection → CAPTCHA에 직접 등록한다.
+사용자는 Secret Key 등록을 완료했다고 알려왔다. 운영 Auth 음성 smoke에서
+누락 토큰은 `400 captcha_failed / no captcha_token found`, 위조 토큰은
+`400 captcha_failed / invalid-input-response`로 거부되어 서버 활성화가
+확인됐다. 검증 요청은 유효하지 않은 이메일·암호를 사용했고 계정을 만들지
+않았다. 실제 성공 및 토큰 재사용 거부는 아직 검증하지 않았다.
+
+웹은 명시적 도전 대화상자를, 네이티브는 시스템 인증 브라우저와
+`https://keepory.app/captcha.html`을 사용한다. 네이티브 콜백은
+`stash://captcha/callback`으로 고정하고 매번 생성한 256비트 nonce를 확인한다.
+토큰과 nonce는 URL fragment에 전달하며 호스팅 페이지는 외부 스크립트를
+읽기 전에 fragment를 주소에서 제거한다. 토큰을 저장하거나 재사용하지
+않으며 GoTrue에는 `gotrue_meta_security.captcha_token`으로 전달한다.
+취소·시간 초과·잘못된 콜백은 가입을 중단한다. 로그아웃과 공급자 전환,
+언마운트 시 대기 중인 도전을 취소하고 늦은 도전 응답을 무시한다.
+
+배포 순서는 호스팅 페이지/CSP 배포, 플래그와 사이트 키를 포함한 웹·네이티브
+호환 버전 배포, 실제 기기 검증 및 구버전 처리 결정, Auth 서버 CAPTCHA
+활성화 순이다. 서버 활성화 전에 유효/누락/오류/만료/재사용 토큰을 검증하고,
+오프라인 캡처와 도전 실패 후 저장 항목 유지도 확인한다. 로컬 단위 테스트는
+실제 Cloudflare 도전 성공이나 Supabase 서버 검증을 증명하지 않는다.
+
+
+가입 검증은 기존 Supabase Auth가 Cloudflare Siteverify를 호출하는 경로다.
+추가 Worker나 프록시를 배포하지 않고 브라우저에서 Siteverify를 호출하지
+않는다. [Supabase CAPTCHA 설정](https://supabase.com/docs/guides/auth/auth-captcha).
+Spin 예제의 별도 action/hostname 검증과 동일하다고 주장하지 않는다:
+[GoTrue CAPTCHA 응답 타입](https://github.com/supabase/auth/blob/master/internal/security/captcha.go)은
+success/error-codes/hostname을 포함하고 action 필드를 노출하지 않는다.
+운영 위젯의 hostname 제한을 유지하고 로컬/미리보기 호스트를 같은 운영
+위젯에 추가하지 않는다. 실제 성공·누락·오류·토큰 재사용 검증이 완료되기
+전에는 운영 방어 완료로 표시하지 않는다.
+
+
+로컬 검증: 익명 가입 대기/취소/언마운트/늦은 응답/강제 갱신과 네이티브
+nonce·콜백·시간 초과·abort 회귀, GoTrue 실제 요청 body·토큰 비저장,
+CAPTCHA 실패 중 로컬 캡처·내구성 큐 유지가 통과했다. 격리 Chrome은 실제
+웹 어댑터와 exported captcha 페이지에 공급자 대역을 사용하여 대화상자
+성공·오류·만료·취소·abort·스크립트/렌더 실패·정리 및 CSP를 확인했다.
+대역 검증을 실제 Cloudflare 성공 검증으로 간주하지 않는다.

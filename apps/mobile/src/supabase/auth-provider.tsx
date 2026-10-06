@@ -20,6 +20,7 @@ import { trackUserPreferences } from '@/supabase/user-preferences-tracker';
 import { useI18n } from '@/i18n';
 import { isSupportedLocale } from '@/i18n/locale';
 import { runOAuthSignIn } from '@/supabase/run-oauth';
+import { runCaptchaChallenge } from '@/supabase/run-captcha';
 import type { OAuthProvider, SupabaseAuthSession } from '@/supabase/types';
 
 export type SupabaseAuthStatus =
@@ -93,6 +94,10 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
   // the mount effect) must not race past the restore check and create two
   // anonymous users.
   const inFlight = useRef<Promise<SupabaseAuthSession | null> | null>(null);
+  const captchaAbort = useRef<AbortController | null>(null);
+  const authRunId = useRef(0);
+  const captchaStarted = useRef(false);
+  useEffect(() => () => { captchaAbort.current?.abort(); }, []);
 
   // Kept in sync every render so ensureAnonymousSession can read the latest
   // session/status without needing them in its own dependency array.
@@ -108,8 +113,11 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
       return Promise.resolve(null);
     }
 
-    if (inFlight.current && !forceRefresh) {
-      return inFlight.current;
+    if (inFlight.current && !captchaAbort.current?.signal.aborted) {
+      // A pending challenge must stay single-flight. A forced refresh during
+      // an ordinary cached restore still needs a real refresh after it settles.
+      if (!forceRefresh || captchaStarted.current) return inFlight.current;
+      return inFlight.current.then(() => ensureAnonymousSession(true));
     }
 
     // A locally-unexpired session whose `status` doesn't match it (e.g. a
@@ -140,9 +148,14 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
       setStatus('loading');
     }
     const client = createSupabaseClient();
+    const runId = ++authRunId.current;
+    const captchaController = new AbortController();
+    captchaAbort.current = captchaController;
+    captchaStarted.current = false;
     const run = (async (): Promise<SupabaseAuthSession | null> => {
       try {
         const restored = await client.restoreSession(effectiveForceRefresh);
+        if (captchaController.signal.aborted) return null;
         if (restored.outcome === 'active') {
           const { session: active } = restored;
           if (restored.credentialsRefreshed) setCredentialRecoveryVersion((version) => version + 1);
@@ -173,17 +186,23 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
         // No stored session, or an anonymous one that lapsed — mint a fresh
         // anonymous user. Anonymous data carries over on the next sync (see
         // account-transition.ts), so a new anonymous identity is safe here.
-        const created = await client.signInAnonymously();
+        captchaStarted.current = true;
+        const captchaToken = await runCaptchaChallenge({ signal: captchaController.signal });
+        if (captchaController.signal.aborted) return null;
+        const created = await client.signInAnonymously(captchaToken === undefined ? undefined : { captchaToken, signal: captchaController.signal });
+        if (captchaController.signal.aborted) return null;
         setSession(created);
         setStatus('anonymous');
         setMessage('Created anonymous Supabase session.');
         return created;
       } catch (error) {
+        if (captchaController?.signal.aborted) return null;
         setStatus('error');
         setMessage(formatError(error));
         return null;
       } finally {
-        inFlight.current = null;
+        if (captchaAbort.current === captchaController) captchaAbort.current = null;
+        if (authRunId.current === runId) { inFlight.current = null; captchaStarted.current = false; }
       }
     })();
     inFlight.current = run;
@@ -192,6 +211,7 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
 
   const signIn = useCallback(
     async (provider: OAuthProvider): Promise<SupabaseAuthSession | null> => {
+      captchaAbort.current?.abort();
       if (configState.status === 'missing') {
         setStatus('not_configured');
         setMessage(describeSupabaseConfig(configState));
@@ -220,6 +240,8 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
   );
 
   const signOut = useCallback(async (): Promise<void> => {
+    captchaAbort.current?.abort();
+    authRunId.current += 1;
     const token = session?.access_token;
     try {
       if (token) {

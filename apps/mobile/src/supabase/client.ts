@@ -7,6 +7,7 @@ import {
   writeSupabaseSession,
 } from '@/supabase/session-storage';
 import { buildAuthorizeQuery } from '@/supabase/oauth';
+import { isCaptchaToken, CAPTCHA_FAILED_MESSAGE } from '@/supabase/captcha';
 import type {
   OAuthProvider,
   SupabaseAuthResponse,
@@ -309,11 +310,15 @@ export class StashSupabaseClient {
     return parseContentRangeTotal(response.headers.get('content-range'));
   }
 
-  async signInAnonymously(): Promise<SupabaseAuthSession> {
+  async signInAnonymously(options: { captchaToken?: string; signal?: AbortSignal } = {}): Promise<SupabaseAuthSession> {
+    options.signal?.throwIfAborted();
+    if (options.captchaToken !== undefined && !isCaptchaToken(options.captchaToken)) throw new Error(CAPTCHA_FAILED_MESSAGE);
     const payload = (await this.request('/auth/v1/signup', {
       method: 'POST',
-      body: {},
+      body: options.captchaToken === undefined ? {} : { gotrue_meta_security: { captcha_token: options.captchaToken } },
+      signal: options.signal,
     })) as SupabaseAuthResponse;
+    options.signal?.throwIfAborted();
     const session = toSession(payload);
     await writeSupabaseSession(session);
     return session;
