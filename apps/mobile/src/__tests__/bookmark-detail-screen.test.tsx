@@ -773,8 +773,8 @@ test('a dummy-v0 fallback with nothing to suggest collapses to just the affordan
   expect(screen.queryByText(/Auto-categorized by dummy-v0/)).toBeNull();
   expect(screen.queryByText(/reach AI/)).toBeNull();
   expect(screen.queryByText('dummy-v0')).toBeNull();
-  // The affordance to ask for AI never disappears (capture stays reachable).
-  expect(screen.getByText('Refresh AI suggestions')).toBeTruthy();
+  expect(screen.getByText('Couldn’t create AI suggestions. Please try again.')).toBeTruthy();
+  expect(screen.getByText('Retry')).toBeTruthy();
 });
 
 test('a healthy dummy-v0 result with no suggestions still hides its boilerplate summary', async () => {
@@ -799,7 +799,8 @@ test('a healthy dummy-v0 result with no suggestions still hides its boilerplate 
 
   expect(screen.queryByText(/Auto-categorized by dummy-v0/)).toBeNull();
   expect(screen.queryByText('dummy-v0')).toBeNull();
-  expect(screen.getByText('Refresh AI suggestions')).toBeTruthy();
+  expect(screen.getByText('Nothing new to suggest.')).toBeTruthy();
+  expect(screen.getByText('Refresh suggestions')).toBeTruthy();
 });
 
 test('a real-model summary is kept even with no tags to suggest', async () => {
@@ -1027,11 +1028,11 @@ test('a rate-limited fallback with nothing to suggest shows a standalone "try ag
   // This is a completed (if degraded) attempt with no armed retry marker, so
   // the note must not claim a background retry is scheduled ("Still working
   // on AI suggestions… we'll keep trying automatically" would be false here).
-  expect(screen.getByText(/hit their limit for now/)).toBeTruthy();
-  expect(screen.queryByText(/Still working on AI suggestions/)).toBeNull();
+  expect(screen.getByText(/AI is over capacity right now\. Please try again shortly/)).toBeTruthy();
+  expect(screen.queryByText(/we’ll keep trying automatically/)).toBeNull();
   expect(screen.queryByText(/showing basic suggestions/)).toBeNull();
   expect(screen.queryByText('dummy-v0')).toBeNull();
-  expect(screen.getByText('Refresh AI suggestions')).toBeTruthy();
+  expect(screen.getByText('Retry')).toBeTruthy();
 });
 
 test('a bookmark with no enrichment yet but an armed retry marker shows the calm postponed note', async () => {
@@ -1050,10 +1051,9 @@ test('a bookmark with no enrichment yet but an armed retry marker shows the calm
   const screen = await renderDetail();
   await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
 
-  expect(screen.getByText(/Still working on AI suggestions/)).toBeTruthy();
-  // The button never disappears — capture/organizing stays reachable — and
-  // since no enrichment ever landed it still reads as the first-ask label.
-  expect(screen.getByText('Suggest with AI')).toBeTruthy();
+  expect(screen.getByText(/we’ll keep trying automatically/)).toBeTruthy();
+  // An armed retry provides an actionable "Retry now" button instead of "Suggest with AI".
+  expect(screen.getByText('Retry now')).toBeTruthy();
 });
 
 test('a bookmark confirmed queued in the server-side overflow queue shows the queued note, not the generic postponed one', async () => {
@@ -1136,7 +1136,7 @@ test('a genuine in-flight automatic retry through the real store keeps the skele
 
   // Once it settles, the calm note is back with its original, unchanged copy
   // — no error banner, and the skeleton never rendered at any point.
-  await waitFor(() => expect(screen.getByText(/Still working on AI suggestions/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/we’ll keep trying automatically/)).toBeTruthy());
   expect(screen.queryByLabelText('Working…')).toBeNull();
 });
 

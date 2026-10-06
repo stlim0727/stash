@@ -882,6 +882,9 @@ export const en = {
   'detail.aiDismissAllA11y': 'Dismiss all AI suggestions',
   'detail.aiGenerating': 'Generating suggestions…',
   'detail.aiRefresh': 'Refresh AI suggestions',
+  'detail.aiRefreshSuggestions': 'Refresh suggestions',
+  'detail.aiRetry': 'Retry',
+  'detail.aiRetryNow': 'Retry now',
   'detail.aiSuggest': 'Suggest with AI',
   'detail.previewRefresh': 'Refresh preview',
   'detail.previewRefreshing': 'Refreshing…',
@@ -892,8 +895,11 @@ export const en = {
   'detail.aiNeedsSync': 'AI suggestions are available once this bookmark has synced.',
   'detail.aiPreviewFailed': 'AI suggestions are unavailable because the preview could not be loaded.',
   'detail.previewFailedNote': 'Failed to load preview and metadata.',
-  'detail.aiPostponed': 'Still working on AI suggestions for this one — we’ll keep trying automatically.',
+  'detail.aiPostponed': 'Couldn’t generate AI suggestions yet — we’ll keep trying automatically.',
   'detail.aiQueued': 'AI suggestions are queued and will arrive automatically — no need to check back.',
+  'detail.aiCapacityLimited': 'AI is over capacity right now. Please try again shortly.',
+  'detail.aiProviderError': 'Couldn’t create AI suggestions. Please try again.',
+  'detail.aiEmpty': 'Nothing new to suggest.',
   // Degraded mode: the result came from the basic heuristics, not the AI model.
   // Shown as a calm, non-error note so the cause is never hidden (M12); the
   // precise cause is forwarded to monitoring rather than spelled out in full.

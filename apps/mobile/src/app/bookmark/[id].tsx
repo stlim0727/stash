@@ -23,8 +23,8 @@ import { PostHogMaskView } from 'posthog-react-native';
 
 import { useI18n } from '@/i18n';
 import { hasRepeatedDnsFailures } from '@/domain/network-errors';
+import { deriveAiSuggestionStatus } from '@/domain/ai-suggestion-status';
 import {
-  enrichmentDegradedLabel,
   metadataStatusLabel,
   syncStatusLabel,
   videoUnavailableLabel,
@@ -551,15 +551,19 @@ export default function BookmarkDetailScreen({
     (tagSuggestions.length > 0 ? 1 : 0) +
     (showAiSummary ? 1 : 0);
   const showDismissAllSuggestions = activeSuggestionSurfaces > 1;
-  // The degraded note explains *thin* results — keep it only when there is
-  // something to explain, or when the cause is one the user can act on (a
-  // transient rate limit). A generic "Couldn't reach AI" over an otherwise
-  // empty card is exactly the noise to silence; the outage still reaches
-  // monitoring via the breadcrumb reported above.
-  const showDegradedNote =
-    !!enrichment?.degraded &&
-    !aiWorking &&
-    (showAiReport || enrichment.degraded_reason === 'rate_limited');
+  // Pure Detail-screen AI suggestion status derivation: derives exactly one
+  // current status message and action mode across generating, retry, degraded,
+  // empty, and ready states.
+  const aiStatus = deriveAiSuggestionStatus({
+    enrichment,
+    working: aiWorking,
+    manual: aiManual,
+    postponed: aiPostponed,
+    serverQueued: aiServerQueued,
+    previewFailed: isPreviewFailed,
+    hasActionableSuggestions: showAiReport,
+    canOrganizeRemotely,
+  });
 
   const notesValue = draftNotes?.value ?? bookmark.notes ?? '';
   const memoValue = draftDescription?.value ?? bookmark.description ?? '';
@@ -1545,54 +1549,16 @@ export default function BookmarkDetailScreen({
           </View>
         ) : null}
 
-        {enrichment?.status === 'stale' && showAiReport ? (
-          <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('detail.aiStale')}</Text>
-        ) : null}
-
-        {aiServerQueued ? (
-          // A CONFIRMED server-side queue entry outranks the generic
-          // "postponed" note below: armAiRetry arms unconditionally on every
-          // failure (this 429 included), so aiPostponed is also true here —
-          // but this is the stronger, self-resolving promise, so it wins.
+        {aiStatus.messageKey ? (
           <Text
             accessibilityRole="text"
             style={[styles.hint, { color: palette.textSecondary }]}
           >
-            {t('detail.aiQueued')}
-          </Text>
-        ) : aiPostponed ? (
-          // A live, currently-armed retry marker (waiting out its backoff)
-          // always wins over showDegradedNote below: that note can describe a
-          // stale, already-completed attempt, while this reflects the
-          // bookmark's current, most relevant state — an actual background
-          // retry really is scheduled here.
-          <Text
-            accessibilityRole="text"
-            style={[styles.hint, { color: palette.textSecondary }]}
-          >
-            {t('detail.aiPostponed')}
-          </Text>
-        ) : showDegradedNote ? (
-          <Text
-            accessibilityRole="text"
-            style={[styles.hint, { color: palette.textSecondary }]}
-          >
-            {/* When the card is collapsed (nothing actionable) there are no
-                "basic suggestions" on screen to point at, so fall back to a
-                standalone note — but never the "aiPostponed" copy: this is a
-                *completed* (if degraded) attempt with no armed retry marker,
-                so promising an automatic retry here would be false. */}
-            {showAiReport
-              ? enrichmentDegradedLabel(t, enrichment?.degraded_reason ?? null)
-              : t('detail.aiDegradedCollapsed')}
+            {t(aiStatus.messageKey)}
           </Text>
         ) : null}
 
-        {isPreviewFailed ? (
-          <Text style={[styles.hint, { color: palette.textSecondary }]}>
-            {t('detail.aiPreviewFailed')}
-          </Text>
-        ) : canOrganizeRemotely ? (
+        {aiStatus.actionMode !== 'none' ? (
           <Pressable
             accessibilityRole="button"
             // Gate only on a manual request — an auto-trigger must leave the
@@ -1603,16 +1569,10 @@ export default function BookmarkDetailScreen({
             onPress={() => void handleSuggestAi()}
           >
             <Text style={[styles.actionLabel, { color: palette.accent }]}>
-              {aiManual
-                ? t('detail.aiGenerating')
-                : enrichment
-                  ? t('detail.aiRefresh')
-                  : t('detail.aiSuggest')}
+              {aiStatus.actionLabelKey ? t(aiStatus.actionLabelKey) : ''}
             </Text>
           </Pressable>
-        ) : (
-          <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('detail.aiNeedsSync')}</Text>
-        )}
+        ) : null}
 
         {/* One "no thanks to everything" gesture, at bulk scope — shown only when
             suggestions span 2+ widgets, since with one live surface that widget's
