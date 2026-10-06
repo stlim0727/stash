@@ -150,3 +150,23 @@ test('consecutive signing failures keep bounded recovery attempts and stop after
   await act(async () => { jest.advanceTimersByTime(600_000); });
   expect(mockRequest).toHaveBeenCalledTimes(6);
 });
+
+
+test('a successful image load restores recovery for a later decode failure', async () => {
+  mockRequest.mockResolvedValue({ signedURL: signed });
+  const onError = jest.fn();
+  const onLoad = jest.fn();
+  const screen = await render(<ProtectedImage uri={reference} testID="image" onError={onError} onLoad={onLoad} />);
+  const failure = { nativeEvent: { error: 'transient decode failure' } };
+  const loaded = { nativeEvent: { source: { uri: signed } } };
+  await act(async () => { screen.getByTestId('image').props.onError(failure); });
+  expect(mockRequest).toHaveBeenCalledTimes(2);
+  await act(async () => { screen.getByTestId('image').props.onLoad(loaded); });
+  expect(onLoad).toHaveBeenCalledWith(loaded);
+  await act(async () => { screen.getByTestId('image').props.onError(failure); });
+  expect(mockRequest).toHaveBeenCalledTimes(3);
+  expect(onError).not.toHaveBeenCalled();
+  await act(async () => { screen.getByTestId('image').props.onError(failure); });
+  expect(mockRequest).toHaveBeenCalledTimes(3);
+  expect(onError).toHaveBeenCalledWith(failure);
+});

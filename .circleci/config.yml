@@ -152,6 +152,18 @@ jobs:
       - run:
           name: Web export builds
           command: cd apps/mobile && CI=1 pnpm exec expo export --platform web
+      - run:
+          name: Install Chrome for browser security verification
+          command: |
+            curl --fail --silent --show-error --location \
+              https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+              --output /tmp/keepory-google-chrome.deb
+            sudo apt-get update
+            sudo apt-get install -y /tmp/keepory-google-chrome.deb
+            google-chrome --version
+      - run:
+          name: Browser security policy
+          command: node scripts/verify-web-security.mjs apps/mobile/dist
       # Decorative tag-cloud preview, mirroring ci.yml. Never fail the gate over
       # it (|| true) — it's a nice-to-have artifact for eyeballing layout.
       - run:

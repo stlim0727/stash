@@ -12,7 +12,7 @@ type Props = Omit<ImageProps, 'source'> & { uri: string };
 /** Sign only Keepory's own uploaded images. No tokens/signatures are persisted
  * in bookmark rows, sync, exports or local storage. Local/external images keep
  * their existing loading path. */
-export function ProtectedImage({ uri, onError, ...props }: Props) {
+export function ProtectedImage({ uri, onError, onLoad, ...props }: Props) {
   const auth = useSupabaseAuth();
   const config = useMemo(() => getSupabaseConfigState(), []);
   const usableSession = auth.status === 'authenticated' || auth.status === 'anonymous' ? auth.session : null;
@@ -65,7 +65,10 @@ export function ProtectedImage({ uri, onError, ...props }: Props) {
     (/^https?:/i.test(uri) && !isPublicPreviewUrl(uri) ? null : uri)
     : reference.kind === 'private' && resolved?.identity === identity && usableSession && resolved.accessToken === usableSession.access_token ? resolved.url : null;
   if (!displayUri) return null;
-  return <Image {...props} source={{ uri: displayUri }} onError={(event) => {
+  return <Image {...props} source={{ uri: displayUri }} onLoad={(event) => {
+    if (reference.kind === 'private') setImageRetry({ identity, count: 0 });
+    onLoad?.(event);
+  }} onError={(event) => {
     if (reference.kind === 'private' && (imageRetry.identity !== identity || imageRetry.count === 0)) {
       setImageRetry({ identity, count: 1 });
       setResolved(null);
