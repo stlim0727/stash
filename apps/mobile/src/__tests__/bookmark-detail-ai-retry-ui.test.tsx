@@ -131,3 +131,97 @@ test('a manual "Suggest with AI" tap still shows its own generating label regard
   // label is the only "in progress" signal.
   expect(screen.queryByLabelText('Working…')).toBeNull();
 });
+
+test('an armed retry scheduled shows postponed message and Retry now button', async () => {
+  mockStoreOverrides = { isAiSuggestionPostponed: () => true };
+  const screen = await renderDetail();
+
+  await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
+  expect(screen.getByText(/we’ll keep trying automatically/)).toBeTruthy();
+  expect(screen.getByText('Retry now')).toBeTruthy();
+});
+
+test('a capacity-limited degraded failure without suggestions shows capacity notice and Retry button', async () => {
+  mockStoreOverrides = {
+    getEnrichment: () => ({
+      id: 'enr-1',
+      bookmark_id: BOOKMARK_ID,
+      suggested_tags: [],
+      suggested_collection_id: null,
+      summary: null,
+      confidence: 0.2,
+      model: 'gemini-2.0',
+      degraded: true,
+      degraded_reason: 'rate_limited',
+      status: 'complete',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }),
+  };
+  const screen = await renderDetail();
+
+  await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
+  expect(screen.getByText(/AI is over capacity right now\. Please try again shortly/)).toBeTruthy();
+  expect(screen.getByText('Retry')).toBeTruthy();
+});
+
+test('a provider error degraded failure without suggestions shows neutral failure message and Retry button', async () => {
+  mockStoreOverrides = {
+    getEnrichment: () => ({
+      id: 'enr-2',
+      bookmark_id: BOOKMARK_ID,
+      suggested_tags: [],
+      suggested_collection_id: null,
+      summary: null,
+      confidence: 0.1,
+      model: 'gemini-2.0',
+      degraded: true,
+      degraded_reason: 'provider_error',
+      status: 'complete',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }),
+  };
+  const screen = await renderDetail();
+
+  await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
+  expect(screen.getByText(/Couldn’t create AI suggestions\. Please try again/)).toBeTruthy();
+  expect(screen.getByText('Retry')).toBeTruthy();
+});
+
+test('a healthy empty result shows nothing new to suggest and Refresh suggestions button', async () => {
+  mockStoreOverrides = {
+    getEnrichment: () => ({
+      id: 'enr-3',
+      bookmark_id: BOOKMARK_ID,
+      suggested_tags: [],
+      suggested_collection_id: null,
+      summary: null,
+      confidence: 0.9,
+      model: 'gemini-2.0',
+      degraded: false,
+      degraded_reason: null,
+      status: 'complete',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }),
+  };
+  const screen = await renderDetail();
+
+  await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
+  expect(screen.getByText('Nothing new to suggest.')).toBeTruthy();
+  expect(screen.getByText('Refresh suggestions')).toBeTruthy();
+});
+
+test('preview failure outranks retry marker and suppresses retry button', async () => {
+  mockStoreOverrides = {
+    getBookmark: () => makeStoredBookmark({ id: BOOKMARK_ID, title: 'Failed preview', metadata_status: 'failed' }),
+    isAiSuggestionPostponed: () => true,
+  };
+  const screen = await renderDetail();
+
+  await waitFor(() => expect(screen.getByText('Failed preview')).toBeTruthy());
+  expect(screen.getByText(/preview could not be loaded/)).toBeTruthy();
+  expect(screen.queryByText('Retry now')).toBeNull();
+  expect(screen.queryByText(/we’ll keep trying automatically/)).toBeNull();
+});
