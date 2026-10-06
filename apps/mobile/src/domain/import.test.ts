@@ -374,6 +374,19 @@ test('parseJsonBackup recognizes non-url content_type (e.g. video) as metadata s
   });
 });
 
+test('parseJsonBackup falls back to content_type url when image type has no preview_image_url', () => {
+  const json = JSON.stringify({
+    bookmarks: [
+      {
+        url: 'https://example.com/photo',
+        content_type: 'image',
+      },
+    ],
+  });
+  const [item] = parseJsonBackup(json);
+  assert.equal(item?.metadata, undefined);
+});
+
 test('a Stash HTML export round-trips back through parseNetscapeHtml', () => {
   const input = exportInput({
     bookmarks: [

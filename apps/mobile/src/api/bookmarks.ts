@@ -207,7 +207,9 @@ function requirePayload(input: CreateBookmarkInput): { url: string | null; conte
 
     const contentType: Bookmark['content_type'] =
       input.content_type && isContentType(input.content_type)
-        ? input.content_type
+        ? input.content_type === 'image' && !input.preview_image_url?.trim()
+          ? 'url'
+          : input.content_type
         : 'url';
     return { url: normalized, contentType };
   }

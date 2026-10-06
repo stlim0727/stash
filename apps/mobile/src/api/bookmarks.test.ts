@@ -344,6 +344,38 @@ test('createBookmark accepts an image-only payload once its binary is already up
   assert.equal(result.bookmark_id, 'b1');
 });
 
+test('createBookmark falls back to url content_type when image type lacks preview_image_url', async () => {
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.includes('url_hash=') || path.includes('client_id=')) {
+        return [];
+      }
+      if (path === '/rest/v1/bookmarks') {
+        const body = options.body as Record<string, unknown>;
+        assert.equal(body.url, 'https://example.com/photo');
+        assert.equal(body.content_type, 'url');
+        return [
+          remoteBookmark({
+            id: 'b1',
+            url: 'https://example.com/photo',
+            content_type: 'url',
+          }),
+        ];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const result = await api.createBookmark({
+    id: 'b1',
+    url: 'https://example.com/photo',
+    content_type: 'image',
+  });
+
+  assert.equal(result.status, 'created');
+});
+
 test('createBookmark preserves leading/trailing whitespace in a Markdown memo body', async () => {
   const client = {
     request: async (path: string, options: Record<string, unknown> = {}) => {

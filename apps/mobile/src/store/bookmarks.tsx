@@ -3651,7 +3651,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             isBackupRestore &&
             restoredMetadata?.content_type &&
             isContentType(restoredMetadata.content_type)
-              ? restoredMetadata.content_type
+              ? restoredMetadata.content_type === "image" && !previewImageUrl?.trim()
+                ? "url"
+                : restoredMetadata.content_type
               : "url";
           const metadataStatus: MetadataStatus = isBackupRestore
             ? restoredMetadata

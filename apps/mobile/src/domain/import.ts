@@ -150,17 +150,20 @@ function cleanEnrichmentStatus(value: unknown): EnrichmentStatus {
 
 /** Generated metadata fields off a backup bookmark entry, or undefined if none were present. */
 function parseImportedMetadata(entry: Record<string, unknown>): ImportedMetadata | undefined {
+  const previewImageUrl = cleanString(entry.preview_image_url);
+  const rawContentType = cleanContentType(entry.content_type);
+  const contentType = rawContentType === 'image' && !previewImageUrl ? 'url' : rawContentType;
   const metadata: ImportedMetadata = {
     description: cleanString(entry.description),
     raw_description:
       typeof entry.description === 'string' && entry.description.trim().length > 0
         ? entry.description
         : null,
-    preview_image_url: cleanString(entry.preview_image_url),
+    preview_image_url: previewImageUrl,
     favicon_url: cleanString(entry.favicon_url),
     site_name: cleanString(entry.site_name),
     canonical_url: cleanCanonicalUrl(entry.canonical_url),
-    content_type: cleanContentType(entry.content_type),
+    content_type: contentType,
   };
   const hasSignal =
     metadata.description !== null ||
@@ -168,7 +171,7 @@ function parseImportedMetadata(entry: Record<string, unknown>): ImportedMetadata
     metadata.favicon_url !== null ||
     metadata.site_name !== null ||
     metadata.canonical_url !== null ||
-    (isContentType(entry.content_type) && entry.content_type !== 'url');
+    (isContentType(entry.content_type) && contentType !== 'url');
   return hasSignal ? metadata : undefined;
 }
 
