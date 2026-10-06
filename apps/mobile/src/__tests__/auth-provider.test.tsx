@@ -499,3 +499,18 @@ test('forced refresh waits for a pending ordinary restore then performs a real r
   expect(fakeClient.restoreSession).toHaveBeenNthCalledWith(2, true);
   expect(runCaptchaChallenge).not.toHaveBeenCalled();
 });
+
+
+test('logout cancels a forced refresh queued behind session restoration', async () => {
+  let restore!: (value: unknown) => void;
+  fakeClient.restoreSession.mockImplementationOnce(() => new Promise((resolve) => { restore = resolve; }));
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(fakeClient.restoreSession).toHaveBeenCalledTimes(1));
+  const pending = result.current.ensureAnonymousSession(true);
+  await act(async () => { await result.current.signOut(); });
+  await act(async () => { restore({ outcome: 'none' }); await pending; });
+  expect(result.current.status).toBe('signed_out');
+  expect(fakeClient.restoreSession).toHaveBeenCalledTimes(1);
+  expect(runCaptchaChallenge).not.toHaveBeenCalled();
+  expect(fakeClient.signInAnonymously).not.toHaveBeenCalled();
+});

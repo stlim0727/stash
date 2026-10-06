@@ -117,7 +117,8 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
       // A pending challenge must stay single-flight. A forced refresh during
       // an ordinary cached restore still needs a real refresh after it settles.
       if (!forceRefresh || captchaStarted.current) return inFlight.current;
-      return inFlight.current.then(() => ensureAnonymousSession(true));
+      const controller = captchaAbort.current;
+      return inFlight.current.then(() => controller?.signal.aborted ? null : ensureAnonymousSession(true));
     }
 
     // A locally-unexpired session whose `status` doesn't match it (e.g. a
