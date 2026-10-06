@@ -12,3 +12,7 @@ export async function preventAutoHideAsync(): Promise<boolean> {
 export async function hideAsync(): Promise<boolean | void> {
   return true;
 }
+
+export function markAppLoaded(): void {
+  // No-op on web and Node fallback
+}

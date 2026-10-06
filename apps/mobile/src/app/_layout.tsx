@@ -26,10 +26,14 @@ import { AnalyticsProvider } from '@/analytics/provider';
 import { PostHogFullProvider } from '@/analytics-full/posthog-full-runtime';
 import { preventAutoHideAsync } from '@/ui/splash-platform';
 import { SplashReadinessObserver } from '@/ui/SplashReadinessObserver';
+import { splashCoordinator } from '@/ui/splash-coordinator';
 
 // Prevent native splash screen from auto-hiding before local storage is ready.
 // Catch rejections so unsupported platforms (e.g., SSR or web fallback) do not crash early.
+// Arm the safety watchdog immediately so unhandled errors during early provider initialization
+// or module loading cannot leave the native splash permanently frozen.
 void preventAutoHideAsync().catch(() => {});
+splashCoordinator.startWatchdog();
 
 // Capture console output into an in-memory buffer so the "Report a problem"
 // screen can attach real logs. Install before anything else so early errors

@@ -135,3 +135,56 @@ test('hideAsync error is caught safely without re-throwing', async () => {
   await coordinator.hideSplash('route_ready');
   assert.equal(coordinator.isDismissed(), true);
 });
+
+test('markAppLoaded is invoked after splash hide settles', async () => {
+  let appLoadedCalls = 0;
+  const coordinator = new SplashCoordinator({
+    hideAsync: async () => true,
+    markAppLoaded: () => {
+      appLoadedCalls += 1;
+    },
+  });
+
+  coordinator.updateRoute('/');
+  coordinator.updateStoreStatus({ isLoading: false, loadError: false });
+  coordinator.signalInboxReady();
+
+  // Allow async hide to settle
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(coordinator.isDismissed(), true);
+  assert.equal(appLoadedCalls, 1);
+});
+
+test('markAppLoaded is invoked even when hideAsync throws', async () => {
+  let appLoadedCalls = 0;
+  const coordinator = new SplashCoordinator({
+    hideAsync: async () => {
+      throw new Error('splash hide failed');
+    },
+    markAppLoaded: () => {
+      appLoadedCalls += 1;
+    },
+  });
+
+  await coordinator.hideSplash('timeout');
+  assert.equal(coordinator.isDismissed(), true);
+  assert.equal(appLoadedCalls, 1);
+});
+
+test('startWatchdog is idempotent and does not create duplicate timers', () => {
+  let timersCreated = 0;
+  const setTimeoutFn = () => {
+    timersCreated += 1;
+    return 101 as unknown as ReturnType<typeof setTimeout>;
+  };
+
+  const coordinator = new SplashCoordinator({
+    setTimeoutFn: setTimeoutFn as unknown as typeof setTimeout,
+  });
+
+  coordinator.startWatchdog();
+  coordinator.startWatchdog();
+  coordinator.startWatchdog();
+
+  assert.equal(timersCreated, 1);
+});

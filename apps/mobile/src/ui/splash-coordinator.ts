@@ -22,7 +22,10 @@
  *    waiting for Inbox preferences.
  */
 
-import { hideAsync as platformHideAsync } from '@/ui/splash-platform';
+import {
+  hideAsync as platformHideAsync,
+  markAppLoaded as platformMarkAppLoaded,
+} from '@/ui/splash-platform';
 
 export const DEFAULT_SPLASH_MAX_HOLD_MS = 3_000;
 
@@ -35,6 +38,7 @@ export type SplashDismissReason =
 
 export interface SplashCoordinatorDeps {
   hideAsync?: () => Promise<boolean | void>;
+  markAppLoaded?: () => void;
   maxHoldMs?: number;
   setTimeoutFn?: typeof setTimeout;
   clearTimeoutFn?: typeof clearTimeout;
@@ -48,12 +52,14 @@ export class SplashCoordinator {
   private dismissReason: SplashDismissReason | null = null;
   private watchdogTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly hideFn: () => Promise<boolean | void>;
+  private readonly markAppLoadedFn: () => void;
   private readonly maxHoldMs: number;
   private readonly setTimeoutFn: typeof setTimeout;
   private readonly clearTimeoutFn: typeof clearTimeout;
 
   constructor(deps: SplashCoordinatorDeps = {}) {
     this.hideFn = deps.hideAsync ?? platformHideAsync;
+    this.markAppLoadedFn = deps.markAppLoaded ?? platformMarkAppLoaded;
     this.maxHoldMs = deps.maxHoldMs ?? DEFAULT_SPLASH_MAX_HOLD_MS;
     this.setTimeoutFn = deps.setTimeoutFn ?? setTimeout;
     this.clearTimeoutFn = deps.clearTimeoutFn ?? clearTimeout;
@@ -151,6 +157,8 @@ export class SplashCoordinator {
       await this.hideFn();
     } catch {
       // Rejections (e.g. already hidden, unmounted, web) safely ignored
+    } finally {
+      this.markAppLoadedFn();
     }
   }
 
