@@ -18,6 +18,7 @@
 
 import type { ContentType, EnrichmentStatus, SuggestedTag, TextFormat } from '@/domain/types';
 import { parseTextFormat } from '@/domain/text-format';
+import { normalizeUrl } from '@/domain/urls';
 
 /**
  * Generated page metadata carried by a Stash JSON backup's bookmark snapshot.
@@ -126,11 +127,18 @@ function normalizeTags(raw: string[]): string[] {
   return tags;
 }
 
-const CONTENT_TYPES: readonly ContentType[] = ['url', 'article', 'image', 'video', 'text', 'unknown'];
+export const CONTENT_TYPES: readonly ContentType[] = ['url', 'article', 'image', 'video', 'text', 'unknown'];
+export function isContentType(value: unknown): value is ContentType {
+  return typeof value === 'string' && (CONTENT_TYPES as readonly string[]).includes(value as ContentType);
+}
+
 function cleanContentType(value: unknown): ContentType {
-  return typeof value === 'string' && (CONTENT_TYPES as readonly string[]).includes(value)
-    ? (value as ContentType)
-    : 'url';
+  return isContentType(value) ? value : 'url';
+}
+
+function cleanCanonicalUrl(value: unknown): string | null {
+  const cleaned = cleanString(value);
+  return cleaned && normalizeUrl(cleaned) ? normalizeUrl(cleaned) : null;
 }
 
 const ENRICHMENT_STATUSES: readonly EnrichmentStatus[] = ['pending', 'complete', 'failed', 'stale'];
@@ -142,17 +150,20 @@ function cleanEnrichmentStatus(value: unknown): EnrichmentStatus {
 
 /** Generated metadata fields off a backup bookmark entry, or undefined if none were present. */
 function parseImportedMetadata(entry: Record<string, unknown>): ImportedMetadata | undefined {
+  const previewImageUrl = cleanString(entry.preview_image_url);
+  const rawContentType = cleanContentType(entry.content_type);
+  const contentType = rawContentType === 'image' && !previewImageUrl ? 'url' : rawContentType;
   const metadata: ImportedMetadata = {
     description: cleanString(entry.description),
     raw_description:
       typeof entry.description === 'string' && entry.description.trim().length > 0
         ? entry.description
         : null,
-    preview_image_url: cleanString(entry.preview_image_url),
+    preview_image_url: previewImageUrl,
     favicon_url: cleanString(entry.favicon_url),
     site_name: cleanString(entry.site_name),
-    canonical_url: cleanString(entry.canonical_url),
-    content_type: cleanContentType(entry.content_type),
+    canonical_url: cleanCanonicalUrl(entry.canonical_url),
+    content_type: contentType,
   };
   const hasSignal =
     metadata.description !== null ||
@@ -160,7 +171,7 @@ function parseImportedMetadata(entry: Record<string, unknown>): ImportedMetadata
     metadata.favicon_url !== null ||
     metadata.site_name !== null ||
     metadata.canonical_url !== null ||
-    entry.content_type === 'text';
+    (isContentType(entry.content_type) && contentType !== 'url');
   return hasSignal ? metadata : undefined;
 }
 

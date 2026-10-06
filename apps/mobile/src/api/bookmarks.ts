@@ -15,6 +15,7 @@ import type {
   TextFormat,
 } from '@/domain/types';
 import type { AiServerQueueSnapshot } from '@/domain/processing-status';
+import { isContentType } from '@/domain/import';
 import { createSupabaseClient, SupabaseRequestError } from '@/supabase/client';
 import type { StashSupabaseClient } from '@/supabase/client';
 import type { SupabaseAuthSession } from '@/supabase/types';
@@ -204,7 +205,13 @@ function requirePayload(input: CreateBookmarkInput): { url: string | null; conte
       throw new Error('createBookmark requires a valid URL when url is provided.');
     }
 
-    return { url: normalized, contentType: 'url' };
+    const contentType: Bookmark['content_type'] =
+      input.content_type && isContentType(input.content_type)
+        ? input.content_type === 'image' && !input.preview_image_url?.trim()
+          ? 'url'
+          : input.content_type
+        : 'url';
+    return { url: normalized, contentType };
   }
 
   if (input.shared_text?.trim()) {
@@ -457,6 +464,8 @@ export class BookmarkApi {
       };
     }
 
+    const canonicalUrl =
+      payload.url && input.canonical_url ? normalizeUrl(input.canonical_url) : null;
     const createBody = {
       // The client's own permanent id for this bookmark (see CreateBookmarkInput.id).
       // Sent explicitly so Postgres uses it as the primary key instead of
@@ -464,7 +473,7 @@ export class BookmarkApi {
       id: input.id,
       user_id: this.session.user.id,
       url: payload.url,
-      canonical_url: null,
+      canonical_url: canonicalUrl,
       url_hash: urlHash,
       client_id: clientId,
       title,
@@ -600,6 +609,8 @@ export class BookmarkApi {
       const enrichmentPolicy = input.enrichment_policy ?? 'auto';
       const urlHash = payload.url ? canonicalizeUrl(payload.url) : null;
       const clientId = input.client_id ?? null;
+      const canonicalUrl =
+        payload.url && input.canonical_url ? normalizeUrl(input.canonical_url) : null;
       return {
         urlHash,
         clientId,
@@ -609,7 +620,7 @@ export class BookmarkApi {
           id: input.id,
           user_id: this.session.user.id,
           url: payload.url,
-          canonical_url: null,
+          canonical_url: canonicalUrl,
           url_hash: urlHash,
           client_id: clientId,
           title,

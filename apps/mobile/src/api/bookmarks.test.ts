@@ -344,6 +344,38 @@ test('createBookmark accepts an image-only payload once its binary is already up
   assert.equal(result.bookmark_id, 'b1');
 });
 
+test('createBookmark falls back to url content_type when image type lacks preview_image_url', async () => {
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.includes('url_hash=') || path.includes('client_id=')) {
+        return [];
+      }
+      if (path === '/rest/v1/bookmarks') {
+        const body = options.body as Record<string, unknown>;
+        assert.equal(body.url, 'https://example.com/photo');
+        assert.equal(body.content_type, 'url');
+        return [
+          remoteBookmark({
+            id: 'b1',
+            url: 'https://example.com/photo',
+            content_type: 'url',
+          }),
+        ];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const result = await api.createBookmark({
+    id: 'b1',
+    url: 'https://example.com/photo',
+    content_type: 'image',
+  });
+
+  assert.equal(result.status, 'created');
+});
+
 test('createBookmark preserves leading/trailing whitespace in a Markdown memo body', async () => {
   const client = {
     request: async (path: string, options: Record<string, unknown> = {}) => {
@@ -1014,6 +1046,48 @@ test('createBookmark and createBookmarks pass collection_id in request body', as
   ]);
   assert.equal(bulkPosts.length, 1);
   assert.equal(bulkPosts[0].collection_id, 'col-2');
+});
+
+test('createBookmark and createBookmarks preserve canonical_url and content_type in request body (#700)', async () => {
+  const singlePosts: Array<Record<string, unknown>> = [];
+  const bulkPosts: Array<Record<string, unknown>> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.includes('url_hash=') || path.includes('client_id=')) return [];
+      if (path === '/rest/v1/bookmarks' && options.method === 'POST') {
+        if (Array.isArray(options.body)) {
+          bulkPosts.push(...options.body);
+          return options.body.map((item: Record<string, unknown>) => remoteBookmark(item));
+        }
+        singlePosts.push(options.body as Record<string, unknown>);
+        return [remoteBookmark(options.body as Record<string, unknown>)];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  await api.createBookmark({
+    id: 'b1',
+    url: 'https://example.com/article',
+    canonical_url: 'https://example.com/canonical-article',
+    content_type: 'article',
+  });
+  assert.equal(singlePosts.length, 1);
+  assert.equal(singlePosts[0].canonical_url, 'https://example.com/canonical-article');
+  assert.equal(singlePosts[0].content_type, 'article');
+
+  await api.createBookmarks([
+    {
+      id: 'b2',
+      url: 'https://example.com/video',
+      canonical_url: 'https://example.com/canonical-video',
+      content_type: 'video',
+    },
+  ]);
+  assert.equal(bulkPosts.length, 1);
+  assert.equal(bulkPosts[0].canonical_url, 'https://example.com/canonical-video');
+  assert.equal(bulkPosts[0].content_type, 'video');
 });
 
 test('updateCollection patches collection name and returns updated collection', async () => {

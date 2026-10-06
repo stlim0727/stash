@@ -32,6 +32,8 @@ export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInp
       id: bookmark.id,
       created_at: bookmark.created_at,
       url: bookmark.url,
+      ...(bookmark.canonical_url ? { canonical_url: bookmark.canonical_url } : {}),
+      ...(bookmark.content_type && bookmark.content_type !== 'url' ? { content_type: bookmark.content_type } : {}),
       title: bookmark.title ?? undefined,
       notes: bookmark.notes ?? undefined,
       ...textFormats,
