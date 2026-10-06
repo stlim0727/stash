@@ -24,6 +24,15 @@ test('anonymous CAPTCHA token uses GoTrue security metadata and is not persisted
   } finally { globalThis.fetch = originalFetch; await clearSupabaseSession(); }
 });
 
+test('signInAnonymously abort handling is compatible with signals lacking throwIfAborted', async () => {
+  const client = new StashSupabaseClient({ url: 'https://project.test', anonKey: 'public-key' });
+  const signalWithoutThrowIfAborted = { aborted: true } as unknown as AbortSignal;
+  await assert.rejects(
+    client.signInAnonymously({ signal: signalWithoutThrowIfAborted }),
+    (err: any) => err.name === 'AbortError',
+  );
+});
+
 test('errorMessageFrom prefers GoTrue/PostgREST human-readable keys', () => {
   assert.equal(errorMessageFrom({ msg: 'bad login' }, 400), 'bad login');
   assert.equal(errorMessageFrom({ message: 'permission denied' }, 403), 'permission denied');

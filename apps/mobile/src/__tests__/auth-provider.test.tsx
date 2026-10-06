@@ -171,6 +171,24 @@ test('unmount aborts CAPTCHA and its late response cannot create an account', as
   expect(fakeClient.signInAnonymously).not.toHaveBeenCalled();
 });
 
+test('logout during anonymous signup without CAPTCHA aborts the request and sets no session', async () => {
+  let completeSignup!: (session: any) => void;
+  let signalPassed!: AbortSignal;
+  fakeClient.signInAnonymously.mockImplementationOnce((options: any) => {
+    signalPassed = options?.signal;
+    return new Promise((resolve) => { completeSignup = resolve; });
+  });
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(fakeClient.signInAnonymously).toHaveBeenCalledTimes(1));
+  expect(signalPassed).toBeDefined();
+  expect(signalPassed.aborted).toBe(false);
+  await act(async () => { await result.current.signOut(); });
+  expect(signalPassed.aborted).toBe(true);
+  await act(async () => { completeSignup(mockAnonSession); });
+  expect(result.current.status).toBe('signed_out');
+  expect(result.current.session).toBeNull();
+});
+
 test('forced refresh during CAPTCHA joins the same signup', async () => {
   let complete!: (token: string) => void;
   runCaptchaChallenge.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));

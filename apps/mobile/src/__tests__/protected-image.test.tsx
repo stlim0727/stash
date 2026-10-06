@@ -30,6 +30,18 @@ test('private-network remote images are hidden while durable local images remain
   expect(mockRequest).not.toHaveBeenCalled();
 });
 
+test('protocol-relative and whitespace-prefixed internal URLs are hidden while public protocol-relative URLs remain visible', async () => {
+  const screen = await render(<ProtectedImage uri="//192.168.1.1/admin" testID="image" />);
+  expect(screen.queryByTestId('image')).toBeNull();
+  await screen.rerender(<ProtectedImage uri="\\\\192.168.1.1\\admin" testID="image" />);
+  expect(screen.queryByTestId('image')).toBeNull();
+  await screen.rerender(<ProtectedImage uri="   http://192.168.1.1/admin   " testID="image" />);
+  expect(screen.queryByTestId('image')).toBeNull();
+  await screen.rerender(<ProtectedImage uri="//example.com/image.png" testID="image" />);
+  expect(screen.getByTestId('image').props.source.uri).toBe('//example.com/image.png');
+  expect(mockRequest).not.toHaveBeenCalled();
+});
+
 test('old public reference is never rendered directly and signatures renew before expiry', async () => {
   jest.useFakeTimers();
   mockRequest.mockResolvedValue({ signedURL: signed });

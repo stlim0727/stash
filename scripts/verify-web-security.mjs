@@ -96,6 +96,7 @@ chrome.on('error', (error) => { chromeError = error; });
 chrome.stderr.on('data', (chunk) => { chromeStderr = (chromeStderr + chunk.toString()).slice(-4096); });
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 let socket;
+let send;
 try {
   let port;
   const startupDeadline = Date.now() + 30_000;
@@ -114,7 +115,7 @@ try {
   const pending = new Map();
   const exceptions = [];
   const violations = [];
-  const send = (method, params = {}) => new Promise((resolveCommand, reject) => {
+  send = (method, params = {}) => new Promise((resolveCommand, reject) => {
     const id = ++nextId;
     const timeout = setTimeout(() => { pending.delete(id); reject(new Error(`CDP timeout: ${method}`)); }, 10_000);
     pending.set(id, { resolve: resolveCommand, reject, timeout });
@@ -247,12 +248,23 @@ try {
   assert.equal(await evaluate('(() => { try { return !!document.querySelector("iframe").contentWindow.probe; } catch { return false; } })()'), false, 'Framed content must not execute');
   console.log(JSON.stringify({ status: 'pass', pages: 4, blockedAttacks: ['inline', 'event-handler', 'foreign-script', 'data-script', 'eval', 'new-function', 'base', 'object', 'iframe'], sameOriginScript: true, webAssembly: true, captcha: 'isolated adapter and hosted-page lifecycle passed; real Siteverify pending' }));
 } finally {
+  try {
+    if (socket && socket.readyState === 1 /* WebSocket.OPEN */) {
+      await Promise.race([send?.('Browser.close'), delay(1000)]).catch(() => {});
+    }
+  } catch {}
   socket?.close();
   if (!chromeError && chrome.exitCode === null) {
     const ended = once(chrome, 'exit'); chrome.kill('SIGTERM');
     await Promise.race([ended, delay(2000)]);
-    if (!chromeError && chrome.exitCode === null) { chrome.kill('SIGKILL'); await ended; }
+    if (!chromeError && chrome.exitCode === null) {
+      chrome.kill('SIGKILL');
+      await Promise.race([ended, delay(1000)]);
+    }
   }
   await Promise.all([new Promise((r) => server.close(r)), new Promise((r) => foreign.close(r))]);
-  await rm(profile, { recursive: true, force: true });
+  await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(async () => {
+    await delay(500);
+    await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
+  });
 }

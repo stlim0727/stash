@@ -7,6 +7,17 @@ import { StashSupabaseClient } from '@/supabase/client';
 import { getSupabaseConfigState } from '@/supabase/config';
 import { isPublicPreviewUrl } from '@/domain/preview-network';
 
+const LOCAL_URI_SCHEMES = /^(?:file|data|blob|content|ph|asset):/i;
+
+function isAdmittedExternalUri(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (LOCAL_URI_SCHEMES.test(trimmed)) return true;
+  const candidate = /^[/\\]{2}/.test(trimmed)
+    ? `https://${trimmed.replace(/^[/\\]+/, '')}`
+    : trimmed;
+  return isPublicPreviewUrl(candidate);
+}
+
 type Props = Omit<ImageProps, 'source'> & { uri: string };
 
 /** Sign only Keepory's own uploaded images. No tokens/signatures are persisted
@@ -74,7 +85,7 @@ export function ProtectedImage({ uri, onError, onLoad, ...props }: Props) {
   }, [path, identity, usableSession?.access_token, config, refresh]);
 
   const displayUri = reference.kind === 'external' ?
-    (/^https?:/i.test(uri) && !isPublicPreviewUrl(uri) ? null : uri)
+    (isAdmittedExternalUri(uri) ? uri : null)
     : reference.kind === 'private' && resolved?.identity === identity && usableSession && resolved.accessToken === usableSession.access_token ? resolved.url : null;
   if (!displayUri) return null;
   return <Image {...props} source={{ uri: displayUri }} onLoad={(event) => {

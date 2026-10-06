@@ -190,7 +190,10 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
         captchaStarted.current = true;
         const captchaToken = await runCaptchaChallenge({ signal: captchaController.signal });
         if (captchaController.signal.aborted) return null;
-        const created = await client.signInAnonymously(captchaToken === undefined ? undefined : { captchaToken, signal: captchaController.signal });
+        const created = await client.signInAnonymously({
+          ...(captchaToken !== undefined ? { captchaToken } : {}),
+          signal: captchaController.signal,
+        });
         if (captchaController.signal.aborted) return null;
         setSession(created);
         setStatus('anonymous');

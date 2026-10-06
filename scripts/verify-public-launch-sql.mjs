@@ -101,7 +101,10 @@ try {
     select public.reserve_ai_enrichment_budget();
     select public.reserve_ai_enrichment_budget();
   `);
-  assert.equal((await db.query('select public.reserve_ai_enrichment_budget() as verdict')).rows[0].verdict.allowed, false);
+  const capVerdict = (await db.query('select public.reserve_ai_enrichment_budget() as verdict')).rows[0].verdict;
+  assert.equal(capVerdict.allowed, false);
+  assert.equal(capVerdict.reason, 'global_budget_limit');
+  assert.ok(capVerdict.retry_after >= 86000, `expected daily delay >= 86000s, got ${capVerdict.retry_after}`);
   await db.exec('reset role; delete from public.ai_runtime_limits; set local role service_role;');
   assert.equal((await db.query('select public.reserve_ai_enrichment_budget() as verdict')).rows[0].verdict.allowed, false);
   await db.exec('rollback;');

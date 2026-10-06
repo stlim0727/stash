@@ -302,3 +302,14 @@ CircleCI 재검증 `e086077`에서는 컴포넌트 단계가 종료 코드 0으�
 실패로 유지하고, 기한 초과 시 DOM과 오류 진단을 출력하도록 수정했다.
 앱 JavaScript를 6초 지연시킨 동일 시험에서 기존 코드는 콘텐츠 assertion
 실패, 새 코드는 4개 페이지·9개 공격 및 CAPTCHA 수명주기 검사 통과였다.
+
+
+### 브라우저 게이트 정리 실패 및 추가 리뷰 대응 (2026-10-06)
+
+커밋 `eab5cd6`에서 브라우저 검증 자체는 통과했으나 `verify-web-security.mjs`의 `finally` 블록에서 Chrome 프로세스 정리 중 임시 프로필 삭제가 `ENOTEMPTY (/Default)` 오류를 일으켜 CI가 실패했다. CDP `Browser.close`를 호출하여 Chrome 및 백그라운드 프로세스를 정상 종료하고, 프로필 디렉터리 삭제 시 재시도(`maxRetries: 10, retryDelay: 100`)와 예외 처리를 추가하여 안전하게 정리되도록 수정했다.
+
+추가 리뷰 4건 대응:
+1. `auth-provider.tsx`: CAPTCHA 비활성화 시에도 `signInAnonymously`에 `signal`을 전달하여 취소/로그아웃/언마운트 시 익명 가입 요청이 안전하게 취소되도록 수정.
+2. `client.ts`: React Native 환경(`abort-controller@3.0.0`)에서 `signal.throwIfAborted` 부재로 인한 런타임 오류를 방지하기 위해 `signal?.aborted` 명시적 검사 적용.
+3. `ProtectedImage.tsx`: 프로토콜 상대 URL(`//192.168.1.1/admin`), 역슬래시 UNC 경로(`\\\\192.168.1.1\\admin`), 공백 접두 URL이 검사를 우회하지 못하도록 안전한 로컬 스키마(`file:`, `data:`, `blob:`, `content:`, `ph:`, `asset:`)만 직접 허용하고 모든 원격 형태는 `isPublicPreviewUrl` 검사를 거치도록 수정.
+4. `20261005091739_ai_global_budget.sql`: 전역 일일/시간당 AI 예산 소진 시 고정 60초 대신 최초 만료 대상 예약 시각까지의 실제 지연 시간(`retry_after`)을 계산하여 반환하도록 개선.

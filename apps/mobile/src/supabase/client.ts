@@ -194,6 +194,18 @@ export function errorMessageFrom(payload: unknown, status: number): string {
   return `Supabase request failed with HTTP ${status}`;
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    const reason = (signal as { reason?: unknown }).reason;
+    if (reason instanceof Error) {
+      throw reason;
+    }
+    const error = new Error(typeof reason === 'string' ? reason : 'This operation was aborted');
+    error.name = 'AbortError';
+    throw error;
+  }
+}
+
 export class StashSupabaseClient {
   constructor(private readonly config: SupabaseConfig = requireConfig()) {}
 
@@ -311,14 +323,14 @@ export class StashSupabaseClient {
   }
 
   async signInAnonymously(options: { captchaToken?: string; signal?: AbortSignal } = {}): Promise<SupabaseAuthSession> {
-    options.signal?.throwIfAborted();
+    throwIfAborted(options.signal);
     if (options.captchaToken !== undefined && !isCaptchaToken(options.captchaToken)) throw new Error(CAPTCHA_FAILED_MESSAGE);
     const payload = (await this.request('/auth/v1/signup', {
       method: 'POST',
       body: options.captchaToken === undefined ? {} : { gotrue_meta_security: { captcha_token: options.captchaToken } },
       signal: options.signal,
     })) as SupabaseAuthResponse;
-    options.signal?.throwIfAborted();
+    throwIfAborted(options.signal);
     const session = toSession(payload);
     await writeSupabaseSession(session);
     return session;
