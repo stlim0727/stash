@@ -381,7 +381,6 @@ test('copy link action copies the bookmark URL and confirms with a toast', async
   const screen = await renderDetail();
   await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
 
-  await fireEvent.press(screen.getByText('More actions'));
   await fireEvent.press(screen.getByText('Copy link'));
 
   expect(mockSetStringAsync).toHaveBeenCalledWith('https://www.inkandswitch.com/local-first/');
@@ -412,7 +411,6 @@ test('a URL-less memo previews Markdown and copies the raw source', async () => 
   // thereby collapsing) the rendered Markdown's own tappable links.
   expect(screen.getByLabelText('Weekly plan Ship memo support')).toBeTruthy();
 
-  await fireEvent.press(screen.getByText('More actions'));
   await fireEvent.press(screen.getByText('Copy'));
 
   expect(mockSetStringAsync).toHaveBeenCalledWith(markdown);
@@ -1640,19 +1638,44 @@ test('unmounts preview hero when the image fails to load so it does not occupy e
   await waitFor(() => {
     expect(screen.queryByTestId('bookmark-detail-preview')).toBeNull();
   });
+  expect(screen.getByTestId('bookmark-detail-refresh-preview')).toBeTruthy();
 });
 
-test('Detail prioritizes website opening and moves reversible deletion to overflow', async () => {
+test('details drawer exposes preview refresh for URL bookmarks', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      title: 'Site without preview failure',
+      url: 'https://example.com/clean',
+      metadata_status: 'complete',
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('Site without preview failure')).toBeTruthy());
+
+  // Details drawer is initially collapsed
+  expect(screen.queryByTestId('detail-drawer-refresh-preview')).toBeNull();
+
+  // Expand details drawer
+  fireEvent.press(screen.getByLabelText('Toggle details'));
+  await waitFor(() => {
+    expect(screen.getByTestId('detail-drawer-refresh-preview')).toBeTruthy();
+  });
+});
+
+test('Detail prioritizes website opening and provides direct 1-tap share, copy, and trash actions', async () => {
   mockRouteId = 'hierarchy-url';
   fakeRepo.__reset([makeStoredBookmark({ id: mockRouteId, title: 'Read this first', url: 'https://example.com/read' })]);
   const screen = await renderDetail();
   await waitFor(() => expect(screen.getByText('Read this first')).toBeTruthy());
   expect(screen.getByTestId('detail-open-website')).toBeTruthy();
-  expect(screen.queryByText('Move to Trash')).toBeNull();
-  expect(screen.queryByText('Copy link')).toBeNull();
-  await fireEvent.press(screen.getByText('More actions'));
+  expect(screen.queryByText('More actions')).toBeNull();
+  expect(screen.getByText('Share')).toBeTruthy();
   expect(screen.getByText('Copy link')).toBeTruthy();
-  await fireEvent.press(screen.getByText('Move to Trash'));
+  expect(screen.getByText('Delete')).toBeTruthy();
+  await fireEvent.press(screen.getByText('Delete'));
   await waitFor(() => expect(fakeRepo.__bookmarks()[0].deleted_at).toBeTruthy());
   await fireEvent.press(screen.getByText('Undo'));
   await waitFor(() => expect(fakeRepo.__bookmarks()[0].deleted_at).toBeNull());
@@ -1664,8 +1687,8 @@ test('URL-less Note has sharing and text copy without website-only actions', asy
   const screen = await renderDetail();
   await waitFor(() => expect(screen.getByText('Read a note')).toBeTruthy());
   expect(screen.queryByTestId('detail-open-website')).toBeNull();
+  expect(screen.queryByText('More actions')).toBeNull();
   expect(screen.getByText('Share')).toBeTruthy();
-  await fireEvent.press(screen.getByText('More actions'));
   expect(screen.getByText('Copy')).toBeTruthy();
   expect(screen.queryByText('Copy link')).toBeNull();
   expect(screen.queryByText('Refresh preview')).toBeNull();

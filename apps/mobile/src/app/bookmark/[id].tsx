@@ -31,7 +31,6 @@ import {
 } from '@/i18n/status';
 import { usePalette } from '@/theme';
 import { Button } from '@/ui/Button';
-import { ActionSheet } from '@/ui/ActionSheet';
 import { Card } from '@/ui/Card';
 import { CollectionPicker } from '@/ui/CollectionPicker';
 import { KeyboardAvoidingScreen } from '@/ui/KeyboardAvoidingScreen';
@@ -155,7 +154,6 @@ export default function BookmarkDetailScreen({
   const [draftTitle, setDraftTitle] = useState<string | null>(null);
   const [draftNotes, setDraftNotes] = useState<MemoDraft | null>(null);
   const [draftDescription, setDraftDescription] = useState<MemoDraft | null>(null);
-  const [actionsOpen, setActionsOpen] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   // Long titles (e.g. a full Instagram caption pasted as the title) are
   // collapsed to a few lines with a "Show more" toggle so they don't push the
@@ -477,6 +475,11 @@ export default function BookmarkDetailScreen({
   // A folder chip (file-into or create) is currently on screen — so the tag
   // field's "Add all"/"Dismiss all" should sweep it too, like the Review screen.
   const isPreviewFailed = bookmark.metadata_status === 'failed';
+  const hasImageLoadFailed = Boolean(
+    bookmark.url &&
+    (bookmark.preview_image_url || bookmark.local_image_uri) &&
+    !rawPreviewUri
+  );
 
   const folderSuggestionVisible = !isPreviewFailed && suggestedFolder !== null;
 
@@ -739,6 +742,29 @@ export default function BookmarkDetailScreen({
       .catch(() => {
         setOrganizeError(t('detail.errorCopyLink'));
       });
+  };
+
+  const handleRestore = () => {
+    restoreBookmark(bookmark.id);
+    if (inline) {
+      onInlineClose?.();
+    } else {
+      router.back();
+    }
+  };
+
+  const handleTrash = () => {
+    const trashedId = bookmark.id;
+    trashBookmark(trashedId);
+    showToast(t('toast.trashed'), {
+      label: t('common.undo'),
+      onPress: () => restoreBookmark(trashedId),
+    });
+    if (inline) {
+      onInlineClose?.();
+    } else {
+      router.back();
+    }
   };
 
   const handleRefreshPreview = () => {
@@ -1055,9 +1081,13 @@ export default function BookmarkDetailScreen({
 
   // Captured images are primary content; fetched URL previews follow the editors.
   const previewHero = (() => {
-    if (isPreviewFailed) {
+    if (hidePreviewHero) {
+      return null;
+    }
+    if (isPreviewFailed || hasImageLoadFailed) {
       return (
         <View
+          testID="bookmark-detail-preview-failed-banner"
           style={[
             styles.previewFailedBanner,
             { backgroundColor: palette.dangerSoft, borderColor: palette.danger },
@@ -1067,11 +1097,21 @@ export default function BookmarkDetailScreen({
           <Text style={[styles.previewFailedText, { color: palette.text }]}>
             {t('detail.previewFailedNote')}
           </Text>
+          {bookmark.url ? (
+            <Button
+              testID="bookmark-detail-refresh-preview"
+              size="sm"
+              variant="ghost"
+              icon="refresh"
+              disabled={busy || previewRefreshing}
+              onPress={handleRefreshPreview}
+              accessibilityLabel={t('detail.previewRefresh')}
+            >
+              {previewRefreshing ? t('detail.previewRefreshing') : t('detail.previewRefresh')}
+            </Button>
+          ) : null}
         </View>
       );
-    }
-    if (hidePreviewHero) {
-      return null;
     }
     const previewUri = rawPreviewUri;
     if (!previewUri) {
@@ -1277,45 +1317,66 @@ export default function BookmarkDetailScreen({
       {bookmark.url ? <Button testID="detail-open-website" accessibilityLabel={t('detail.openWebsite')} icon="open-outline" size="lg"
         disabled={busy || isOpeningLink} onPress={handleOpenLink}>{t('detail.openWebsite')}</Button> : null}
       <View style={styles.actionBar}>
-        {bookmark.url || isTextMemo ? <Button variant="ghost" icon="share-social" accessibilityLabel={t('common.share')} onPress={handleShare}>
-          {t('common.share')}</Button> : null}
-        {bookmark.video_unavailable && isYoutubeAvailabilityCandidate(bookmark.url ?? '') ? (
-          <Button variant="ghost" icon="search-outline" accessibilityLabel={t('detail.searchYoutube')} onPress={handleSearchYoutube}>{t('detail.searchYoutube')}</Button>
+        {bookmark.url || isTextMemo ? (
+          <Button
+            testID="detail-share"
+            style={styles.actionButton}
+            variant="ghost"
+            icon="share-social"
+            accessibilityLabel={t('common.share')}
+            onPress={handleShare}
+          >
+            {t('common.share')}
+          </Button>
         ) : null}
-        <Button variant="ghost" icon="ellipsis-horizontal" accessibilityLabel={t('inbox.moreActions')} onPress={() => setActionsOpen(true)}>
-          {t('inbox.moreActions')}</Button>
+        {bookmark.url || isTextMemo ? (
+          <Button
+            testID="detail-copy-link"
+            style={styles.actionButton}
+            variant="ghost"
+            icon="copy-outline"
+            accessibilityLabel={bookmark.url ? t('common.copyLink') : t('common.copy')}
+            onPress={handleCopyLink}
+          >
+            {bookmark.url ? t('common.copyLink') : t('common.copy')}
+          </Button>
+        ) : null}
+        {bookmark.deleted_at ? (
+          <Button
+            testID="detail-restore"
+            style={styles.actionButton}
+            variant="ghost"
+            icon="arrow-undo"
+            accessibilityLabel={t('common.restore')}
+            onPress={handleRestore}
+          >
+            {t('common.restore')}
+          </Button>
+        ) : (
+          <Button
+            testID="detail-trash"
+            style={styles.actionButton}
+            variant="ghost"
+            icon="trash-outline"
+            accessibilityLabel={t('common.trash')}
+            onPress={handleTrash}
+          >
+            {t('common.delete')}
+          </Button>
+        )}
+        {bookmark.video_unavailable && isYoutubeAvailabilityCandidate(bookmark.url ?? '') ? (
+          <Button
+            testID="detail-search-youtube"
+            style={styles.actionButton}
+            variant="ghost"
+            icon="search-outline"
+            accessibilityLabel={t('detail.searchYoutube')}
+            onPress={handleSearchYoutube}
+          >
+            {t('detail.searchYoutube')}
+          </Button>
+        ) : null}
       </View>
-      <ActionSheet visible={actionsOpen} title={t('inbox.moreActions')} onClose={() => setActionsOpen(false)}
-        actions={[
-          ...(bookmark.url || isTextMemo ? [{ key: 'copy', label: bookmark.url ? t('common.copyLink') : t('common.copy'),
-            onPress: () => { setActionsOpen(false); void handleCopyLink(); } }] : []),
-          ...(bookmark.url ? [{ key: 'refresh', label: previewRefreshing ? t('detail.previewRefreshing') : t('detail.previewRefresh'),
-            disabled: busy || previewRefreshing, onPress: () => { setActionsOpen(false); void handleRefreshPreview(); } }] : []),
-          bookmark.deleted_at ? { key: 'restore', label: t('common.restore'), onPress: () => {
-            setActionsOpen(false);
-              restoreBookmark(bookmark.id);
-              if (inline) {
-                onInlineClose?.();
-              } else {
-                router.back();
-              }
-          }} : { key: 'trash', label: t('common.trash'), destructive: true, onPress: () => {
-            setActionsOpen(false);
-              const trashedId = bookmark.id;
-              trashBookmark(trashedId);
-              // The toast lives above the navigator, so it survives the back nav;
-              // its Undo is the immediate recovery path (vs. Settings → Trash).
-              showToast(t('toast.trashed'), {
-                label: t('common.undo'),
-                onPress: () => restoreBookmark(trashedId),
-              });
-              if (inline) {
-                onInlineClose?.();
-              } else {
-                router.back();
-              }
-          }},
-        ]} />
 
       {bookmark.content_type === 'image' ? previewHero : null}
 
@@ -1612,6 +1673,18 @@ export default function BookmarkDetailScreen({
                 </PostHogMaskView>
               </View>
             ))}
+            {bookmark.url ? (
+              <Button
+                testID="detail-drawer-refresh-preview"
+                variant="ghost"
+                icon="refresh"
+                disabled={busy || previewRefreshing}
+                onPress={handleRefreshPreview}
+                accessibilityLabel={t('detail.previewRefresh')}
+              >
+                {previewRefreshing ? t('detail.previewRefreshing') : t('detail.previewRefresh')}
+              </Button>
+            ) : null}
             <Text style={[styles.detailLabel, { color: palette.textSecondary }]}>
               {t('detail.stateHelp')}
             </Text>
@@ -1847,7 +1920,11 @@ const styles = StyleSheet.create({
   actionBar: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 10,
+    gap: 8,
+  },
+  actionButton: {
+    flex: 1,
+    minWidth: 90,
   },
   detailRow: {
     paddingVertical: 10,
