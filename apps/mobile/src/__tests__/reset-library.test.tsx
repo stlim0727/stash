@@ -8,6 +8,13 @@ jest.mock('@/storage/repository', () =>
   require('./helpers/fake-repository').createFakeRepositoryModule(),
 );
 
+// This fixture exercises reset/sync, not telemetry. Loading the native SDK
+// starts a recurring cleanup timer that outlives the test environment.
+jest.mock('@/observability/sentry', () => ({
+  reportQueueReconcileMismatch: jest.fn(),
+  reportSyncQueueHealthEscalation: jest.fn(),
+}));
+
 // Controllable image-store double: copyImageToLibrary only resolves once
 // `resolveCopyImageToLibrary` below is called, so a test can hold an image
 // capture's durable-write chain open deliberately.
@@ -182,11 +189,12 @@ async function mountSettled(withFailedEdit = true) {
   const rendered = await renderHook(() => useBookmarks(), { wrapper });
   await waitFor(() => expect(rendered.result.current.isLoading).toBe(false));
   await waitFor(() => expect(rendered.result.current.inbox.map((b) => b.id)).toContain(REMOTE_ID));
+  // Startup sync must settle even when this fixture has no queued edit.
+  await waitFor(() => expect(rendered.result.current.isSyncing).toBe(false));
   if (!withFailedEdit) {
     return rendered;
   }
-  // Let the startup sync settle: the queued edit fails fast and stays queued.
-  await waitFor(() => expect(rendered.result.current.isSyncing).toBe(false));
+  // The queued edit fails fast and stays queued.
   await waitFor(() =>
     expect(rendered.result.current.queue.some((e) => e.sync_status === 'failed')).toBe(true),
   );
@@ -490,8 +498,12 @@ test('SVG capture stays durable and reports unsupported cloud format without an 
   });
   if (!added || added.status !== 'created') throw new Error('capture was not created');
   const id = added.bookmark.id;
-  await act(async () => { await result.current.syncNow({ force: true }); });
+  // Wait for the capture flush's scheduled sync itself. Forcing a concurrent
+  // sync can leave its queued 50ms retrigger running past Jest teardown. The
+  // durable error proves the scheduled pass actually started; isSyncing=false
+  // then proves its remaining pull and bookkeeping have completed.
   await waitFor(() => expect(fakeRepo.__queue().find((entry) => entry.local_id === id)?.last_error).toContain('unsupported image format for cloud sync'));
+  await waitFor(() => expect(result.current.isSyncing).toBe(false));
   expect(fakeRepo.__bookmarks().find((bookmark) => bookmark.id === id)?.local_image_uri).toBe('file:///docs/stash-images/capture.svg');
   expect(result.current.getBookmarkProcessing(id)?.sync.queue?.lastError).toContain('Image kept on this device');
   const retries = fakeRepo.__queue().find((entry) => entry.local_id === id)?.retry_count;
