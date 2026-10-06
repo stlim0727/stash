@@ -227,11 +227,12 @@ async function markPendingEnrichmentSettled(
   id: string,
   status: 'done' | 'pending' | 'failed',
   attempts: number,
+  retryNotBefore: string | null = null,
 ): Promise<void> {
   try {
     const res = await serviceRest(`/pending_ai_enrichment?id=eq.${id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ status, attempts, updated_at: new Date().toISOString() }),
+      body: JSON.stringify({ status, attempts, retry_not_before: retryNotBefore, updated_at: new Date().toISOString() }),
     });
     if (!res.ok) {
       console.error('Batch worker: failed to update pending_ai_enrichment row', id, res.status);
@@ -464,7 +465,7 @@ async function processEnrichmentRow(
   bookmarksById: Map<string, BookmarkRow>,
   contextByUser: Map<string, { collections: Array<{ id: string; name: string }>; existingTags: string[]; locale: string | null }>,
   slotClaimed: boolean,
-): Promise<'deferred' | void> {
+): Promise<{ retryNotBefore: string } | void> {
   const bookmark = bookmarksById.get(row.bookmark_id);
   if (!bookmark) {
     // Defensive: shouldn't happen (a deleted bookmark cascade-deletes its
@@ -494,8 +495,9 @@ async function processEnrichmentRow(
     const budget = await reserveGlobalBudget();
     if (budget?.allowed !== true) {
       if (slotClaimed) await refundEnrichmentQuotaSlot(row.user_id);
-      await markPendingEnrichmentSettled(row.id, 'pending', row.attempts);
-      return 'deferred';
+      const retryNotBefore = new Date(Date.now() + Math.max(60, budget?.retry_after ?? 60) * 1000).toISOString();
+      await markPendingEnrichmentSettled(row.id, 'pending', row.attempts, retryNotBefore);
+      return { retryNotBefore };
     }
   }
 
@@ -831,13 +833,24 @@ async function runBatchWorker(): Promise<Response> {
     // BATCH_CLAIM_LIMIT calls at once would burst straight into the model
     // provider's own per-minute limit and degrade a chunk of them to heuristics.
     let globallyDeferred = 0;
+    let budgetRetryNotBefore: string | null = null;
     for (const wave of chunk(eligible, ENRICHMENT_CONCURRENCY)) {
+      if (budgetRetryNotBefore) {
+        await Promise.all(wave.map(async (row) => {
+          if (slotClaimedByRowId.get(row.id)) await refundEnrichmentQuotaSlot(row.user_id);
+          await markPendingEnrichmentSettled(row.id, 'pending', row.attempts, budgetRetryNotBefore);
+        }));
+        globallyDeferred += wave.length;
+        continue;
+      }
       const outcomes = await Promise.all(
         wave.map((row) =>
           processEnrichmentRow(row, bookmarksById, contextByUser, slotClaimedByRowId.get(row.id) ?? false),
         ),
       );
-      globallyDeferred += outcomes.filter((outcome) => outcome === 'deferred').length;
+      const denials = outcomes.filter((outcome): outcome is { retryNotBefore: string } => outcome !== undefined);
+      globallyDeferred += denials.length;
+      if (denials.length) budgetRetryNotBefore = denials.map((outcome) => outcome.retryNotBefore).sort().at(-1)!;
     }
 
     // STASH #579: best-effort drained-queue push notification, after the

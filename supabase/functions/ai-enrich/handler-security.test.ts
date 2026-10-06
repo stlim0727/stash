@@ -13,6 +13,8 @@ test('synchronous, trigger and worker paths never call Gemini without explicit u
   let globalVerdict: unknown = { allowed: true };
   let failure: 'user' | 'user-http' | 'global' | null = null;
   let providerCalls = 0;
+  let globalCalls = 0;
+  let queueSize = 1;
   const settled: Array<Record<string, unknown>> = [];
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
@@ -24,10 +26,11 @@ test('synchronous, trigger and worker paths never call Gemini without explicit u
       return Response.json(userVerdict);
     }
     if (path.includes('reserve_ai_enrichment_budget')) {
+      globalCalls++;
       if (failure === 'global') return new Response('', { status: 500 });
       return Response.json(globalVerdict);
     }
-    if (path.includes('claim_pending_ai_enrichment_batch')) return Response.json([{ id: 'queue-1', bookmark_id: bookmarkId, user_id: userId, attempts: 0, locale: 'en' }]);
+    if (path.includes('claim_pending_ai_enrichment_batch')) return Response.json(Array.from({ length: queueSize }, (_, i) => ({ id: `queue-${i}`, bookmark_id: bookmarkId, user_id: userId, attempts: 0, locale: 'en' })));
     if (path.includes('/pending_ai_enrichment') && init?.method === 'PATCH') settled.push(JSON.parse(String(init.body)));
     if (path.includes('/bookmarks?')) return Response.json([row]);
     return Response.json([]);
@@ -56,6 +59,18 @@ test('synchronous, trigger and worker paths never call Gemini without explicit u
     }
     assert.ok(settled.length > 0);
     assert.ok(settled.every((entry) => entry.status === 'pending' && entry.attempts === 0));
+    queueSize = 40; globalCalls = 0; settled.length = 0;
+    userVerdict = { allowed: true }; globalVerdict = { allowed: false, retry_after: 3600 }; failure = null;
+    const before = Date.now();
+    const deniedBatch = await handler!(new Request('https://project.test/ai-enrich', {
+      method: 'POST', headers: { 'x-ai-enrich-secret': 'secret' }, body: JSON.stringify({ batch_worker: true }),
+    }));
+    assert.deepEqual(await deniedBatch.json(), { processed: 0, deferred: 40 });
+    assert.ok(globalCalls > 0 && globalCalls < 40, 'remaining waves skip global reservations');
+    assert.equal(settled.length, 40);
+    assert.ok(settled.every((entry) => entry.attempts === 0 && entry.status === 'pending'
+      && Date.parse(String(entry.retry_not_before)) >= before + 3600_000));
+    assert.equal(providerCalls, 0);
     userVerdict = { allowed: true }; globalVerdict = { allowed: true }; failure = null;
     await handler!(new Request('https://project.test/ai-enrich', {
       method: 'POST', headers: { Authorization: 'Bearer registered-user' },

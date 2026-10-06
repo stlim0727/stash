@@ -22,6 +22,8 @@ export function ProtectedImage({ uri, onError, onLoad, ...props }: Props) {
   const identity = `${usableSession?.user.id ?? ''}|${uri}`;
   const [resolved, setResolved] = useState<{ identity: string; url: string; accessToken: string } | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
   const signingRetry = useRef({ identity: '', count: 0 });
   // Signing recovery and image decoding have independent retry allowances.
   const [imageRetry, setImageRetry] = useState<{ identity: string; count: number }>({ identity: '', count: 0 });
@@ -43,8 +45,18 @@ export function ProtectedImage({ uri, onError, onLoad, ...props }: Props) {
       signingRetry.current = { identity, count: 0 };
       setResolved({ identity, url, accessToken: usableSession.access_token });
       timer = setTimeout(() => setRefresh((value) => value + 1), (PRIVATE_IMAGE_URL_TTL_SECONDS - 30) * 1000);
-    }).catch(() => {
+    }).catch((error: unknown) => {
       if (!active) return;
+      const status = typeof error === 'object' && error !== null && 'status' in error
+        ? error.status : undefined;
+      if (typeof status === 'number' && status >= 400 && status < 500
+        && ![401, 408, 409, 425, 429].includes(status)) {
+        setResolved(null);
+        // The caller owns its broken-image fallback. Avoid forwarding service
+        // response text, which can contain object paths or credentials.
+        onErrorRef.current?.({ nativeEvent: { error: 'Image unavailable' } } as Parameters<NonNullable<ImageProps['onError']>>[0]);
+        return;
+      }
       // Keep an already-rendered image during renewal outages. Storage still
       // enforces signature expiry on new downloads; decoded pixels need not
       // disappear because a background signing request failed. The render

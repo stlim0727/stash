@@ -170,3 +170,30 @@ test('a successful image load restores recovery for a later decode failure', asy
   expect(mockRequest).toHaveBeenCalledTimes(3);
   expect(onError).toHaveBeenCalledWith(failure);
 });
+
+
+test.each([400, 403, 404, 410])('permanent signer HTTP %s forwards an error once and stops retries', async (status) => {
+  jest.useFakeTimers();
+  mockRequest.mockRejectedValue({ status, message: 'sensitive response' });
+  const onError = jest.fn();
+  const screen = await render(<ProtectedImage uri={reference} onError={onError} />);
+  expect(onError).toHaveBeenCalledTimes(1);
+  expect(onError).toHaveBeenCalledWith({ nativeEvent: { error: 'Image unavailable' } });
+  await screen.rerender(<ProtectedImage uri={reference} onError={() => onError()} />);
+  await act(async () => { jest.advanceTimersByTime(900_000); });
+  expect(mockRequest).toHaveBeenCalledTimes(1);
+  mockAccessToken = 'refreshed-token';
+  await screen.rerender(<ProtectedImage uri={reference} onError={onError} />);
+  expect(mockRequest).toHaveBeenCalledTimes(2);
+});
+
+test.each([401, 408, 409, 425, 429, 500, 503])('recoverable signer HTTP %s retries without a permanent error', async (status) => {
+  jest.useFakeTimers();
+  mockRequest.mockRejectedValueOnce({ status }).mockResolvedValue({ signedURL: signed });
+  const onError = jest.fn();
+  const screen = await render(<ProtectedImage uri={reference} testID="image" onError={onError} />);
+  expect(onError).not.toHaveBeenCalled();
+  await act(async () => { jest.advanceTimersByTime(60_000); });
+  expect(screen.getByTestId('image')).toBeTruthy();
+  expect(mockRequest).toHaveBeenCalledTimes(2);
+});
