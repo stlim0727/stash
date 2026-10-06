@@ -125,6 +125,7 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
       queue = queue.filter((q) => q.local_id !== localId);
     },
     getMeta: async (key) => meta[key] ?? null,
+    getAllMeta: async () => ({ ...meta }),
     setMeta: async (key, value) => {
       meta = { ...meta, [key]: value };
     },

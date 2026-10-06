@@ -116,6 +116,8 @@ export interface BookmarkRepository {
   removeQueueEntry(localId: string): Promise<void>;
   /** Small durable key/value store (e.g. the pull watermark). */
   getMeta(key: string): Promise<string | null>;
+  /** Return all key/value pairs in the meta store for batch hydration. */
+  getAllMeta?(): Promise<Record<string, string>>;
   setMeta(key: string, value: string): Promise<void>;
   /** Local cache of cloud AI enrichments, refreshed by pull sync. */
   listEnrichments(): Promise<AIEnrichment[]>;

@@ -307,6 +307,10 @@ class WebBookmarkRepository implements BookmarkRepository {
     return this.meta[key] ?? null;
   }
 
+  async getAllMeta(): Promise<Record<string, string>> {
+    return { ...this.meta };
+  }
+
   async setMeta(key: string, value: string): Promise<void> {
     this.meta = { ...this.meta, [key]: value };
     this.write(META_KEY, this.meta);
