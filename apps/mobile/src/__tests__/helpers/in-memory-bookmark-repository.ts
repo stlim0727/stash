@@ -168,6 +168,10 @@ export class InMemoryBookmarkRepository implements BookmarkRepository {
     return this.state.meta[key] ?? null;
   }
 
+  async getAllMeta(): Promise<Record<string, string>> {
+    return { ...this.state.meta };
+  }
+
   async setMeta(key: string, value: string): Promise<void> {
     this.state.meta[key] = value;
   }

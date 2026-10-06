@@ -332,3 +332,12 @@ test('sync provenance survives reload without changing the upload attempt and ca
   await repository.annotateQueueChanges!(entry.local_id, changes);
   assert.equal((await repository.listQueue()).length, 0);
 });
+
+test('getAllMeta returns all stored key/value pairs in a single batch read', async () => {
+  await repository.init([]);
+  await repository.setMeta('batch_key_1', 'val_1');
+  await repository.setMeta('batch_key_2', 'val_2');
+  const all = await repository.getAllMeta!();
+  assert.equal(all['batch_key_1'], 'val_1');
+  assert.equal(all['batch_key_2'], 'val_2');
+});

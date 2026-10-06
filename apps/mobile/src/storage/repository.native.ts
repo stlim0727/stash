@@ -549,6 +549,19 @@ class SqliteBookmarkRepository implements BookmarkRepository {
     }, 'getMeta');
   }
 
+  async getAllMeta(): Promise<Record<string, string>> {
+    return this.connection.run(async (db) => {
+      const rows = await db.getAllAsync<{ key: string; value: string }>(
+        'SELECT key, value FROM meta',
+      );
+      const record: Record<string, string> = {};
+      for (const row of rows) {
+        record[row.key] = row.value;
+      }
+      return record;
+    }, 'getAllMeta');
+  }
+
   async setMeta(key: string, value: string): Promise<void> {
     await this.connection.run(
       (db) => db.runAsync('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [key, value]),

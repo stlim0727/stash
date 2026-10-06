@@ -2347,45 +2347,87 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           phase = `attempt ${attempt}: opening`;
           await ensureRepositoryReady();
           phase = `attempt ${attempt}: reading`;
+          const readAllMeta = async (): Promise<Record<string, string | null>> => {
+            if (typeof repository.getAllMeta === "function") {
+              return repository.getAllMeta();
+            }
+            const [
+              storedPulledAt,
+              storedTagOpsRaw,
+              storedImportCollectionsRaw,
+              storedEnrichmentRestoresRaw,
+              storedAiTriggerRaw,
+              storedAiPreviewRefreshRaw,
+              storedAiRetryRaw,
+              storedAiServerQueuedRaw,
+              storedReviewedRaw,
+              storedUnseenRaw,
+              storedDismissedFoldersRaw,
+              storedReviewedSummariesRaw,
+              storedAiSuggestionsModeRaw,
+              storedSyncPausedRaw,
+            ] = await Promise.all([
+              repository.getMeta(LAST_PULLED_AT_KEY),
+              repository.getMeta(PENDING_TAG_OPS_KEY),
+              repository.getMeta(PENDING_IMPORT_COLLECTIONS_KEY),
+              repository.getMeta(PENDING_ENRICHMENT_RESTORE_KEY),
+              repository.getMeta(PENDING_AI_TRIGGER_KEY),
+              repository.getMeta(PENDING_AI_PREVIEW_REFRESH_KEY),
+              repository.getMeta(AI_RETRY_STATE_KEY),
+              repository.getMeta(AI_SERVER_QUEUED_KEY),
+              repository.getMeta(REVIEWED_SUGGESTIONS_KEY),
+              repository.getMeta(UNSEEN_SUGGESTIONS_KEY),
+              repository.getMeta(DISMISSED_FOLDERS_KEY),
+              repository.getMeta(REVIEWED_SUMMARIES_KEY),
+              repository.getMeta(AI_SUGGESTIONS_MODE_PREF_KEY),
+              repository.getMeta(SYNC_PAUSED_KEY),
+            ]);
+            return {
+              [LAST_PULLED_AT_KEY]: storedPulledAt,
+              [PENDING_TAG_OPS_KEY]: storedTagOpsRaw,
+              [PENDING_IMPORT_COLLECTIONS_KEY]: storedImportCollectionsRaw,
+              [PENDING_ENRICHMENT_RESTORE_KEY]: storedEnrichmentRestoresRaw,
+              [PENDING_AI_TRIGGER_KEY]: storedAiTriggerRaw,
+              [PENDING_AI_PREVIEW_REFRESH_KEY]: storedAiPreviewRefreshRaw,
+              [AI_RETRY_STATE_KEY]: storedAiRetryRaw,
+              [AI_SERVER_QUEUED_KEY]: storedAiServerQueuedRaw,
+              [REVIEWED_SUGGESTIONS_KEY]: storedReviewedRaw,
+              [UNSEEN_SUGGESTIONS_KEY]: storedUnseenRaw,
+              [DISMISSED_FOLDERS_KEY]: storedDismissedFoldersRaw,
+              [REVIEWED_SUMMARIES_KEY]: storedReviewedSummariesRaw,
+              [AI_SUGGESTIONS_MODE_PREF_KEY]: storedAiSuggestionsModeRaw,
+              [SYNC_PAUSED_KEY]: storedSyncPausedRaw,
+            };
+          };
+
           const [
             storedBookmarks,
             storedQueue,
             storedEnrichments,
             storedTagData,
-            storedPulledAt,
-            storedTagOpsRaw,
-            storedImportCollectionsRaw,
-            storedEnrichmentRestoresRaw,
-            storedAiTriggerRaw,
-            storedAiPreviewRefreshRaw,
-            storedAiRetryRaw,
-            storedAiServerQueuedRaw,
-            storedReviewedRaw,
-            storedUnseenRaw,
-            storedDismissedFoldersRaw,
-            storedReviewedSummariesRaw,
-            storedAiSuggestionsModeRaw,
-            storedSyncPausedRaw,
+            metaMap,
           ] = await Promise.all([
             repository.listBookmarks(),
             repository.listQueue(),
             repository.listEnrichments(),
             repository.listTagData(),
-            repository.getMeta(LAST_PULLED_AT_KEY),
-            repository.getMeta(PENDING_TAG_OPS_KEY),
-            repository.getMeta(PENDING_IMPORT_COLLECTIONS_KEY),
-            repository.getMeta(PENDING_ENRICHMENT_RESTORE_KEY),
-            repository.getMeta(PENDING_AI_TRIGGER_KEY),
-            repository.getMeta(PENDING_AI_PREVIEW_REFRESH_KEY),
-            repository.getMeta(AI_RETRY_STATE_KEY),
-            repository.getMeta(AI_SERVER_QUEUED_KEY),
-            repository.getMeta(REVIEWED_SUGGESTIONS_KEY),
-            repository.getMeta(UNSEEN_SUGGESTIONS_KEY),
-            repository.getMeta(DISMISSED_FOLDERS_KEY),
-            repository.getMeta(REVIEWED_SUMMARIES_KEY),
-            repository.getMeta(AI_SUGGESTIONS_MODE_PREF_KEY),
-            repository.getMeta(SYNC_PAUSED_KEY),
+            readAllMeta(),
           ]);
+
+          const storedPulledAt = metaMap[LAST_PULLED_AT_KEY] ?? null;
+          const storedTagOpsRaw = metaMap[PENDING_TAG_OPS_KEY] ?? null;
+          const storedImportCollectionsRaw = metaMap[PENDING_IMPORT_COLLECTIONS_KEY] ?? null;
+          const storedEnrichmentRestoresRaw = metaMap[PENDING_ENRICHMENT_RESTORE_KEY] ?? null;
+          const storedAiTriggerRaw = metaMap[PENDING_AI_TRIGGER_KEY] ?? null;
+          const storedAiPreviewRefreshRaw = metaMap[PENDING_AI_PREVIEW_REFRESH_KEY] ?? null;
+          const storedAiRetryRaw = metaMap[AI_RETRY_STATE_KEY] ?? null;
+          const storedAiServerQueuedRaw = metaMap[AI_SERVER_QUEUED_KEY] ?? null;
+          const storedReviewedRaw = metaMap[REVIEWED_SUGGESTIONS_KEY] ?? null;
+          const storedUnseenRaw = metaMap[UNSEEN_SUGGESTIONS_KEY] ?? null;
+          const storedDismissedFoldersRaw = metaMap[DISMISSED_FOLDERS_KEY] ?? null;
+          const storedReviewedSummariesRaw = metaMap[REVIEWED_SUMMARIES_KEY] ?? null;
+          const storedAiSuggestionsModeRaw = metaMap[AI_SUGGESTIONS_MODE_PREF_KEY] ?? null;
+          const storedSyncPausedRaw = metaMap[SYNC_PAUSED_KEY] ?? null;
           if (!cancelled) {
             // Re-hydrate the AI-suggestions mode so the auto-trigger gate and
             // auto_accept behavior are correct from the very first render, not
@@ -6266,6 +6308,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           currentUser,
           bookmarksRef.current ?? [],
         );
+        if (plan.kind === "none") {
+          if (plan.resetWatermark) {
+            await ensureRepositoryReady();
+            await repository.setMeta(LAST_PULLED_AT_KEY, "");
+          }
+          if (authRef.current.userId === currentUser.id) {
+            setReconciledCacheUserId(currentUser.id);
+          }
+          return true;
+        }
         await serializeTagWork(() => applyAccountTransition(
           plan,
           repository,
@@ -6477,7 +6529,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const priorCredentials = syncCredentialsRef.current;
         const recoverAuth = !!restoredSession && (recoveryRequested ||
           (!!priorCredentials && (priorCredentials.userId !== session.user.id || priorCredentials.accessToken !== session.access_token)));
-        const durableBookmarks = await repository.listBookmarks();
+        const durableBookmarks = bookmarksRef.current ?? (await repository.listBookmarks());
         const durableQueue = await repository.listQueue();
         if (restoredSession) {
           syncCredentialsRef.current = { userId: session.user.id, accessToken: session.access_token };
