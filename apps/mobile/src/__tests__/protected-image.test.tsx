@@ -4,15 +4,16 @@ import { ProtectedImage } from '@/ui/ProtectedImage';
 const mockRequest = jest.fn();
 let mockUser = 'a';
 let mockStatus = 'authenticated';
+let mockAccessToken: string | null = null;
 jest.mock('@/supabase/auth-provider', () => ({ useSupabaseAuth: () => ({
-  status: mockStatus, session: { access_token: `token-${mockUser}`, user: { id: mockUser } },
+  status: mockStatus, session: { access_token: mockAccessToken ?? `token-${mockUser}`, user: { id: mockUser } },
 }) }));
 jest.mock('@/supabase/config', () => ({ getSupabaseConfigState: () => ({ status: 'configured', config: { url: 'https://project.test', anonKey: 'anon' } }) }));
 jest.mock('@/supabase/client', () => ({ StashSupabaseClient: class { request = mockRequest; } }));
 
 const reference = 'https://project.test/storage/v1/object/public/bookmark-images/a/b';
 const signed = '/object/sign/bookmark-images/a/b?token=signed';
-beforeEach(() => { mockUser = 'a'; mockStatus = 'authenticated'; mockRequest.mockReset(); });
+beforeEach(() => { mockUser = 'a'; mockStatus = 'authenticated'; mockAccessToken = null; mockRequest.mockReset(); });
 afterEach(() => { jest.useRealTimers(); });
 
 test('external/local images do not make signing requests', async () => {
@@ -72,10 +73,47 @@ test('a successful signing retry restores retry allowance for later renewal fail
   expect(mockRequest).toHaveBeenCalledTimes(2);
   expect(screen.getByTestId('image')).toBeTruthy();
   await act(async () => { jest.advanceTimersByTime(270_000); });
-  expect(screen.queryByTestId('image')).toBeNull();
+  expect(screen.getByTestId('image')).toBeTruthy();
   await act(async () => { jest.advanceTimersByTime(60_000); });
   expect(mockRequest).toHaveBeenCalledTimes(4);
   expect(screen.getByTestId('image')).toBeTruthy();
+});
+
+test('renewal failures preserve the displayed image past URL expiry until recovery', async () => {
+  jest.useFakeTimers();
+  const renewed = signed.replace('token=signed', 'token=renewed');
+  mockRequest.mockResolvedValueOnce({ signedURL: signed })
+    .mockRejectedValueOnce(new Error('offline during renewal'))
+    .mockResolvedValueOnce({ signedURL: renewed });
+  const screen = await render(<ProtectedImage uri={reference} testID="image" />);
+  const currentUri = screen.getByTestId('image').props.source.uri;
+  await act(async () => { jest.advanceTimersByTime(270_000); });
+  expect(mockRequest).toHaveBeenCalledTimes(2);
+  expect(screen.getByTestId('image').props.source.uri).toBe(currentUri);
+  await act(async () => { jest.advanceTimersByTime(31_000); });
+  // A parent render after server URL expiry must not discard decoded pixels.
+  await screen.rerender(<ProtectedImage uri={reference} testID="image" />);
+  expect(screen.getByTestId('image').props.source.uri).toBe(currentUri);
+  await act(async () => { jest.advanceTimersByTime(29_000); });
+  expect(mockRequest).toHaveBeenCalledTimes(3);
+  expect(screen.getByTestId('image').props.source.uri).toBe(`https://project.test/storage/v1${renewed}`);
+});
+
+test('credential change hides retained images and an in-flight old-session renewal cannot restore them', async () => {
+  jest.useFakeTimers();
+  let finishOldRenewal!: (value: { signedURL: string }) => void;
+  mockRequest.mockResolvedValueOnce({ signedURL: signed })
+    .mockImplementationOnce(() => new Promise((resolve) => { finishOldRenewal = resolve; }))
+    .mockRejectedValue(new Error('new session temporarily offline'));
+  const screen = await render(<ProtectedImage uri={reference} testID="image" />);
+  expect(screen.getByTestId('image')).toBeTruthy();
+  await act(async () => { jest.advanceTimersByTime(270_000); });
+  mockAccessToken = 'new-session-token';
+  await screen.rerender(<ProtectedImage uri={reference} testID="image" />);
+  expect(screen.queryByTestId('image')).toBeNull();
+  await act(async () => { finishOldRenewal({ signedURL: signed }); });
+  expect(screen.queryByTestId('image')).toBeNull();
+  expect(mockRequest).toHaveBeenCalledTimes(3);
 });
 
 test('successful signing does not create endless retries for an unreadable image', async () => {

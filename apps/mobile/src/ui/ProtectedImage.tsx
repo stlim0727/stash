@@ -20,11 +20,13 @@ export function ProtectedImage({ uri, onError, ...props }: Props) {
   const reference = privateImageReference(uri, projectUrl, usableSession?.user.id ?? null);
   const path = reference.kind === 'private' ? reference.path : null;
   const identity = `${usableSession?.user.id ?? ''}|${uri}`;
-  const [resolved, setResolved] = useState<{ identity: string; url: string; expiresAt: number } | null>(null);
+  const [resolved, setResolved] = useState<{ identity: string; url: string; accessToken: string } | null>(null);
   const [refresh, setRefresh] = useState(0);
   const signingRetry = useRef({ identity: '', count: 0 });
   // Signing recovery and image decoding have independent retry allowances.
   const [imageRetry, setImageRetry] = useState<{ identity: string; count: number }>({ identity: '', count: 0 });
+
+  useEffect(() => { setResolved(null); }, [identity, usableSession?.access_token]);
 
   useEffect(() => {
     if (!path || !usableSession || config.status !== 'configured') return;
@@ -32,7 +34,6 @@ export function ProtectedImage({ uri, onError, ...props }: Props) {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let active = true;
-    const requestedAt = Date.now();
     void client.request(`/storage/v1/object/sign/bookmark-images/${path.split('/').map(encodeURIComponent).join('/')}`, {
       method: 'POST', accessToken: usableSession.access_token,
       body: { expiresIn: PRIVATE_IMAGE_URL_TTL_SECONDS }, signal: controller.signal,
@@ -40,11 +41,14 @@ export function ProtectedImage({ uri, onError, ...props }: Props) {
       const url = signedImageUrl(config.config.url, path, response);
       if (!active) return;
       signingRetry.current = { identity, count: 0 };
-      setResolved({ identity, url, expiresAt: requestedAt + PRIVATE_IMAGE_URL_TTL_SECONDS * 1000 });
+      setResolved({ identity, url, accessToken: usableSession.access_token });
       timer = setTimeout(() => setRefresh((value) => value + 1), (PRIVATE_IMAGE_URL_TTL_SECONDS - 30) * 1000);
     }).catch(() => {
       if (!active) return;
-      setResolved(null);
+      // Keep an already-rendered image during renewal outages. Storage still
+      // enforces signature expiry on new downloads; decoded pixels need not
+      // disappear because a background signing request failed. The render
+      // guard below rejects old identity/session credentials immediately.
       // Recover after a prolonged outage while mounted. Cap the retry rate,
       // not the number of failures; never fall back to the public URL or mark
       // a transient signing failure as a permanently broken image.
@@ -59,7 +63,7 @@ export function ProtectedImage({ uri, onError, ...props }: Props) {
 
   const displayUri = reference.kind === 'external' ?
     (/^https?:/i.test(uri) && !isPublicPreviewUrl(uri) ? null : uri)
-    : reference.kind === 'private' && resolved?.identity === identity && resolved.expiresAt > Date.now() ? resolved.url : null;
+    : reference.kind === 'private' && resolved?.identity === identity && usableSession && resolved.accessToken === usableSession.access_token ? resolved.url : null;
   if (!displayUri) return null;
   return <Image {...props} source={{ uri: displayUri }} onError={(event) => {
     if (reference.kind === 'private' && (imageRetry.identity !== identity || imageRetry.count === 0)) {
