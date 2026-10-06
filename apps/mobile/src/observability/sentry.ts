@@ -97,6 +97,20 @@ export function wrapWithSentry<P extends Record<string, unknown>>(
 }
 
 /**
+ * Mark the application startup as complete. When performance tracing is active,
+ * this tells Sentry that cold startup has completed (e.g. after the native splash
+ * screen has been hidden), ensuring app-start spans measure true user-perceived
+ * launch latency instead of stopping at early component mount.
+ */
+export function markAppLoaded(): void {
+  try {
+    Sentry.appLoaded();
+  } catch {
+    // Startup metrics are best-effort; never let telemetry throw.
+  }
+}
+
+/**
  * Record a low-severity diagnostic breadcrumb for a user interaction we want a
  * trail of when something later goes wrong. It lands in two places: the in-app
  * log buffer (so it ships with a "Report a problem" / "Share diagnostics"
