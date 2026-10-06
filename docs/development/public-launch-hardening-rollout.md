@@ -117,6 +117,31 @@ Cloudflare 응답·브라우저 검증은 남아 있다.
 성공과 export의 `_headers`가 원본과 바이트 단위로 일치함을 확인했다.
 이는 배포 서버가 헤더를 실제 반환하는지에 대한 증거는 아니다.
 
+후속 CSP는 `script-src 'self' 'wasm-unsafe-eval'`도 적용한다. Inline
+script/handler, 외부·data script, JavaScript eval/new Function을 허용하지
+않으며 Markdown에 필요한 WebAssembly 컴파일만 허용한다. 연결·이미지·
+동적 스타일 출처 제한은 별도 검증이 필요하다. Turnstile 도입 시 공식
+challenge 출처를 명시적으로 추가하고 관련 브라우저 검증도 확장한다.
+
+`node scripts/verify-web-security.mjs /absolute/path/to/export`는 실제
+Chrome에서 export의 헤더를 적용한 loopback 서버로 홈·설정·개인정보·
+삭제 안내의 렌더링과 hydration을 확인했다. 공격 fixture 9종의 실행 차단,
+외부 script 요청 0건, base 변경·object·iframe 차단, 정상 동일 출처 script
+및 WebAssembly 실행을 검증했다. 임시 브라우저 프로필은 삭제하며 외부
+네트워크/쓰기 요청은 차단한다. GitHub CI의 웹 export 직후에도 실행한다.
+이 결과는 실제 Cloudflare의 헤더 적용 검증을 대신하지 않는다.
+
+GitHub workflow Actions 8종(총 24개 사용 위치)은 2026-10-06 GitHub API로
+조회한 기존 major 태그의 실제 전체 commit SHA로 고정했다. 일반 CI·
+Firebase cleanup·Supabase 점검·Play 제출의 기본 GitHub 토큰은
+`contents: read`이며 checkout 자격증명을 작업 디렉터리에 남기지 않는다.
+Sentry mirror는 `issues: write`를 유지한다. APK 작업은 Release와 dev 태그
+게시가 필요하여 기존 `contents: write` 및 checkout push 자격증명을 유지한다.
+루트 lint가 mutable action 참조를 거부하고 Dependabot이 Actions/npm의
+주간 갱신 PR을 생성하도록 설정했다. 외부 Actions 자체와 transitive
+Actions, 임의 npx/curl 설치 및 CircleCI secret 격리는 추가 검토 대상이다.
+[GitHub Actions 보안 지침](https://docs.github.com/en/actions/reference/security/secure-use).
+
 | 항목 | 현재 상태 | 다음 적용 조건 |
 | --- | --- | --- |
 | 이미지 비공개 | 서명 클라이언트 및 deferred SQL 준비 | 호환 클라이언트 배포와 실기기/Storage HTTP 확인 후 버킷 전환 |
