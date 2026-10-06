@@ -130,11 +130,11 @@ export function buildSentryInitOptions(
     appHangTimeoutInterval: state.config.appHangTimeoutSeconds,
     sendDefaultPii: false,
   };
-  const release = input.release?.trim();
+  const release = typeof input.release === 'string' ? input.release.trim() : null;
   if (release) {
     options.release = release;
   }
-  const dist = input.dist?.trim();
+  const dist = typeof input.dist === 'string' ? input.dist.trim() : null;
   if (dist) {
     options.dist = dist;
   }
