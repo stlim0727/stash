@@ -59,9 +59,9 @@ deployed edge function, which uses the default `fetch` transport.
 
 | Variable                 | Required | Purpose                                                        |
 | ------------------------ | -------- | -------------------------------------------------------------- |
-| `SENTRY_DSN`             | for prod | Sentry project DSN. Unset ⇒ the function is a no-op (200 skip). |
+| `SENTRY_DSN`             | for prod | Sentry project DSN. Unset ⇒ authenticated, valid webhooks return 200 skip. |
 | `FEEDBACK_RELEASE`       | optional | Release tag attached to events; defaults to the report's `app_version`. |
-| `FEEDBACK_BRIDGE_SECRET` | optional | Shared secret; when set, the webhook must send it as the `x-feedback-bridge-secret` header. |
+| `FEEDBACK_BRIDGE_SECRET` | always | Required shared secret, including local development and when no sink is configured. The webhook must send the matching `x-feedback-bridge-secret` header. |
 
 Set them with:
 
@@ -95,8 +95,16 @@ supabase secrets set FEEDBACK_BRIDGE_SECRET="<same-random-shared-secret>"
 
 The `feedback_bridge_secret` Vault value (sent as the `x-feedback-bridge-secret`
 header) must equal the function's `FEEDBACK_BRIDGE_SECRET` env, or the function
-rejects the webhook (401). Until `feedback_bridge_url` is set the trigger is a
-no-op; reports are always persisted regardless — forwarding is best-effort.
+rejects a missing or mismatched header (401). If the function environment secret
+is missing, every POST returns 503, even when `SENTRY_DSN` is unset. Configure a
+non-empty Vault `feedback_bridge_secret` and the identical function
+`FEEDBACK_BRIDGE_SECRET` before enabling delivery; neither value is optional.
+
+Until `feedback_bridge_url` is set the trigger is a no-op. If the URL is set but
+the Vault secret is missing, the trigger sends an empty header and the function
+rejects it. Reports are always persisted regardless — forwarding is best-effort;
+a stored row does not prove it reached Sentry. When no sink is configured, only
+an authenticated, valid webhook receives the 200 skip response.
 
 > Note: this project never had the dashboard-managed Database Webhooks feature
 > (`supabase_functions` schema) enabled, so the trigger calls `net.http_post`
@@ -104,6 +112,13 @@ no-op; reports are always persisted regardless — forwarding is best-effort.
 
 ## Local development
 
+Use a local env file with a non-empty `FEEDBACK_BRIDGE_SECRET`, and send that
+same value in `x-feedback-bridge-secret` for local webhook requests:
+
 ```bash
-supabase functions serve feedback-bridge
+supabase functions serve feedback-bridge --env-file <local-env-file>
 ```
+
+A local sink is optional; authentication is not. The handler tests cover missing
+configuration (503), missing/wrong headers (401), and authenticated no-sink
+requests (200 skip) without making an external delivery.
