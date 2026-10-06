@@ -62,8 +62,12 @@ export class SplashCoordinator {
     this.hideFn = deps.hideAsync ?? platformHideAsync;
     this.markAppLoadedFn = deps.markAppLoaded ?? platformMarkAppLoaded;
     this.maxHoldMs = deps.maxHoldMs ?? DEFAULT_SPLASH_MAX_HOLD_MS;
-    this.setTimeoutFn = deps.setTimeoutFn ?? setTimeout;
-    this.clearTimeoutFn = deps.clearTimeoutFn ?? clearTimeout;
+    this.setTimeoutFn = deps.setTimeoutFn
+      ? ((...args: Parameters<typeof setTimeout>) => deps.setTimeoutFn!(...args)) as typeof setTimeout
+      : ((fn: () => void, ms?: number) => globalThis.setTimeout(fn, ms)) as typeof setTimeout;
+    this.clearTimeoutFn = deps.clearTimeoutFn
+      ? ((...args: Parameters<typeof clearTimeout>) => deps.clearTimeoutFn!(...args)) as typeof clearTimeout
+      : ((id?: Parameters<typeof clearTimeout>[0]) => globalThis.clearTimeout(id)) as typeof clearTimeout;
   }
 
   /**

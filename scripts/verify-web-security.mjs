@@ -127,7 +127,9 @@ try {
       const command = pending.get(message.id); if (!command) return;
       pending.delete(message.id); clearTimeout(command.timeout);
       if (message.error) command.reject(new Error(message.error.message)); else command.resolve(message.result);
-    } else if (message.method === 'Runtime.exceptionThrown') { exceptions.push(message.params.exceptionDetails.text); }
+    } else if (message.method === 'Runtime.exceptionThrown') {
+      exceptions.push(message.params.exceptionDetails.exception?.description || message.params.exceptionDetails.text);
+    }
     else if (message.method === 'Log.entryAdded' && message.params.entry.source === 'security') { violations.push(message.params.entry.text); }
     else if (message.method === 'Fetch.requestPaused') {
       const { request, requestId } = message.params;
