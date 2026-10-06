@@ -1,3 +1,4 @@
+import { isPublicPreviewUrl } from '@/domain/preview-network';
 import { ProtectedImage } from '@/ui/ProtectedImage';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
@@ -1211,9 +1212,9 @@ export default function BookmarkDetailScreen({
       ) : null}
       {/* Compact byline: favicon · host · status, instead of a header card. */}
       <View style={styles.byline}>
-        {bookmark.favicon_url ? (
+        {bookmark.favicon_url && isPublicPreviewUrl(bookmark.favicon_url) ? (
           <View style={[styles.bylineFavTile, { borderColor: palette.border }]}>
-            <Image source={{ uri: bookmark.favicon_url }} style={styles.bylineFav} resizeMode="contain" />
+            <ProtectedImage uri={bookmark.favicon_url} style={styles.bylineFav} resizeMode="contain" />
           </View>
         ) : null}
         {/* `accessible` + `accessibilityLabel` on this outer View give

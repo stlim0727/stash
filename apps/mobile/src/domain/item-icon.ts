@@ -1,3 +1,4 @@
+import { isPublicPreviewUrl } from './preview-network.ts';
 import punycode from 'punycode/punycode.js';
 import { parse } from 'tldts';
 
@@ -150,7 +151,7 @@ export function monogramIcon(bookmark: Bookmark): MonogramIcon {
 
 export function itemIcon(bookmark: Bookmark): ItemIcon {
   const favicon = bookmark.favicon_url?.trim();
-  if (favicon) {
+  if (favicon && isPublicPreviewUrl(favicon)) {
     return { kind: 'favicon', uri: favicon };
   }
   return monogramIcon(bookmark);

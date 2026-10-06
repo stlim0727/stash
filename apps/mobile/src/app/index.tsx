@@ -273,8 +273,8 @@ function ItemIcon({
     // aspect ratios from stretching.
     return (
       <View testID={testID} style={[sizeStyle, styles.faviconTile, { borderColor: palette.border }]}>
-        <Image
-          source={{ uri: icon.uri }}
+        <ProtectedImage
+          uri={icon.uri}
           style={styles.faviconImage}
           resizeMode="contain"
           onError={() => setFaviconFailed(true)}
