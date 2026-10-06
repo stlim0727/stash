@@ -2255,6 +2255,36 @@ test('a card with a preview image still shows the ribbon site label unchanged', 
   expect(screen.getByText('WIRED')).toBeTruthy();
 });
 
+test('a card with a preview image renders the site badge on the preview image and opens the URL', async () => {
+  const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-0000000000a3',
+      title: 'Preview badge check',
+      url: 'https://example.com/article/98765',
+      url_hash: 'https://example.com/article/98765',
+      site_name: 'WIRED',
+      preview_image_url: 'https://example.com/preview.png',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() =>
+    expect(
+      screen.getByTestId('inbox-card-source-7e64cf1e-0000-4000-8000-0000000000a3'),
+    ).toBeTruthy(),
+  );
+
+  const sourceBadge = screen.getByTestId(
+    'inbox-card-source-7e64cf1e-0000-4000-8000-0000000000a3',
+  );
+  expect(within(sourceBadge).getByText('WIRED')).toBeTruthy();
+
+  await fireEvent.press(sourceBadge);
+  expect(openURL).toHaveBeenCalledWith('https://example.com/article/98765');
+  openURL.mockRestore();
+});
+
 test('a card without a preview image renders a fallback preview banner with the ribbon site label', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({
