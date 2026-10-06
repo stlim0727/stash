@@ -154,10 +154,24 @@ try {
   };
   for (const path of ['/', '/settings', '/privacy.html', '/account-deletion.html']) {
     await navigate(path);
-    const state = JSON.parse(await evaluate('JSON.stringify({title:document.title,text:document.body.innerText,buttons:document.querySelectorAll("button,[role=button]").length})'));
+    const needsHydration = path === '/' || path === '/settings';
+    const deadline = Date.now() + 30_000;
+    let state;
+    // A fixed two-second snapshot can observe the loading shell on a busy CI
+    // runner. Wait for the actual content/hydration conditions, retaining the
+    // same assertions and a bounded failure with useful browser diagnostics.
+    do {
+      state = JSON.parse(await evaluate('JSON.stringify({path:location.pathname,title:document.title,text:document.body.innerText,buttons:document.querySelectorAll("button,[role=button]").length})'));
+      if (state.path === path && /Keepory/.test(state.title) && state.text.trim().length > 40
+        && (!needsHydration || state.buttons > 0)) break;
+      if (exceptions.length || violations.length) break;
+      await delay(100);
+    } while (Date.now() < deadline);
+    const diagnostics = JSON.stringify({state, exceptions, violations});
+    assert.equal(state.path, path, `${path} must navigate: ${diagnostics}`);
     assert.match(state.title, /Keepory/);
-    assert.ok(state.text.trim().length > 40, `${path} must render content`);
-    if (path === '/' || path === '/settings') assert.ok(state.buttons > 0, `${path} must hydrate`);
+    assert.ok(state.text.trim().length > 40, `${path} must render content within 30 seconds: ${diagnostics}`);
+    if (needsHydration) assert.ok(state.buttons > 0, `${path} must hydrate within 30 seconds: ${diagnostics}`);
   }
   assert.deepEqual(exceptions, [], 'App pages must have no runtime exceptions');
   assert.deepEqual(violations, [], 'App pages must not violate CSP');
