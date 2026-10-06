@@ -63,16 +63,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
           cache: pnpm
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
@@ -100,7 +100,7 @@ jobs:
       # dependency set. Saving unconditionally lets native task outputs accumulate
       # run-over-run so each build only recompiles what actually changed.
       - name: Restore Gradle cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.gradle/caches
@@ -114,7 +114,7 @@ jobs:
       # ccache lives outside it and turns the slow reanimated/folly/fabric
       # recompiles into cache hits on subsequent builds.
       - name: Cache ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.ccache
           key: ccache-${{ runner.os }}-${{ github.sha }}
@@ -136,7 +136,7 @@ jobs:
       # skip unchanged files and only re-transform what's new, cutting the
       # bundleReleaseJsAndAssets Gradle task from ~9 min back toward ~5 min.
       - name: Restore Metro cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: /tmp/metro-*
           key: metro-${{ runner.os }}-${{ github.sha }}
@@ -391,7 +391,7 @@ jobs:
       # step above falls back via prefix match to pick up the most recent one.
       - name: Save Gradle cache
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             ~/.gradle/caches
@@ -403,7 +403,7 @@ jobs:
       # commit); restore above uses prefix fallback to the most recent entry.
       - name: Save Metro cache
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: /tmp/metro-*
           key: metro-${{ runner.os }}-${{ github.sha }}
@@ -658,7 +658,7 @@ jobs:
       # rolling `dev` prerelease in place. The action creates/updates the tag at
       # this commit, so no tag has to be pushed from a constrained environment.
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           prerelease: ${{ steps.meta.outputs.prerelease }}
           make_latest: ${{ steps.meta.outputs.make_latest }}
