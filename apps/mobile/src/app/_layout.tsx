@@ -24,6 +24,12 @@ import { FloatingReportButton } from '@/feedback/FloatingReportButton';
 import { UpdateRequired } from '@/ui/UpdateRequired';
 import { AnalyticsProvider } from '@/analytics/provider';
 import { PostHogFullProvider } from '@/analytics-full/posthog-full-runtime';
+import { preventAutoHideAsync } from '@/ui/splash-platform';
+import { SplashReadinessObserver } from '@/ui/SplashReadinessObserver';
+
+// Prevent native splash screen from auto-hiding before local storage is ready.
+// Catch rejections so unsupported platforms (e.g., SSR or web fallback) do not crash early.
+void preventAutoHideAsync().catch(() => {});
 
 // Capture console output into an in-memory buffer so the "Report a problem"
 // screen can attach real logs. Install before anything else so early errors
@@ -130,6 +136,7 @@ function RootLayout() {
           <I18nProvider>
             <SupabaseAuthProvider>
               <BookmarksProvider>
+                <SplashReadinessObserver />
                 <AnalyticsProvider>
                   <PostHogFullProvider>
                     <CaptureToastProvider>

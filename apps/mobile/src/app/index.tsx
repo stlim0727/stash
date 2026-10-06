@@ -140,6 +140,7 @@ import {
   usePreviewImageFailuresVersion,
 } from '@/domain/preview-image-cache';
 import { setHeroDiagnosticsSnapshot } from '@/feedback/hero-diagnostics-session';
+import { splashCoordinator } from '@/ui/splash-coordinator';
 
 function statusLabel(
   bookmark: Bookmark,
@@ -1107,6 +1108,15 @@ export default function InboxScreen() {
       active = false;
     };
   }, [isLoading]);
+  // Signal to the startup splash coordinator that the Inbox list layout and
+  // its restored view preferences have committed, allowing the native splash
+  // screen to dismiss smoothly without exposing an unhydrated loading state
+  // or layout jump.
+  useEffect(() => {
+    if ((viewOptionsReady && !isLoading) || loadError) {
+      splashCoordinator.signalInboxReady();
+    }
+  }, [viewOptionsReady, isLoading, loadError]);
   useEffect(() => {
     if (!sortLoaded.current) {
       return;
