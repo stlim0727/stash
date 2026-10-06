@@ -205,3 +205,31 @@ test('isRepairableSourceTitle recognizes degraded Bbs View on ppomppu (STASH-70)
     false,
   );
 });
+
+test('enrichBookmark repairs a bookmark previously saved with generic Google Search title', async () => {
+  const result = await enrichBookmark(
+    makeBookmark({
+      url: 'https://www.google.com/search?q=expo+sqlite',
+      title: 'Google Search',
+      title_is_derived: false,
+    }),
+    async () => ({ title: 'expo sqlite', site_name: 'Google' }),
+  );
+
+  assert.equal(result.patch.title, 'expo sqlite');
+  assert.equal(result.patch.title_is_derived, false);
+});
+
+test('enrichBookmark repairs a bookmark previously saved with generic YouTube title', async () => {
+  const result = await enrichBookmark(
+    makeBookmark({
+      url: 'https://www.youtube.com/watch?v=LNysDlsp26Q',
+      title: 'YouTube',
+      title_is_derived: false,
+    }),
+    async () => ({ title: 'Real Video Title', site_name: 'YouTube' }),
+  );
+
+  assert.equal(result.patch.title, 'Real Video Title');
+  assert.equal(result.patch.title_is_derived, false);
+});
