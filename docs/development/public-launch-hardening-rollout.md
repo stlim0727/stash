@@ -98,6 +98,25 @@ manual redirect는 다음 요청 전에 Location을 재검사하며 최대 5회,
 
 ## 남은 출시 작업의 의존 관계
 
+### 웹 헤더 및 배포 의존성 후속 조치 (2026-10-06)
+
+`public/_headers`에 모든 static asset/SPA 경로용 CSP(`base-uri 'none'`,
+`object-src 'none'`, `frame-ancestors 'none'`), DENY framing, nosniff,
+no-referrer, camera/microphone/geolocation 차단을 추가했다. 외부 북마크로
+이동하거나 이미지를 요청할 때 페이지 URL의 전달을 줄인다. 이 CSP는
+script-src를 제한하지 않으므로 스크립트 주입 방어 완료로 표시하지 않는다.
+Expo inline bootstrap 및 동적 스타일과 호환되는 script/style 정책과 실제
+Cloudflare 응답·브라우저 검증은 남아 있다.
+[Workers Static Assets 헤더 지침](https://developers.cloudflare.com/workers/static-assets/headers/).
+
+배포 설치는 `pnpm install --frozen-lockfile`로 고정하여 manifest/lockfile
+불일치 시 배포를 중단한다. 의존성 취약점 점검, Actions SHA 고정 및
+빌드 자격증명 접근 검토는 별도 남은 항목이다.
+
+로컬 검증: 루트 `pnpm lint`, shell 구문 및 diff 검사 통과. Expo 웹 export
+성공과 export의 `_headers`가 원본과 바이트 단위로 일치함을 확인했다.
+이는 배포 서버가 헤더를 실제 반환하는지에 대한 증거는 아니다.
+
 | 항목 | 현재 상태 | 다음 적용 조건 |
 | --- | --- | --- |
 | 이미지 비공개 | 서명 클라이언트 및 deferred SQL 준비 | 호환 클라이언트 배포와 실기기/Storage HTTP 확인 후 버킷 전환 |
