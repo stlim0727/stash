@@ -3672,19 +3672,20 @@ export default function InboxScreen() {
                         accessibilityState={selectionMode ? { checked: isSelected } : undefined}
                         onPress={selectionMode ? () => toggleSelect(item.id) : openLink}
                         onLongPress={handleItemLongPress}
-                        hitSlop={8}
                         style={({ pressed }) => [
-                          styles.cardPreviewBadge,
+                          styles.cardPreviewBadgeWrap,
                           { opacity: pressed ? 0.75 : 1 },
                         ]}
                       >
-                        <HighlightedText
-                          style={styles.cardPreviewBadgeText}
-                          numberOfLines={1}
-                          text={siteLabelText}
-                          query={highlightQuery}
-                          highlightStyle={highlightStyle}
-                        />
+                        <View style={styles.cardPreviewBadge}>
+                          <HighlightedText
+                            style={styles.cardPreviewBadgeText}
+                            numberOfLines={1}
+                            text={siteLabelText}
+                            query={highlightQuery}
+                            highlightStyle={highlightStyle}
+                          />
+                        </View>
                       </Pressable>
                     ) : null}
                   </View>
@@ -4523,18 +4524,27 @@ const styles = StyleSheet.create({
     width: '100%',
     height: CARD_PREVIEW_HEIGHT,
   },
-  cardPreviewBadge: {
+  cardPreviewBadgeWrap: {
     position: 'absolute',
-    bottom: 8,
-    left: 8,
-    maxWidth: '80%',
+    bottom: 0,
+    left: 0,
+    minHeight: uiMetrics.touchTarget,
+    minWidth: uiMetrics.touchTarget,
+    justifyContent: 'flex-end',
+    alignItems: 'flex-start',
+    paddingLeft: 8,
+    paddingBottom: 8,
+    maxWidth: '85%',
+    ...overlayLayer(3),
+  },
+  cardPreviewBadge: {
+    maxWidth: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'rgba(15, 23, 42, 0.75)',
     borderRadius: 999,
     paddingVertical: 3,
     paddingHorizontal: 8,
-    ...overlayLayer(3),
     ...Platform.select({
       web: {
         backdropFilter: 'blur(8px)',
