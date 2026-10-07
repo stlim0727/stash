@@ -199,7 +199,7 @@ test('the anonymous nudge shows once an anonymous user has 2+ bookmarks, with a 
   ).toBeTruthy();
 
   await fireEvent.press(screen.getByText('Sign In'));
-  expect(mockPush).toHaveBeenCalledWith('/settings');
+  expect(mockPush).toHaveBeenCalledWith({ pathname: '/settings', params: { focus: 'account' } });
 });
 
 test('dismissing the nudge hides it immediately and durably — it never reappears', async () => {

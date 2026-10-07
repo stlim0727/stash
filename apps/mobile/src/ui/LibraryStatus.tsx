@@ -53,9 +53,11 @@ export function LibraryStatus({ bookmarks, queue, authStatus, loading, loadError
   const actionable = phase === 'sign_in' || phase === 'permission' || phase === 'attention';
   if (inline) {
     if (actionable || !key) return null;
+    const isInteractive = phase === 'paused' || (guest && saved);
     return <Text testID="library-status-inline" numberOfLines={1} accessibilityLiveRegion="polite"
       style={{ color: palette.textSecondary, fontSize: 13, flexShrink: 1 }}
-      onPress={phase === 'paused' ? signIn : undefined} accessibilityRole={phase === 'paused' ? 'button' : undefined}>
+      onPress={isInteractive ? signIn : undefined} accessibilityRole={isInteractive ? 'button' : undefined}
+      accessibilityHint={guest && saved ? t('settings.account.signIn') : undefined}>
       · {t(key)}
     </Text>;
   }

@@ -22,13 +22,15 @@ const mockAuthSessionValue = {
   user: { id: 'user-test' },
 };
 let mockAuthSession: typeof mockAuthSessionValue | null = null;
+let mockAuthStatus: string | null = null;
 afterEach(() => {
   mockAuthSession = null;
+  mockAuthStatus = null;
   resetPreviewImageFailuresForTest();
 });
 jest.mock('@/supabase/auth-provider', () => ({
   useSupabaseAuth: () => ({
-    status: mockAuthSession ? 'anonymous' : 'not_configured',
+    status: mockAuthStatus ?? (mockAuthSession ? 'anonymous' : 'not_configured'),
     session: mockAuthSession,
     userId: mockAuthSession ? 'user-test' : null,
     message: mockAuthSession ? null : 'not configured',
@@ -1857,6 +1859,29 @@ test('the Home Tags menu action navigates to the dedicated tag-browse route', as
   expect(mockPush).toHaveBeenCalledWith('/browse/tags');
   expect(screen.queryByTestId('inbox-tag-cloud')).toBeNull();
   expect(screen.queryByTestId('inbox-cloud-tag')).toBeNull();
+});
+
+test('unauthenticated users see a Sign In action in the home menu leading to account choices', async () => {
+  fakeRepo.__reset([makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-00000000000a', title: 'Local-first software' })]);
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
+
+  await openHomeMenu(screen);
+  const signInAction = screen.getByRole('button', { name: 'Sign In' });
+  expect(signInAction).toBeTruthy();
+
+  await fireEvent.press(signInAction);
+  expect(mockPush).toHaveBeenCalledWith({ pathname: '/settings', params: { focus: 'account' } });
+});
+
+test('authenticated users do not see the redundant Sign In action in the home menu', async () => {
+  mockAuthStatus = 'authenticated';
+  fakeRepo.__reset([makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-00000000000a', title: 'Local-first software' })]);
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
+
+  await openHomeMenu(screen);
+  expect(screen.queryByRole('button', { name: 'Sign In' })).toBeNull();
 });
 
 test('the Home Tags menu action carries the active folder facet as the route scope', async () => {

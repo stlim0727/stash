@@ -104,7 +104,7 @@ export function AnonymousNudgeBanner({ isAnonymous, bookmarkCount, embedded = fa
         variant="secondary"
         size="sm"
         style={styles.signInButton}
-        onPress={() => router.push('/settings')}
+        onPress={() => router.push({ pathname: '/settings', params: { focus: 'account' } })}
       >
         {t('settings.account.signIn')}
       </Button>
