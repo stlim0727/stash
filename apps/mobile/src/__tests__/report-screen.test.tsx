@@ -647,7 +647,7 @@ test('navigates back after a successful submission after the timeout', async () 
 
 test('guest report sharing includes the description and preserves the draft on cancellation', async () => {
   mockAuth = { ...mockAuth, status: 'anonymous' };
-  const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: Share.dismissedAction });
+  const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: Share.dismissedAction, activityType: undefined });
   const screen = await renderReport();
   await fireEvent.changeText(screen.getByLabelText('Problem description'), 'The search field behaved unexpectedly');
   await fireEvent.press(screen.getByLabelText('Share report'));

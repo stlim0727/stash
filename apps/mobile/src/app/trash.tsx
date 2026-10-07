@@ -48,7 +48,7 @@ export default function TrashScreen() {
                 {t('trash.emptyButton')}
               </Button>
             </View>
-          ) : null
+          ) : undefined
         }
         renderItem={({ item }) => (
           <Pressable

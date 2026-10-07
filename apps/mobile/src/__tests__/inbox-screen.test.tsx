@@ -2105,7 +2105,7 @@ test('the visible ⋯ overflow button opens the action menu (no long-press neede
 });
 
 test('a memo action menu shares its raw Markdown body', async () => {
-  const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: 'sharedAction' });
+  const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: 'sharedAction', activityType: undefined });
   const markdown = '# Weekly plan\n\n- Ship memo support';
   fakeRepo.__reset([
     makeStoredBookmark({

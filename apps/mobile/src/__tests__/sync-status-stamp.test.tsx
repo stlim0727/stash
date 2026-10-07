@@ -265,8 +265,9 @@ test('STASH-7E: returning online without a network event clears the banner and r
   const listeners = new Set<(state: AppStateStatus) => void>();
   const originalObserver = AppState.addEventListener;
   AppState.addEventListener = jest.fn((_event, listener) => {
-    listeners.add(listener);
-    return { remove: () => { listeners.delete(listener); } };
+    const changeListener = listener as (state: AppStateStatus) => void;
+    listeners.add(changeListener);
+    return { remove: () => { listeners.delete(changeListener); } };
   });
   try {
     apiMock.__listBookmarksUpdatedSinceMock.mockRejectedValueOnce(new Error('Network request failed'));

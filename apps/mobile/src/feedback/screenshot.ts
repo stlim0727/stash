@@ -10,7 +10,7 @@ export interface FeedbackScreenshot {
   surface: string;
 }
 
-type ViewRef = RefObject<View | null>;
+type ViewRef = RefObject<React.ComponentRef<typeof View> | null>;
 
 function webPixelRatio(): number {
   const value =

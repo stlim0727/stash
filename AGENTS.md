@@ -68,7 +68,7 @@ do. This file, `CLAUDE.md`, `docs/`, `.claude/skills` mirrored as
 
 ## Project Snapshot
 
-Stash is an Expo SDK 56 bookmark app in `apps/mobile`, using TypeScript,
+Stash is an Expo SDK 58 bookmark app in `apps/mobile`, using TypeScript,
 expo-router, local-first storage, Supabase sync, and Cloudflare Workers static
 web hosting.
 

@@ -5,12 +5,12 @@ import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 
-test('withShareReceiver plugin and @expo/config-plugins can be resolved from mobile plugins directory', () => {
+test('withShareReceiver plugin and expo/config-plugins can be resolved from mobile plugins directory', () => {
   const pluginDir = fileURLToPath(new URL('../../plugins', import.meta.url));
 
-  // Resolving @expo/config-plugins must not throw MODULE_NOT_FOUND (prevents EAS build failures)
+  // Resolving expo/config-plugins must not throw MODULE_NOT_FOUND (prevents EAS build failures)
   assert.doesNotThrow(() => {
-    require.resolve('@expo/config-plugins', { paths: [pluginDir] });
+    require.resolve('expo/config-plugins', { paths: [pluginDir] });
   });
 
   const withShareReceiver = require('../../plugins/withShareReceiver.js');

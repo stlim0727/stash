@@ -59,7 +59,14 @@
       ],
       "./plugins/withShareReceiver.js",
       "@sentry/react-native/expo",
-      "expo-notifications"
+      "expo-notifications",
+      "expo-localization",
+      "expo-secure-store",
+      "expo-sharing",
+      "expo-sqlite",
+      "expo-status-bar",
+      "expo-web-browser",
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true,

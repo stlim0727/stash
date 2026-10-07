@@ -64,7 +64,7 @@ function renderInbox() {
 // Capture every hardware-back handler the screen registers. The screen
 // re-registers on each query/filter change, so the most recent entry is the one
 // bound to the live state.
-let backHandlers: Array<() => boolean | null | undefined> = [];
+let backHandlers: Array<Parameters<typeof BackHandler.addEventListener>[1]> = [];
 let addSpy: jest.SpyInstance;
 
 // The screen only subscribes to hardware back on Android (it's a no-op elsewhere
@@ -78,7 +78,7 @@ beforeEach(() => {
   backHandlers = [];
   addSpy = jest
     .spyOn(BackHandler, 'addEventListener')
-    .mockImplementation((_event: string, handler: () => boolean | null | undefined) => {
+    .mockImplementation((_event, handler) => {
       backHandlers.push(handler);
       return {
         remove: () => {
@@ -99,7 +99,7 @@ async function pressBack(): Promise<boolean | null | undefined> {
   expect(handler).toBeTruthy();
   let result: boolean | null | undefined;
   await act(async () => {
-    result = handler();
+    result = handler({ type: 'hardwareBackPress', timeStamp: Date.now() });
   });
   return result;
 }

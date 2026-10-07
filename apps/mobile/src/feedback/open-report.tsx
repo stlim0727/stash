@@ -7,10 +7,10 @@ import { captureFeedbackScreenshot } from '@/feedback/screenshot';
 import { setPendingFeedbackScreenshot, setPendingFeedbackSource, type FeedbackSourceContext } from '@/feedback/screenshot-session';
 
 const SCREENSHOT_CAPTURE_TIMEOUT_MS = 3000;
-const CaptureContext = createContext<React.RefObject<View | null>>({ current: null });
+const CaptureContext = createContext<React.RefObject<React.ComponentRef<typeof View> | null>>({ current: null });
 
 export function FeedbackCaptureProvider({ children }: { children: ReactNode }) {
-  const captureRef = useRef<View>(null);
+  const captureRef = useRef<React.ComponentRef<typeof View>>(null);
   return (
     <CaptureContext.Provider value={captureRef}>
       <View ref={captureRef} collapsable={false} style={{ flex: 1 }}>{children}</View>
