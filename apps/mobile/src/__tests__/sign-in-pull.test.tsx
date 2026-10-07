@@ -339,3 +339,29 @@ test('an ownership checkpoint failure prevents uploads and leaves guest captures
     expect(fakeRepo.__bookmarks()).toHaveLength(1);
   } finally { spy.mockRestore(); }
 });
+
+
+test('direct A to B to A switches while paused do not reuse a previous ready state', async () => {
+  authMock.__setAuth({ status: 'authenticated', session: realSession, userId: realSession.user.id });
+  apiMock.__setRemote([makeStoredBookmark({ id: REMOTE_ID, user_id: realSession.user.id })]);
+  const { result, rerender } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.accountLibraryState).toBe('ready'));
+  expect(result.current.inbox).toHaveLength(1);
+  await act(async () => { await result.current.setSyncPaused(true); });
+
+  const secondSession = { ...realSession, user: { ...realSession.user, id: 'second-real-user' } };
+  authMock.__setAuth({ status: 'authenticated', session: secondSession, userId: secondSession.user.id });
+  await act(async () => { rerender(undefined); });
+  await waitFor(() => expect(fakeRepo.__meta(CACHE_OWNER_KEY)).toContain('second-real-user'));
+  expect(result.current.accountLibraryState).toBe('checking');
+  expect(result.current.inbox).toHaveLength(0);
+
+  authMock.__setAuth({ status: 'authenticated', session: realSession, userId: realSession.user.id });
+  await act(async () => { rerender(undefined); });
+  await waitFor(() => expect(fakeRepo.__meta(CACHE_OWNER_KEY)).toContain('real-user'));
+  expect(result.current.inbox).toHaveLength(0);
+  expect(result.current.accountLibraryState).toBe('checking');
+  await act(async () => { await result.current.setSyncPaused(false); });
+  await waitFor(() => expect(result.current.accountLibraryState).toBe('ready'));
+  expect(result.current.inbox).toHaveLength(1);
+});

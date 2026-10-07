@@ -3,6 +3,8 @@ import { test } from 'node:test';
 
 import {
   applyAccountTransition,
+  CACHE_OWNER_KEY,
+  readCacheOwner,
   planAccountTransition,
   planLogoutCacheClear,
 } from './account-transition.ts';
@@ -820,4 +822,21 @@ test('anonymous rows with pending or failed edits and deletes are carried over w
     assert.deepEqual(plan.rehome, [edited, deleted]);
     assert.deepEqual(plan.drop, []);
   }
+});
+
+
+test('cleared cache owner overrides stale legacy ownership after interrupted logout', async () => {
+  const metadata = new Map([
+    [CACHE_OWNER_KEY, ''],
+    ['synced_user_id', 'previous-real-user'],
+    ['synced_user_is_anonymous', 'false'],
+  ]);
+  const repository = {
+    getMeta: async (key: string) => metadata.get(key) ?? null,
+  } as BookmarkRepository;
+  assert.equal(await readCacheOwner(repository), null);
+  metadata.delete(CACHE_OWNER_KEY);
+  assert.deepEqual(await readCacheOwner(repository), {
+    id: 'previous-real-user', isAnonymous: false,
+  });
 });

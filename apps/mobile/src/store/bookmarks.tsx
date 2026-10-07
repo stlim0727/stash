@@ -1002,11 +1002,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const [accountTransfer, setAccountTransfer] = useState<{ userId: string; count: number } | null>(null);
   const dismissAccountTransfer = useCallback(() => setAccountTransfer(null), []);
   useEffect(() => {
-    if (!auth.userId) {
-      setAccountTransfer(null);
-      setLoadedAccountUserId(null);
-      setAccountLibraryFailureUserId(null);
-    }
+    // A direct A → B → A switch must not reuse A's previous successful pull.
+    setAccountTransfer(null);
+    setLoadedAccountUserId(null);
+    setAccountLibraryFailureUserId(null);
   }, [auth.userId]);
   const hideAccountCache = auth.status === "loading" || auth.status === "error" ||
     auth.status === "session_expired" ||

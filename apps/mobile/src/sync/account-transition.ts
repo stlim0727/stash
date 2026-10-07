@@ -37,7 +37,9 @@ export const CACHE_OWNER_KEY = 'bookmark_cache_owner';
 
 export async function readCacheOwner(repository: BookmarkRepository): Promise<SyncedUserRef | null> {
   const raw = await repository.getMeta(CACHE_OWNER_KEY);
-  if (raw) {
+  // An empty marker is a logout tombstone, even if legacy clears were interrupted.
+  if (raw === '') return null;
+  if (raw !== null) {
     const owner = JSON.parse(raw) as SyncedUserRef;
     if (!owner || typeof owner.id !== 'string' || !owner.id || typeof owner.isAnonymous !== 'boolean') {
       throw new Error('Invalid bookmark cache ownership.');
