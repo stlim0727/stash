@@ -119,7 +119,10 @@ test.each(['authenticated', 'not_configured', 'loading', 'session_expired', 'err
   mockAuth.status = status;
   const screen = await renderInbox();
 
-  await waitFor(() => expect(screen.getByTestId('inbox-empty-onboarding')).toBeTruthy());
+  // This fixture has no usable session/pull. A signed-in account's emptiness
+  // is still unknown, so show verification rather than first-use onboarding.
+  await waitFor(() => expect(screen.getByTestId(status === 'authenticated' ? 'account-library-notice' : 'inbox-empty-onboarding')).toBeTruthy());
+  if (status === 'authenticated') expect(screen.queryByTestId('inbox-empty-onboarding')).toBeNull();
   expect(screen.queryByTestId('inbox-empty-account')).toBeNull();
 });
 

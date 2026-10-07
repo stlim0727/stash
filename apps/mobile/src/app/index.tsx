@@ -42,6 +42,8 @@ import { usePalette, uiMetrics } from '@/theme';
 import { useOpenReport } from '@/feedback/open-report';
 import { LibraryHeader } from '@/ui/LibraryHeader';
 import { LibraryStatus } from '@/ui/LibraryStatus';
+import { AccountLibraryNotice } from '@/ui/AccountLibraryNotice';
+import { useNetworkOffline } from '@/ui/use-network-offline';
 import { AnonymousNudgeBanner } from '@/ui/AnonymousNudgeBanner';
 import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
@@ -437,6 +439,9 @@ export default function InboxScreen() {
     syncNow,
     syncPaused,
     librarySyncFlow,
+    accountLibraryState = 'ready',
+    accountTransferCount = 0,
+    dismissAccountTransfer,
     loadError,
     getBookmark,
     getTagsForBookmark,
@@ -461,6 +466,7 @@ export default function InboxScreen() {
     mergeCollections,
     refreshBookmarkPreview,
   } = useBookmarks();
+  const offline = useNetworkOffline();
   const { show: showToast } = useCaptureToast();
   const [openingBookmarkId, setOpeningBookmarkId] = useState<string | null>(null);
   const openingBookmarkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2638,7 +2644,7 @@ export default function InboxScreen() {
               </Pressable>
             </View>
           ) : (
-            <LibraryHeader count={inbox.length} unread={newSuggestionsCount}
+            <LibraryHeader count={accountLibraryState !== 'ready' && inbox.length === 0 ? null : inbox.length} unread={newSuggestionsCount}
               menuOpen={homeMenuOpen} disabled={capturing} onTop={scrollToTop}
               onMenu={() => setHomeMenuOpen(true)}
               status={<LibraryStatus inline bookmarks={inbox} queue={queue} authStatus={auth.status}
@@ -2985,6 +2991,9 @@ export default function InboxScreen() {
         ]}
         ListHeaderComponent={
           <>
+            <AccountLibraryNotice state={accountLibraryState} transferredCount={accountTransferCount} onDismiss={dismissAccountTransfer}
+              offline={offline} paused={syncPaused}
+              onRetry={() => { void syncNow({ force: true }); }} onSettings={() => router.push('/settings')} />
             <LibraryStatus bookmarks={inbox} queue={queue} authStatus={auth.status}
               flow={librarySyncFlow} scopeKey={auth.userId}
               loading={isLoading} loadError={loadError} syncing={isSyncing} paused={syncPaused}
@@ -3011,7 +3020,7 @@ export default function InboxScreen() {
         ListEmptyComponent={
           isLoading ? (
             <Text style={[styles.empty, { color: palette.textSecondary }]}>{t('inbox.loading')}</Text>
-          ) : searching ? (
+          ) : accountLibraryState !== 'ready' ? <View /> : searching ? (
             // A zero-result search is a recovery point, not a dead end: explain
             // the broadened scope (tags/folders/sites are searchable) and offer
             // a visible Clear control (Android's keyboard has no native one).

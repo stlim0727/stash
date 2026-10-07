@@ -810,3 +810,14 @@ test('applyAccountTransition does not exclude a non-image single-row rehome outs
 
   assert.equal(getSyncStatusDiagnostics()!.syncedWithoutFailure, 1);
 });
+
+
+test('anonymous rows with pending or failed edits and deletes are carried over with latest content', () => {
+  for (const sync_status of ['pending', 'failed'] as const) {
+    const edited = bookmark({ sync_status, ever_synced: true, notes: 'Latest local note' });
+    const deleted = bookmark({ id: REMOTE_B, sync_status, ever_synced: true, deleted_at: '2026-10-07T00:00:00Z' });
+    const plan = planAccountTransition({ id: 'anon', isAnonymous: true }, { id: 'real', isAnonymous: false }, [edited, deleted]);
+    assert.deepEqual(plan.rehome, [edited, deleted]);
+    assert.deepEqual(plan.drop, []);
+  }
+});

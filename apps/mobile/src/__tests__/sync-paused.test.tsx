@@ -329,7 +329,7 @@ test('resetLibrary succeeds even while a paused syncNow call is mid-check', asyn
     releaseGate = resolve;
   });
   fakeRepo.repository.getMeta = (key: string) =>
-    key === 'synced_user_id' ? gate.then(() => originalGetMeta(key)) : originalGetMeta(key);
+    key === 'bookmark_cache_owner' ? gate.then(() => originalGetMeta(key)) : originalGetMeta(key);
 
   // Adding a bookmark while paused triggers the auto-sync effect's syncNow()
   // call, which immediately blocks on the gated read above.
@@ -372,10 +372,10 @@ test('queued work left sitting while paused does not re-arm the auto-sync timer 
   });
 
   const originalGetMeta = fakeRepo.repository.getMeta;
-  let syncedUserIdReads = 0;
+  let cacheOwnerReads = 0;
   fakeRepo.repository.getMeta = (key: string) => {
-    if (key === 'synced_user_id') {
-      syncedUserIdReads += 1;
+    if (key === 'bookmark_cache_owner') {
+      cacheOwnerReads += 1;
     }
     return originalGetMeta(key);
   };
@@ -392,7 +392,7 @@ test('queued work left sitting while paused does not re-arm the auto-sync timer 
     });
     // Guards the probe itself: if the trigger never fired at all, the
     // no-growth assertion below would pass vacuously.
-    const readsAfterSettling = syncedUserIdReads;
+    const readsAfterSettling = cacheOwnerReads;
     expect(readsAfterSettling).toBeGreaterThan(0);
 
     // Nothing changes from here on: no save, no unpause, no auth change. Four
@@ -400,7 +400,7 @@ test('queued work left sitting while paused does not re-arm the auto-sync timer 
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 1000));
     });
-    expect(syncedUserIdReads).toBe(readsAfterSettling);
+    expect(cacheOwnerReads).toBe(readsAfterSettling);
     expect(apiMock.__createBookmarkMock).not.toHaveBeenCalled();
   } finally {
     fakeRepo.repository.getMeta = originalGetMeta;

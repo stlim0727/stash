@@ -51,7 +51,7 @@ re-home path is the fallback for when linking can't happen.
 - **`src/sync/account-transition.ts`** — `planAccountTransition(previous, current, localBookmarks)`
   is a pure function returning a plan (`carry-over` → `rehome`, `switch` → `drop`,
   `none`/`first` → nothing). Only **cloud-owned** rows (real remote identity +
-  `synced`) are ever touched; device-local and seeded rows are left alone. The
+  confirmed synced at least once, including later pending edits/deletes) are ever touched; device-local and seeded rows are left alone. The
   remote-identity check makes the plan **self-idempotent**: once a row is
   re-homed (now a local id) or dropped (gone), it no longer matches, so a retry
   does nothing.
@@ -64,6 +64,40 @@ re-home path is the fallback for when linking can't happen.
 - **`src/store/bookmarks.tsx`** — `syncNow` runs the transition plan just before
   the pull: re-homed rows become local `pending` creates (and upload on the next
   sync); dropped rows are removed from the cache.
+
+## Interrupted uploads and sign-in feedback
+
+Cache ownership is stored separately from pull progress in `bookmark_cache_owner`,
+a single JSON value containing the user id and anonymity flag. Reconciliation
+persists this value **before uploading any bookmark**, including on a first sync.
+Previously ownership was only written at the end of a successful pull: an
+anonymous upload followed by a failed pull left confirmed guest rows ownerless,
+and a later real-account pull could delete them as missing remote rows. The
+older `synced_user_id` / `synced_user_is_anonymous` pair remains a migration
+fallback and still controls remote pull progress; it is not the upload ownership
+checkpoint. Logout clears both forms; a library reset clears repository metadata.
+An ownership write failure stops upload and leaves local captures intact.
+
+Anonymous carry-over includes confirmed rows with pending or failed edits and
+queued deletions. Their latest content and trash state become fresh creates;
+old queue entries are removed with identity replacement. Never-synced captures
+remain in their existing local create queue. A real A→B transition still replaces
+A's cache instead of merging it.
+
+Inbox and Settings share `accountLibraryState`: checking, error, or ready. A
+successful local reconciliation reveals carried-over rows before their uploads
+finish. Until the account's first successful pull, a missing list is not called
+an empty library and an unknown count is not shown as zero. Offline and paused
+states explain the wait; verification failures offer a forced retry. The sign-in
+result reports device preservation, can be acknowledged, and never claims cloud
+upload completion. A reset or departure from the session clears that result.
+
+Regression coverage: `sign-in-pull.test.tsx` exercises a real local capture,
+successful anonymous upload, failed anonymous pulls, then sign-in; it asserts
+both durable retention and upload under the real account. It also covers restart,
+legacy ownership, paused carry-over, latest guest edits, checkpoint failure,
+and retry. `inbox-syncing-state.test.tsx` checks that account checking/error states
+do not render first-use onboarding or a zero saved count.
 
 ## Known limitations / follow-ups
 

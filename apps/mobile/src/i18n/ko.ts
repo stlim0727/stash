@@ -8,6 +8,10 @@ import type { Catalog } from '@/i18n/messages';
  * The brand name "Keepory" is intentionally left untranslated.
  */
 export const ko: Catalog = {
+  'account.libraryChecking': '로그인한 계정의 북마크를 확인하고 있어요…',
+  'account.libraryError': '북마크를 불러오지 못했어요. 다시 시도해 주세요.',
+  'account.localBookmarksKept': '로그인할 때 기존 북마크 {count}개를 이 기기에 유지했어요.',
+  'account.guestCarryOver': '로그인하면 이 기기에 저장한 북마크를 계정으로 가져옵니다.',
   'library.paused': '동기화 일시 중지됨',
   'library.retry': '다시 시도',
   'library.resume': '동기화를 계속하려면 로그인하세요',
