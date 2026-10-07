@@ -8,7 +8,7 @@
     "@sentry/react-native": "^8.14.0",
     "@supabase/realtime-js": "^2.110.2",
     "@zxing/text-encoding": "^0.9.0",
-    "expo": "~56.0.11",
+    "expo": "~58.0.3",
     "expo-application": "~56.0.3",
     "expo-build-properties": "~56.0.27",
     "expo-clipboard": "^56.0.4",
