@@ -53,3 +53,10 @@ A JavaScript/native export or config prebuild does not verify device behavior.
 Before release, smoke-test native share capture, cold launch, SQLite persistence,
 screenshot feedback, notification permission, and graph interaction on Android
 and iOS.
+
+Local validation of this upgrade passed the frozen install, lint, typecheck,
+logic tests, all 64 component suites (965 tests), web export, iOS/Hermes export,
+and Android share-intent and app release Kotlin compilation. App compilation
+used `SENTRY_DISABLE_AUTO_UPLOAD=true` so this validation build did not require
+Sentry source-map publication. The native compile also built Expo Modules Core
+and Worklets with the recommended SDK 58 package set.

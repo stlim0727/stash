@@ -10,7 +10,6 @@ import {
   Image,
   type ImageLoadEvent,
   Linking,
-  type NativeSyntheticEvent,
   Platform,
   Pressable,
   ScrollView,
