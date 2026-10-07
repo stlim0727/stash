@@ -20,7 +20,11 @@ export type SentryTransport = (
 ) => Promise<{ ok: boolean; status: number }>;
 
 const defaultTransport: SentryTransport = async (url, init) => {
-  const res = await fetch(url, init);
+  const res = await fetch(url, {
+    ...init,
+    body: typeof init.body === 'string' ? init.body : new Uint8Array(init.body).buffer,
+    signal: AbortSignal.timeout(10_000),
+  });
   return { ok: res.ok, status: res.status };
 };
 

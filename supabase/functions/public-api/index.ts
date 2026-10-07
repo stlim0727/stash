@@ -18,6 +18,8 @@ import { inFilter, isUuid, isValidCollectionId, sanitizeQuery } from './filters.
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+// Issuance alone cannot close direct DB/self-created or historical keys.
+const PUBLIC_API_ENABLED = Deno.env.get('ENABLE_PUBLIC_API') === 'true';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -740,6 +742,8 @@ Deno.serve(async (req: Request) => {
       headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
     });
   }
+
+  if (!PUBLIC_API_ENABLED) return json({ error: 'Public API is disabled' }, 403);
 
   const userId = await resolveUserIdFromApiKey(req.headers.get('Authorization'));
   if (!userId) return json({ error: 'Unauthorized' }, 401);

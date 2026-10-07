@@ -68,6 +68,7 @@ jest.mock('@/supabase/client', () => {
 jest.mock('@/supabase/run-oauth', () => ({
   runOAuthSignIn: jest.fn(async () => mockAuthedSession),
 }));
+jest.mock('@/supabase/run-captcha', () => ({ runCaptchaChallenge: jest.fn(async () => undefined) }));
 
 import { SupabaseAuthProvider, useSupabaseAuth } from '@/supabase/auth-provider';
 
@@ -82,6 +83,7 @@ const { __client: fakeClient } = jest.requireMock('@/supabase/client') as {
 };
 // Same client instance — aliased for readability where we assert on minting.
 const fakeAnonClient = fakeClient;
+const { runCaptchaChallenge } = jest.requireMock('@/supabase/run-captcha') as { runCaptchaChallenge: jest.Mock };
 const { runOAuthSignIn } = jest.requireMock('@/supabase/run-oauth') as {
   runOAuthSignIn: jest.Mock;
 };
@@ -99,6 +101,8 @@ function DynamicWrapper({ children }: { children: ReactNode }) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  runCaptchaChallenge.mockReset();
+  runCaptchaChallenge.mockResolvedValue(undefined);
   triggerProviderRerender = () => {};
   fakeClient.upsertUserPreferences.mockImplementation(async () => {});
   fakeClient.getUserPreferences.mockImplementation(async () => null);
@@ -112,6 +116,96 @@ test('bootstraps an anonymous session on mount', async () => {
   await waitFor(() => expect(result.current.status).toBe('anonymous'));
   expect(result.current.isSignedIn).toBe(true);
   expect(result.current.email).toBeNull();
+});
+
+test('a fresh anonymous signup waits for CAPTCHA and sends the one-use token', async () => {
+  let complete!: (token: string) => void;
+  runCaptchaChallenge.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(runCaptchaChallenge).toHaveBeenCalledTimes(1));
+  expect(fakeClient.signInAnonymously).not.toHaveBeenCalled();
+  await act(async () => { complete('one-use-token'); });
+  await waitFor(() => expect(result.current.status).toBe('anonymous'));
+  expect(fakeClient.signInAnonymously).toHaveBeenCalledWith(expect.objectContaining({ captchaToken: 'one-use-token' }));
+});
+
+test('cancelled CAPTCHA creates no account and a later explicit retry gets a new challenge', async () => {
+  runCaptchaChallenge.mockRejectedValueOnce(new Error('Verification cancelled. Saved items remain on this device.'));
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(result.current.status).toBe('error'));
+  expect(fakeClient.signInAnonymously).not.toHaveBeenCalled();
+  expect(result.current.message).toContain('remain on this device');
+  runCaptchaChallenge.mockResolvedValueOnce('fresh-token');
+  await act(async () => { await result.current.ensureAnonymousSession(); });
+  expect(fakeClient.signInAnonymously).toHaveBeenCalledWith(expect.objectContaining({ captchaToken: 'fresh-token' }));
+});
+
+test('logout aborts a pending CAPTCHA and ignores its late success', async () => {
+  let complete!: (token: string) => void;
+  let signal!: AbortSignal;
+  runCaptchaChallenge.mockImplementationOnce((options) => {
+    signal = options.signal;
+    return new Promise((resolve) => { complete = resolve; });
+  });
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(runCaptchaChallenge).toHaveBeenCalledTimes(1));
+  await act(async () => { await result.current.signOut(); });
+  expect(signal.aborted).toBe(true);
+  await act(async () => { complete('late-token'); });
+  expect(result.current.status).toBe('signed_out');
+  expect(fakeClient.signInAnonymously).not.toHaveBeenCalled();
+});
+
+test('unmount aborts CAPTCHA and its late response cannot create an account', async () => {
+  let complete!: (token: string) => void;
+  let signal!: AbortSignal;
+  runCaptchaChallenge.mockImplementationOnce((options) => {
+    signal = options.signal;
+    return new Promise((resolve) => { complete = resolve; });
+  });
+  const { unmount } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(runCaptchaChallenge).toHaveBeenCalledTimes(1));
+  await act(async () => { await unmount(); });
+  expect(signal.aborted).toBe(true);
+  await act(async () => { complete('late-token'); });
+  expect(fakeClient.signInAnonymously).not.toHaveBeenCalled();
+});
+
+test('logout during anonymous signup without CAPTCHA aborts the request and sets no session', async () => {
+  let completeSignup!: (session: any) => void;
+  let signalPassed!: AbortSignal;
+  fakeClient.signInAnonymously.mockImplementationOnce((options: any) => {
+    signalPassed = options?.signal;
+    return new Promise((resolve) => { completeSignup = resolve; });
+  });
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(fakeClient.signInAnonymously).toHaveBeenCalledTimes(1));
+  expect(signalPassed).toBeDefined();
+  expect(signalPassed.aborted).toBe(false);
+  await act(async () => { await result.current.signOut(); });
+  expect(signalPassed.aborted).toBe(true);
+  await act(async () => { completeSignup(mockAnonSession); });
+  expect(result.current.status).toBe('signed_out');
+  expect(result.current.session).toBeNull();
+});
+
+test('forced refresh during CAPTCHA joins the same signup', async () => {
+  let complete!: (token: string) => void;
+  runCaptchaChallenge.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(runCaptchaChallenge).toHaveBeenCalledTimes(1));
+  const pending = result.current.ensureAnonymousSession(true);
+  expect(runCaptchaChallenge).toHaveBeenCalledTimes(1);
+  await act(async () => { complete('single-token'); await pending; });
+  expect(fakeClient.signInAnonymously).toHaveBeenCalledTimes(1);
+});
+
+test('restoring an existing session never opens a CAPTCHA', async () => {
+  fakeClient.restoreSession.mockResolvedValueOnce({ outcome: 'active', session: mockAuthedSession });
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(result.current.status).toBe('authenticated'));
+  expect(runCaptchaChallenge).not.toHaveBeenCalled();
+  expect(fakeClient.signInAnonymously).not.toHaveBeenCalled();
 });
 
 test('a REAL account whose session cannot be refreshed enters session_expired without minting anonymous', async () => {
@@ -408,4 +502,33 @@ test('cold-start server refresh records credential recovery while cached restora
   await act(async () => { await screen.result.current.ensureAnonymousSession(); });
   expect(screen.result.current.credentialRecoveryVersion).toBe(1);
   await screen.unmount();
+});
+
+
+test('forced refresh waits for a pending ordinary restore then performs a real refresh', async () => {
+  let restore!: (value: unknown) => void;
+  fakeClient.restoreSession.mockImplementationOnce(() => new Promise((resolve) => { restore = resolve; }));
+  fakeClient.restoreSession.mockResolvedValueOnce({ outcome: 'active', session: mockAuthedSession, credentialsRefreshed: true });
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(fakeClient.restoreSession).toHaveBeenCalledTimes(1));
+  const pending = result.current.ensureAnonymousSession(true);
+  await act(async () => { restore({ outcome: 'active', session: mockAuthedSession }); await pending; });
+  expect(fakeClient.restoreSession).toHaveBeenNthCalledWith(1, false);
+  expect(fakeClient.restoreSession).toHaveBeenNthCalledWith(2, true);
+  expect(runCaptchaChallenge).not.toHaveBeenCalled();
+});
+
+
+test('logout cancels a forced refresh queued behind session restoration', async () => {
+  let restore!: (value: unknown) => void;
+  fakeClient.restoreSession.mockImplementationOnce(() => new Promise((resolve) => { restore = resolve; }));
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(fakeClient.restoreSession).toHaveBeenCalledTimes(1));
+  const pending = result.current.ensureAnonymousSession(true);
+  await act(async () => { await result.current.signOut(); });
+  await act(async () => { restore({ outcome: 'none' }); await pending; });
+  expect(result.current.status).toBe('signed_out');
+  expect(fakeClient.restoreSession).toHaveBeenCalledTimes(1);
+  expect(runCaptchaChallenge).not.toHaveBeenCalled();
+  expect(fakeClient.signInAnonymously).not.toHaveBeenCalled();
 });

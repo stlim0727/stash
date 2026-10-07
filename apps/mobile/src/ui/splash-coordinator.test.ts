@@ -198,3 +198,11 @@ test('signalUpdateRequired dismisses splash immediately with update_required rea
   assert.equal(coordinator.getDismissReason(), 'update_required');
   assert.equal(getHiddenCalls(), 1);
 });
+
+test('startWatchdog and disarmWatchdog work with default timer bindings without illegal invocation', () => {
+  const coordinator = new SplashCoordinator();
+  assert.doesNotThrow(() => {
+    coordinator.startWatchdog();
+    coordinator.disarmWatchdog();
+  });
+});

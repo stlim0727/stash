@@ -1,4 +1,5 @@
 // Relative .ts import (not the @ alias) so Node's test runner can resolve it.
+import { isPublicPreviewUrl } from './preview-network.ts';
 import { fetchPageMetadata } from './page-metadata.ts';
 import type { FetchedMetadata } from './page-metadata.ts';
 import { describeKnownUrl, isRepairableSourceTitle, looksOpaqueId } from './url-title.ts';
@@ -70,7 +71,7 @@ export function deriveMetadata(rawUrl: string): DerivedMetadata {
   return {
     title,
     site_name: host,
-    favicon_url: `${url.origin}/favicon.ico`,
+    favicon_url: isPublicPreviewUrl(rawUrl) ? `${url.origin}/favicon.ico` : null,
     preview_image_url,
   };
 }

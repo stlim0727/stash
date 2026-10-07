@@ -233,3 +233,14 @@ test('enrichBookmark repairs a bookmark previously saved with generic YouTube ti
   assert.equal(result.patch.title, 'Real Video Title');
   assert.equal(result.patch.title_is_derived, false);
 });
+
+test('rejected preview URLs retain their labels but generate no network favicon fallback', async () => {
+  for (const url of ['http://192.168.1.1', 'http://127.0.0.1', 'http://home.arpa', 'http://router.local']) {
+    const derived = deriveMetadata(url);
+    assert.ok(derived.title);
+    assert.equal(derived.favicon_url, null);
+    const enriched = await enrichBookmark(makeBookmark({url}), async () => null);
+    assert.equal(enriched.patch.favicon_url, null);
+  }
+  assert.equal(deriveMetadata('https://example.com').favicon_url, 'https://example.com/favicon.ico');
+});

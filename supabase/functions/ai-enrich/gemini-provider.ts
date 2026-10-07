@@ -49,6 +49,8 @@ const DEFAULT_MODEL = 'gemini-2.5-flash-lite';
 const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_TAGS = 5;
+export const MAX_PROMPT_CHARS = 16_384;
+export const MAX_OUTPUT_TOKENS = 512;
 const GENERIC_MEDIA_LABELS = new Set([
   'article',
   'articles',
@@ -171,42 +173,72 @@ function isGenericMediaLabel(value: string): boolean {
 /** Build the user-facing prompt from the bookmark fields we have. Omitting
  *  blank fields keeps the model from treating "null" as content. */
 function buildPrompt(input: EnrichmentInput): string {
-  const lines: string[] = [];
-  const add = (label: string, value: string | null | undefined) => {
+  type Field = { prefix: string; value: string; suffix: string; budget: number };
+  const lines: Array<string | Field> = [];
+  const add = (label: string, value: string | null | undefined, suffix = '', valuePrefix = '') => {
     if (value && value.trim()) {
-      lines.push(`${label}: ${value.trim()}`);
+      lines.push({ prefix: `${label}: ${valuePrefix}`, value: value.trim(), suffix, budget: 0 });
     }
+  };
+  // Bound list assembly as well as the final prompt; database names are not
+  // length-limited. Preserve the most-used-first order supplied by the caller.
+  const names = (values: string[]) => {
+    let result = '';
+    for (const value of values) {
+      const separator = result ? ', ' : '';
+      const available = MAX_PROMPT_CHARS - result.length - separator.length;
+      if (available <= 0) break;
+      result += separator + value.slice(0, available);
+      if (result.length >= MAX_PROMPT_CHARS) break;
+    }
+    return result;
   };
   add('URL', input.url);
   add('Title', input.title);
   add('Description', input.description);
   add('User notes', input.notes);
   add('Site', input.site_name);
-  lines.push(`Content type: ${input.content_type}`);
+  add('Content type', input.content_type);
   lines.push(
     'Tagging guidance: derive tags from the combined metadata above, not just the title. Favor concrete concepts from description, notes, site, content type, and URL path when they add signal.',
   );
   if (input.current_collection) {
-    lines.push(`Current collection: "${input.current_collection}" (preserve unless clearly mismatched)`);
+    add('Current collection', input.current_collection, '" (preserve unless clearly mismatched)', '"');
   }
   if (input.collections && input.collections.length > 0) {
-    lines.push(`Existing collections: ${input.collections.join(', ')}`);
+    add('Existing collections', names(input.collections));
   } else {
     lines.push('Existing collections: (none yet)');
   }
-  // Surface the user's established vocabulary so the model reuses an existing
-  // tag instead of minting a near-duplicate (the fragmentation this fix
-  // targets). Most-used first, so the canonical tags lead if the list is long.
   if (input.existing_tags && input.existing_tags.length > 0) {
-    lines.push(`Existing tags (reuse when one fits): ${input.existing_tags.join(', ')}`);
+    add('Existing tags (reuse when one fits)', names(input.existing_tags));
   }
-  const language = languageFor(input.locale);
-  // Ask for the free-text fields in the user's language. suggested_collection is
-  // deliberately excluded: it must match an existing collection NAME verbatim
-  // (resolved by exact name in the edge function), so translating it would break
-  // the lookup. The JSON keys themselves stay English so parsing is unchanged.
-  lines.push(`Write the suggested_tags and topics in ${language}.`);
-  return `Assess this bookmark and return the structured fields.\n\n${lines.join('\n')}`;
+  lines.push(`Write the suggested_tags and topics in ${languageFor(input.locale)}.`);
+
+  const header = 'Assess this bookmark and return the structured fields.\n\n';
+  const fields = lines.filter((line): line is Field => typeof line !== 'string');
+  const overhead = header.length + lines.length - 1 + lines.reduce((length, line) =>
+    length + (typeof line === 'string' ? line.length : line.prefix.length + line.suffix.length), 0);
+  let remaining = MAX_PROMPT_CHARS - overhead;
+  // Share the remaining space fairly, redistributing unused space from short
+  // fields. No long URL/note/name can crowd out the vocabulary or instructions.
+  let pending = fields;
+  while (remaining > 0 && pending.length > 0) {
+    const share = Math.max(1, Math.floor(remaining / pending.length));
+    for (const field of pending) {
+      const allocation = Math.min(share, field.value.length - field.budget, remaining);
+      field.budget += allocation;
+      remaining -= allocation;
+    }
+    pending = pending.filter((field) => field.budget < field.value.length);
+  }
+  return header + lines.map((line) => {
+    if (typeof line === 'string') return line;
+    let value = line.value.slice(0, line.budget);
+    // Do not split a supplementary Unicode character at the budget boundary.
+    if (value && /[\uD800-\uDBFF]/.test(value[value.length - 1])) value = value.slice(0, -1);
+    return line.prefix + value + line.suffix;
+  }).join('\n');
 }
 
 /** Thrown when Gemini responded (HTTP 200) but its content couldn't be turned
@@ -353,6 +385,7 @@ export class GeminiProvider implements EnrichmentProvider {
       contents: [{ role: 'user', parts: [{ text: buildPrompt(input) }] }],
       generationConfig: {
         temperature: 0.2,
+        maxOutputTokens: MAX_OUTPUT_TOKENS,
         responseMimeType: 'application/json',
         responseSchema: RESPONSE_SCHEMA,
       },

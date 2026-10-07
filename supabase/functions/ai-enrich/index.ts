@@ -26,7 +26,9 @@ import { DummyProvider } from './dummy-provider.ts';
 import { GeminiContentError, GeminiProvider } from './gemini-provider.ts';
 import type { EnrichmentInput, EnrichmentOutput, EnrichmentProvider } from './provider.ts';
 import { isGenericCollection, matchSuggestedCollection } from './collection-match.ts';
-import { resolveCallerAuth, shouldFailClosedOnRateLimit } from './request-auth.ts';
+import { resolveCallerAuth } from './request-auth.ts';
+import { parseQuotaVerdict, type RateLimitVerdict } from './quota.ts';
+import { readJsonObject, RequestBodyError } from '../_shared/http.ts';
 import { isUuid } from './validation.ts';
 import {
   chunk,
@@ -44,7 +46,7 @@ import {
 // back to the deterministic, network-free heuristics so the pipeline still
 // works with no external dependency. `fallbackProvider` also catches live-call
 // failures (rate limits, outages) at request time below.
-const fallbackProvider = new DummyProvider();
+const fallbackProvider: EnrichmentProvider = new DummyProvider();
 
 function selectProvider(): EnrichmentProvider {
   const apiKey = Deno.env.get('GEMINI_API_KEY');
@@ -97,13 +99,6 @@ function json(body: unknown, status = 200, extraHeaders: Record<string, string> 
   });
 }
 
-/** Verdict shape returned by the `request_ai_enrichment_slot` DB function. */
-interface RateLimitVerdict {
-  allowed: boolean;
-  reason?: string;
-  retry_after?: number;
-}
-
 /** Why an enrichment fell back to the deterministic heuristics. `not_configured`
  *  means no model API key is set; the rest classify a live-call failure so the
  *  app can tell a transient outage/limit apart from a permanent config gap. */
@@ -137,48 +132,6 @@ interface BookmarkRow {
 
 /** Minimum confidence hurdle required before changing an already-filed bookmark's collection (STASH-74). */
 const FOLDER_MOVE_MIN_CONFIDENCE = 0.85;
-
-/**
- * Look up whether a user is an anonymous Supabase account, via the GoTrue admin
- * API (service-role). Used ONLY on the server-trigger path when the rate-limit
- * verdict is unavailable, to decide fail-closed (anonymous owner) vs fail-open
- * (real owner) — see shouldFailClosedOnRateLimit.
- *
- * No migration / schema change: GET /auth/v1/admin/users/{id} is a stable
- * service-role endpoint that returns the user record incl. `is_anonymous`.
- *
- * Returns:
- *   - true  → the owner is anonymous (or the record is missing → strict default)
- *   - false → the owner is a confirmed real (non-anonymous) user
- *   - undefined → the lookup failed/threw and anonymity is unknown; the caller
- *     treats undefined as "fail closed" (the safe default).
- */
-async function fetchOwnerIsAnonymous(userId: string): Promise<boolean | undefined> {
-  try {
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
-      headers: {
-        apikey: SERVICE_ROLE_KEY,
-        Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
-      },
-    });
-    if (res.status === 404) {
-      // No such user → treat as anonymous (strict), matching the DB default
-      // in request_ai_enrichment_slot_for (coalesce(is_anonymous, true)).
-      return true;
-    }
-    if (!res.ok) {
-      console.error('Owner anonymity lookup failed:', res.status);
-      return undefined;
-    }
-    const user = (await res.json()) as { is_anonymous?: unknown };
-    // Only an explicit `is_anonymous: false` counts as a real user; missing or
-    // non-boolean defaults to anonymous (strict).
-    return user.is_anonymous !== false;
-  } catch (err) {
-    console.error('Owner anonymity lookup threw:', err);
-    return undefined;
-  }
-}
 
 /**
  * Look up the user's preferred locale from `auth.users.raw_user_meta_data` via
@@ -248,6 +201,7 @@ const EXPO_PUSH_SEND_URL = 'https://exp.host/--/api/v2/push/send';
 function serviceRest(path: string, init: RequestInit = {}): Promise<Response> {
   return fetch(`${SUPABASE_URL}/rest/v1${path}`, {
     ...init,
+    signal: init.signal ?? AbortSignal.timeout(10_000),
     headers: {
       apikey: SERVICE_ROLE_KEY,
       Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
@@ -273,11 +227,12 @@ async function markPendingEnrichmentSettled(
   id: string,
   status: 'done' | 'pending' | 'failed',
   attempts: number,
+  retryNotBefore: string | null = null,
 ): Promise<void> {
   try {
     const res = await serviceRest(`/pending_ai_enrichment?id=eq.${id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ status, attempts, updated_at: new Date().toISOString() }),
+      body: JSON.stringify({ status, attempts, retry_not_before: retryNotBefore, updated_at: new Date().toISOString() }),
     });
     if (!res.ok) {
       console.error('Batch worker: failed to update pending_ai_enrichment row', id, res.status);
@@ -362,16 +317,8 @@ async function loadEnrichmentContextForUser(
  *  Only called when `enforceRateLimit` (a real, billable provider is
  *  configured) — see its call site.
  *
- *  Returns two distinct flags because an RPC error fails OPEN (a transient
- *  limiter hiccup must not strand overflow rows forever — this is a best-
- *  effort background job, not a live user-facing request the way the
- *  synchronous path's fail-open/closed policy is for), and that path spends
- *  no real slot:
- *  - `eligible`: whether this row may proceed to a provider call this tick.
- *  - `slotClaimed`: whether the RPC's INSERT actually ran — false on the
- *    fail-open path. Kept distinct so a later rate_limited refund never
- *    deletes an unrelated slot a genuinely earlier, successful call spent
- *    (Codex review, PR #669): eligible-but-not-claimed must never be refunded. */
+ *  Limiter errors defer work without consuming attempts or calling the provider.
+ *  Only an explicit allowed=true represents a successfully claimed slot. */
 async function claimEnrichmentQuotaSlot(
   userId: string,
 ): Promise<{ eligible: boolean; slotClaimed: boolean }> {
@@ -380,17 +327,30 @@ async function claimEnrichmentQuotaSlot(
       method: 'POST',
       headers: { Prefer: 'return=representation' },
       body: JSON.stringify({ p_user_id: userId }),
+      signal: AbortSignal.timeout(5_000),
     });
     if (!res.ok) {
       console.error('Batch worker: rate-limit check failed', userId, res.status);
-      return { eligible: true, slotClaimed: false };
+      return { eligible: false, slotClaimed: false };
     }
-    const verdict = (await res.json()) as { allowed?: boolean };
-    const allowed = verdict.allowed !== false;
+    const verdict = parseQuotaVerdict(await res.json());
+    const allowed = verdict?.allowed === true;
     return { eligible: allowed, slotClaimed: allowed };
   } catch (err) {
     console.error('Batch worker: rate-limit check threw', userId, err);
-    return { eligible: true, slotClaimed: false };
+    return { eligible: false, slotClaimed: false };
+  }
+}
+
+/** Global admission is service-role-only, independent of account count. */
+async function reserveGlobalBudget(): Promise<RateLimitVerdict | null> {
+  try {
+    const res = await serviceRest('/rpc/reserve_ai_enrichment_budget', {
+      method: 'POST', body: '{}', signal: AbortSignal.timeout(5_000),
+    });
+    return res.ok ? parseQuotaVerdict(await res.json()) : null;
+  } catch {
+    return null;
   }
 }
 
@@ -411,6 +371,7 @@ async function refundEnrichmentQuotaSlot(userId: string): Promise<void> {
     const res = await serviceRest(`/rpc/refund_ai_enrichment_slot_for`, {
       method: 'POST',
       body: JSON.stringify({ p_user_id: userId }),
+      signal: AbortSignal.timeout(5_000),
     });
     if (!res.ok) {
       console.error('Failed to refund enrichment quota slot', userId, res.status);
@@ -504,7 +465,7 @@ async function processEnrichmentRow(
   bookmarksById: Map<string, BookmarkRow>,
   contextByUser: Map<string, { collections: Array<{ id: string; name: string }>; existingTags: string[]; locale: string | null }>,
   slotClaimed: boolean,
-): Promise<void> {
+): Promise<{ retryNotBefore: string } | void> {
   const bookmark = bookmarksById.get(row.bookmark_id);
   if (!bookmark) {
     // Defensive: shouldn't happen (a deleted bookmark cascade-deletes its
@@ -529,6 +490,16 @@ async function processEnrichmentRow(
     existing_tags: ctx.existingTags,
     locale: row.locale ?? ctx.locale ?? undefined,
   };
+
+  if (enforceRateLimit) {
+    const budget = await reserveGlobalBudget();
+    if (budget?.allowed !== true) {
+      if (slotClaimed) await refundEnrichmentQuotaSlot(row.user_id);
+      const retryNotBefore = new Date(Date.now() + Math.max(60, budget?.retry_after ?? 60) * 1000).toISOString();
+      await markPendingEnrichmentSettled(row.id, 'pending', row.attempts, retryNotBefore);
+      return { retryNotBefore };
+    }
+  }
 
   // Null only when the provider rate-limited us, which is handled below by
   // putting the row back on the queue rather than persisting anything.
@@ -589,7 +560,7 @@ async function processEnrichmentRow(
     // refund it now that the attempt is known to have produced nothing (see
     // refundEnrichmentQuotaSlot's docs), so a long provider outage doesn't
     // burn the user's fixed budget on retries that never got a usable answer.
-    // Only when a slot was actually claimed: a fail-open eligibility (the
+    // Only when a slot was actually claimed: a unavailable eligibility (the
     // quota RPC itself errored) never inserted one, so refunding here would
     // instead delete an unrelated slot a genuinely earlier call spent.
     if (slotClaimed) {
@@ -826,7 +797,7 @@ async function runBatchWorker(): Promise<Response> {
     let eligible = claimed;
     let deferred: PendingEnrichmentRow[] = [];
     // Per-row record of whether its quota RPC actually inserted a slot (vs.
-    // fail-open eligibility with no real charge) — see claimEnrichmentQuotaSlot
+    // unavailable eligibility with no real charge) — see claimEnrichmentQuotaSlot
     // and processEnrichmentRow's refund guard.
     const slotClaimedByRowId = new Map<string, boolean>();
     if (enforceRateLimit) {
@@ -861,12 +832,25 @@ async function runBatchWorker(): Promise<Response> {
     // one after another (only the rows WITHIN a wave overlap). Firing all
     // BATCH_CLAIM_LIMIT calls at once would burst straight into the model
     // provider's own per-minute limit and degrade a chunk of them to heuristics.
+    let globallyDeferred = 0;
+    let budgetRetryNotBefore: string | null = null;
     for (const wave of chunk(eligible, ENRICHMENT_CONCURRENCY)) {
-      await Promise.all(
+      if (budgetRetryNotBefore) {
+        await Promise.all(wave.map(async (row) => {
+          if (slotClaimedByRowId.get(row.id)) await refundEnrichmentQuotaSlot(row.user_id);
+          await markPendingEnrichmentSettled(row.id, 'pending', row.attempts, budgetRetryNotBefore);
+        }));
+        globallyDeferred += wave.length;
+        continue;
+      }
+      const outcomes = await Promise.all(
         wave.map((row) =>
           processEnrichmentRow(row, bookmarksById, contextByUser, slotClaimedByRowId.get(row.id) ?? false),
         ),
       );
+      const denials = outcomes.filter((outcome): outcome is { retryNotBefore: string } => outcome !== undefined);
+      globallyDeferred += denials.length;
+      if (denials.length) budgetRetryNotBefore = denials.map((outcome) => outcome.retryNotBefore).sort().at(-1)!;
     }
 
     // STASH #579: best-effort drained-queue push notification, after the
@@ -880,7 +864,7 @@ async function runBatchWorker(): Promise<Response> {
     }));
     await notifyDrainedUsers(resolvedEligible);
 
-    return json({ processed: eligible.length, deferred: deferred.length }, 200);
+    return json({ processed: eligible.length - globallyDeferred, deferred: deferred.length + globallyDeferred }, 200);
   } catch (error) {
     console.error('Batch worker failed:', error);
     return json({ error: error instanceof Error ? error.message : 'Batch worker failed' }, 500);
@@ -912,9 +896,9 @@ Deno.serve(async (req) => {
 
   let body: Record<string, unknown>;
   try {
-    body = ((await req.json()) ?? {}) as Record<string, unknown>;
-  } catch {
-    return json({ error: 'Invalid JSON body' }, 400);
+    body = await readJsonObject(req);
+  } catch (error) {
+    return json({ error: 'Invalid JSON body' }, error instanceof RequestBodyError ? error.status : 400);
   }
 
   // STASH #578 Phase 2: the pg_cron-scheduled overflow-queue worker pings this
@@ -975,6 +959,7 @@ Deno.serve(async (req) => {
   const rest = (path: string, init: RequestInit = {}) =>
     fetch(`${SUPABASE_URL}/rest/v1${path}`, {
       ...init,
+      signal: init.signal ?? AbortSignal.timeout(10_000),
       headers: {
         ...restAuth,
         'Content-Type': 'application/json',
@@ -1094,7 +1079,7 @@ Deno.serve(async (req) => {
     // slot — and only when a billable provider is configured. The DB function
     // scopes the count to the caller via the forwarded JWT (auth.uid()), so a
     // user can only ever exhaust their own quota.
-    // Whether the RPC below actually inserted a slot (vs. the fail-open path
+    // Whether the RPC below actually inserted a slot (vs. an unavailable verdict
     // reaching the provider with nothing spent) — a later rate_limited refund
     // must only fire when true, or it deletes an unrelated slot a genuinely
     // earlier call spent (Codex review, PR #669).
@@ -1114,15 +1099,17 @@ Deno.serve(async (req) => {
               method: 'POST',
               headers: { Prefer: 'return=representation' },
               body: JSON.stringify({ p_user_id: bookmark.user_id }),
+              signal: AbortSignal.timeout(5_000),
             })
           : await rest(`/rpc/request_ai_enrichment_slot`, {
               method: 'POST',
               headers: { Prefer: 'return=representation' },
               body: '{}',
+              signal: AbortSignal.timeout(5_000),
             });
         if (rlRes.ok) {
-          verdict = (await rlRes.json()) as RateLimitVerdict;
-          verdictObtained = true;
+          verdict = parseQuotaVerdict(await rlRes.json());
+          verdictObtained = verdict !== null;
         } else {
           console.error('Rate-limit check failed:', rlRes.status);
         }
@@ -1131,32 +1118,11 @@ Deno.serve(async (req) => {
       }
 
       if (!verdictObtained) {
-        // The verdict couldn't be obtained (missing function, transient error).
-        // Decide fail-closed vs fail-open by who owns the cost:
-        //  - anonymous caller         → CLOSED (limiter is the sole cost control)
-        //  - signed-in caller         → OPEN  (real account is a cost anchor)
-        //  - server/trigger path      → follows the TARGET BOOKMARK'S OWNER, since
-        //    the trigger fires for user rows: anonymous owner → CLOSED (an anon
-        //    user must not drive unthrottled server enrichment during an outage),
-        //    real owner → OPEN (don't break a real user's background enrichment).
-        // On the server path we resolve the owner's anonymity via the GoTrue
-        // admin API (service-role, no migration); undetermined ⇒ closed (safe).
-        let ownerIsAnonymous: boolean | undefined;
-        if (serverPath) {
-          ownerIsAnonymous = await fetchOwnerIsAnonymous(bookmark.user_id);
-        }
-        if (shouldFailClosedOnRateLimit(caller, ownerIsAnonymous)) {
-          console.error(
-            'Rate-limit verdict unavailable; failing closed',
-            serverPath ? `(server path, ownerIsAnonymous=${ownerIsAnonymous})` : '(anonymous caller)',
-          );
-          return json(
-            { error: 'rate_limit_unavailable', reason: 'rate_limit_unavailable', retry_after: 60 },
-            503,
-            { 'Retry-After': '60' },
-          );
-        }
-        console.error('Rate-limit verdict unavailable; allowing request (real-owner/signed-in path)');
+        return json(
+          { error: 'rate_limit_unavailable', reason: 'rate_limit_unavailable', retry_after: 60 },
+          503,
+          { 'Retry-After': '60' },
+        );
       } else if (verdict && !verdict.allowed) {
         const retryAfter = Math.max(1, Math.floor(verdict.retry_after ?? 60));
         return json(
@@ -1199,6 +1165,18 @@ Deno.serve(async (req) => {
       existing_tags: existingTags,
       locale: resolvedLocale,
     };
+
+    if (enforceRateLimit) {
+      const budget = await reserveGlobalBudget();
+      if (budget?.allowed !== true) {
+        if (slotClaimed) await refundEnrichmentQuotaSlot(bookmark.user_id);
+        return json(
+          { error: budget?.reason ?? 'rate_limit_unavailable', reason: budget?.reason ?? 'rate_limit_unavailable', retry_after: budget?.retry_after ?? 60 },
+          budget ? 429 : 503,
+          { 'Retry-After': String(budget?.retry_after ?? 60) },
+        );
+      }
+    }
 
     // Run the configured provider; if a live model call fails (rate limit,
     // outage, bad response), degrade to the deterministic heuristics rather
@@ -1249,7 +1227,7 @@ Deno.serve(async (req) => {
         // queueing the retry, for the same reason processEnrichmentRow's
         // batch-worker retries do (see refundEnrichmentQuotaSlot's docs).
         // Only when a slot was actually claimed (see `slotClaimed`'s docs
-        // above) — the fail-open path never spent one.
+        // above) — an unavailable verdict never spent one.
         if (slotClaimed) {
           await refundEnrichmentQuotaSlot(bookmark.user_id);
         }

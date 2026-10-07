@@ -124,7 +124,7 @@ test('parseSentryDsn tolerates a legacy secret and rejects junk', () => {
   assert.equal(parseSentryDsn('https://o1.ingest.us.sentry.io/2'), null); // no public key
 });
 
-test('buildSentryInitOptions omits release/dist when blank', () => {
+test('buildSentryInitOptions omits release/dist when blank or non-string', () => {
   process.env.EXPO_PUBLIC_SENTRY_DSN = 'https://k@o1.ingest.sentry.io/2';
   const options = buildSentryInitOptions(getSentryConfigState(), {
     release: '   ',
@@ -133,5 +133,15 @@ test('buildSentryInitOptions omits release/dist when blank', () => {
   assert.ok(options);
   assert.equal('release' in options, false);
   assert.equal('dist' in options, false);
+
+  // When Expo serializes empty extra fields as objects ({}) on web
+  const optionsWithObj = buildSentryInitOptions(getSentryConfigState(), {
+    release: {} as unknown as string,
+    dist: {} as unknown as string,
+  });
+  assert.ok(optionsWithObj);
+  assert.equal('release' in optionsWithObj, false);
+  assert.equal('dist' in optionsWithObj, false);
+
   clearEnv();
 });

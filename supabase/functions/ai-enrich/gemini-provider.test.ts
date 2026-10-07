@@ -442,3 +442,45 @@ test('two bookmarks go out as two calls that share no content', async () => {
   assert.match(second, /Beta/);
   assert.doesNotMatch(second, /Alpha/);
 });
+
+test('caps user-controlled prompt size and model output tokens on the wire', async () => {
+  const { calls, fetchImpl } = stubFetch({ topics: [], suggested_tags: [], suggested_collection: null, confidence: 0 });
+  const provider = new GeminiProvider({ apiKey: 'fake', fetchImpl });
+  await provider.enrich(input({ title: 'x'.repeat(100_000), notes: 'y'.repeat(100_000) }));
+  const body = JSON.parse(calls[0].init!.body!);
+  assert.ok(body.contents[0].parts[0].text.length <= 16_384);
+  assert.equal(body.generationConfig.maxOutputTokens, 512);
+});
+
+
+test('large bookmark fields retain locale and established vocabulary instructions within the prompt cap', async () => {
+  for (const field of ['url', 'title', 'description', 'notes', 'site_name'] as const) {
+    const { calls, fetchImpl } = stubFetch({ topics: [], suggested_tags: [], suggested_collection: null, confidence: 0 });
+    const provider = new GeminiProvider({ apiKey: 'fake', fetchImpl });
+    await provider.enrich(input({ [field]: 'x'.repeat(50_000), locale: 'ko-KR', current_collection: '연구', collections: ['Development', '연구'], existing_tags: ['react', '연구 자료'] }));
+    const request = JSON.parse(calls[0].init!.body!);
+    const prompt = request.contents[0].parts[0].text;
+    assert.ok(prompt.length <= 16_384, field);
+    assert.match(prompt, /Tagging guidance: derive tags from the combined metadata above/);
+    assert.match(prompt, /Current collection: "연구" \(preserve unless clearly mismatched\)/);
+    assert.match(prompt, /Existing collections: Development, 연구/);
+    assert.match(prompt, /Existing tags \(reuse when one fits\): react, 연구 자료/);
+    assert.ok(prompt.endsWith('Write the suggested_tags and topics in Korean (한국어).'));
+    assert.equal(request.generationConfig.maxOutputTokens, 512);
+  }
+});
+
+test('oversized vocabulary and every metadata field cannot truncate fixed instructions', async () => {
+  const { calls, fetchImpl } = stubFetch({ topics: [], suggested_tags: [], suggested_collection: null, confidence: 0 });
+  const provider = new GeminiProvider({ apiKey: 'fake', fetchImpl });
+  const huge = '📖'.repeat(25_000);
+  await provider.enrich(input({ url: huge, title: huge, description: huge, notes: huge, site_name: huge, current_collection: huge, collections: [huge], existing_tags: [huge], locale: 'ko' }));
+  const prompt: string = JSON.parse(calls[0].init!.body!).contents[0].parts[0].text;
+  assert.ok(prompt.length <= 16_384);
+  assert.match(prompt, /Tagging guidance:/);
+  assert.match(prompt, /\(preserve unless clearly mismatched\)/);
+  assert.match(prompt, /Existing collections:/);
+  assert.match(prompt, /Existing tags \(reuse when one fits\):/);
+  assert.ok(prompt.endsWith('Write the suggested_tags and topics in Korean (한국어).'));
+  assert.equal(prompt.isWellFormed(), true);
+});

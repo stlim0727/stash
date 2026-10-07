@@ -71,13 +71,19 @@ export function initSentry(): boolean {
     return true;
   }
   const options = buildSentryInitOptions(getSentryConfigState(), {
-    release: Constants.expoConfig?.version ?? null,
+    release:
+      typeof Constants.expoConfig?.version === 'string'
+        ? Constants.expoConfig.version
+        : null,
     // Builds that share a version name — every web deploy stamps the bare
     // marketing version (e.g. `1.1.0`) — are otherwise indistinguishable in
     // Sentry, so a fix can't be told apart from the build that had the bug.
     // The commit SHA (already exposed via app.config.js `extra.gitSha`) gives
     // each deploy a distinct release+dist pair.
-    dist: (Constants.expoConfig?.extra?.gitSha as string | null | undefined) ?? null,
+    dist:
+      typeof Constants.expoConfig?.extra?.gitSha === 'string'
+        ? Constants.expoConfig.extra.gitSha
+        : null,
   });
   if (!options) {
     return false;

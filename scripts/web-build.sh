@@ -19,7 +19,7 @@
 
 cd "$(dirname "$0")/.." || exit 1
 
-pnpm install || exit 1
+pnpm install --frozen-lockfile || exit 1
 
 # --- resolve commit SHA (best-effort) ---
 SHA="${WORKERS_CI_COMMIT_SHA:-}"

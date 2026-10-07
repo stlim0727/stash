@@ -6,6 +6,8 @@
  */
 
 import { Parser } from 'htmlparser2';
+import { fetchPublicPreview, isPublicPreviewUrl } from './preview-network.ts';
+import { previewFetch } from '@/domain/preview-fetch';
 
 // Relative .ts import (not the @ alias) so Node's test runner can resolve it.
 import { recordLog } from '../observability/log-buffer.ts';
@@ -101,7 +103,8 @@ function clean(value: string | undefined): string | undefined {
 
 function resolveHref(href: string, baseUrl: string): string | undefined {
   try {
-    return new URL(href, baseUrl).toString();
+    const resolved = new URL(href, baseUrl).toString();
+    return isPublicPreviewUrl(resolved) ? resolved : undefined;
   } catch {
     return undefined;
   }
@@ -425,7 +428,7 @@ async function fetchHtmlMetadata(url: string, userAgent: string): Promise<HtmlFe
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(url, {
+    const response = await fetchPublicPreview(url, {
       signal: controller.signal,
       headers: htmlHeaders(userAgent, url),
     });
@@ -619,7 +622,7 @@ export function isGenericNaverMapTitle(title: string | undefined, url?: string):
  */
 export async function fetchNaverMapFolderMetadata(
   shareId: string,
-  fetcher: typeof fetch = globalThis.fetch,
+  fetcher: typeof fetch = previewFetch as typeof fetch,
 ): Promise<FetchedMetadata | null> {
   const apiUrl = `https://pages.map.naver.com/save-pages/api/maps-bookmark/v3/shares/${encodeURIComponent(shareId)}`;
 
@@ -633,13 +636,13 @@ export async function fetchNaverMapFolderMetadata(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
-      const response = await fetcher(apiUrl, {
+      const response = await fetchPublicPreview(apiUrl, {
         signal: controller.signal,
         headers: {
           'User-Agent': userAgent,
           Accept: 'application/json',
         },
-      });
+      }, fetcher);
       if (!response.ok) {
         return { status: 'refused' };
       }
@@ -727,6 +730,7 @@ export async function fetchNaverMapFolderMetadata(
  * portal returned a 403, a shell, a redirect, or a network error.
  */
 export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | null> {
+  if (!isPublicPreviewUrl(url)) return null;
   // Android (API 28+) blocks cleartext HTTP, so an http:// share (e.g. from an
   // app whose share payload predates its own https move) dies on-device before
   // the server's usual http→https redirect can run. Fetch the https twin
@@ -1099,10 +1103,11 @@ export function parseOembed(json: OembedResponse): FetchedMetadata {
     const trimmed = v.trim();
     return isChallengeOrBoilerplateTitle(trimmed) ? undefined : trimmed;
   };
+  const thumbnail = str(json.thumbnail_url);
   return {
     title: str(json.title),
     site_name: str(json.provider_name),
-    preview_image_url: str(json.thumbnail_url),
+    preview_image_url: thumbnail && isPublicPreviewUrl(thumbnail) ? thumbnail : undefined,
     // favicon is left to URL-derived metadata (origin/favicon.ico).
   };
 }
@@ -1182,9 +1187,9 @@ async function resolveKnownYoutubeShortener(rawUrl: string): Promise<string | nu
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(rawUrl, {
+    const response = await fetchPublicPreview(rawUrl, {
       method: 'HEAD',
-      redirect: 'follow',
+      redirect: 'manual',
       signal: controller.signal,
     });
     if (!response.ok) {
@@ -1283,7 +1288,7 @@ export async function checkYoutubeAvailability(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(endpoint, {
+    const response = await fetchPublicPreview(endpoint, {
       signal: controller.signal,
       headers: OEMBED_HEADERS,
     });
@@ -1306,7 +1311,7 @@ async function fetchOembed(endpoint: string): Promise<FetchedMetadata | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(endpoint, {
+    const response = await fetchPublicPreview(endpoint, {
       signal: controller.signal,
       headers: OEMBED_HEADERS,
     });
@@ -1336,7 +1341,7 @@ async function preferHiResYoutubeThumbnail(videoId: string, fallback: string): P
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(sd, { method: 'HEAD', signal: controller.signal });
+    const response = await fetchPublicPreview(sd, { method: 'HEAD', signal: controller.signal });
     return response.ok ? sd : fallback;
   } catch {
     return fallback;

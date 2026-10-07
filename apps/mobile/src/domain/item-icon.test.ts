@@ -40,8 +40,8 @@ function make(overrides: Partial<Bookmark> = {}): Bookmark {
 }
 
 test('uses the favicon when present', () => {
-  const icon = itemIcon(make({ favicon_url: 'https://cdn/f.png' }));
-  assert.deepEqual(icon, { kind: 'favicon', uri: 'https://cdn/f.png' });
+  const icon = itemIcon(make({ favicon_url: 'https://cdn.example/f.png' }));
+  assert.deepEqual(icon, { kind: 'favicon', uri: 'https://cdn.example/f.png' });
 });
 
 test('blank favicon is ignored (falls back to monogram)', () => {
@@ -52,7 +52,7 @@ test('blank favicon is ignored (falls back to monogram)', () => {
 test('monogramIcon ignores any favicon — the on-device load-error fallback', () => {
   // Even with a favicon present, monogramIcon yields the colored-letter variant
   // so a 404'd favicon can fall back to it without leaving a blank tile.
-  const icon = monogramIcon(make({ favicon_url: 'https://cdn/f.png', site_name: 'Raindrop' }));
+  const icon = monogramIcon(make({ favicon_url: 'https://cdn.example/f.png', site_name: 'Raindrop' }));
   assert.equal(icon.kind, 'monogram');
   assert.equal(icon.letter, 'R');
 });
@@ -179,3 +179,10 @@ for (const [url, label] of [
     assert.equal(previewWordmark(make({ url, site_name: new URL(url).hostname })).label, label);
   });
 }
+
+
+test('legacy unsafe favicons fall back to a monogram without a remote source', () => {
+  for (const favicon_url of ['http://192.168.1.1/favicon.ico', 'http://127.0.0.1/favicon.ico', 'http://home.arpa/favicon.ico', 'http://router.local/favicon.ico', 'https://cdn/favicon.ico', 'ftp://192.168.1.1/favicon.ico']) {
+    assert.equal(itemIcon(make({favicon_url})).kind, 'monogram');
+  }
+});

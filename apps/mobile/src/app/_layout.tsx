@@ -104,6 +104,7 @@ function RootStack() {
     <Stack>
       <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
+      <Stack.Screen name="captcha/callback" options={{ headerShown: false }} />
       <Stack.Screen
         name="add"
         options={{ presentation: 'transparentModal', animation: 'fade', headerShown: false }}

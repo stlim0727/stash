@@ -2566,3 +2566,10 @@ test('a format-only change during create requires reconciliation and survives co
   assert.equal(merged.notes_format, 'markdown');
   assert.equal(createNeedsReconcileUpdate(latest, { ...uploaded, notes_format: 'markdown' }), false);
 });
+
+
+test('unsupported image format is permanently excluded even by forced sync', () => {
+  const stuck = makeCreateEntry({ sync_status: 'failed', last_error: 'image/svg+xml: unsupported image format for cloud sync. Image kept on this device; save as PNG or JPEG to sync.' });
+  assert.equal(isSyncable(stuck), false);
+  assert.equal(isSyncable(stuck, { ignoreBackoff: true }), false);
+});

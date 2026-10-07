@@ -9,6 +9,9 @@
 //   POST   /functions/v1/api-keys         — create a new key; returns plaintext once
 //   DELETE /functions/v1/api-keys/:id     — revoke (soft-delete) a key
 
+import { isUuid } from '../public-api/filters.ts';
+import { readJsonObject, RequestBodyError } from '../_shared/http.ts';
+
 import { isIssuanceEnabled } from './issuance.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -52,7 +55,7 @@ async function resolveUserId(authorization: string | null): Promise<string | nul
   });
   if (!res.ok) return null;
   const user = await res.json();
-  return user?.id ?? null;
+  return user?.is_anonymous === false && isUuid(user.id) ? user.id : null;
 }
 
 async function db(
@@ -101,11 +104,13 @@ async function listKeys(userId: string): Promise<Response> {
   return json(await res.json());
 }
 
-async function createKey(userId: string, name: string): Promise<Response> {
+async function createKey(userId: string, name: unknown): Promise<Response> {
   if (!API_KEY_ISSUANCE_ENABLED) {
     return json({ error: 'API key issuance is disabled' }, 403);
   }
-  if (!name?.trim()) return json({ error: 'name is required' }, 400);
+  if (typeof name !== 'string' || !name.trim() || name.length > 100) {
+    return json({ error: 'name must contain 1–100 characters' }, 400);
+  }
 
   const plaintext = generateKey();
   const hash = await sha256(plaintext);
@@ -122,6 +127,7 @@ async function createKey(userId: string, name: string): Promise<Response> {
 }
 
 async function revokeKey(userId: string, keyId: string): Promise<Response> {
+  if (!isUuid(keyId)) return json({ error: 'key id must be a UUID' }, 400);
   const res = await db(
     'PATCH',
     `api_keys?id=eq.${keyId}&user_id=eq.${userId}&revoked_at=is.null`,
@@ -152,8 +158,13 @@ Deno.serve(async (req: Request) => {
 
   if (req.method === 'GET' && !isSubPath) return listKeys(userId);
   if (req.method === 'POST' && !isSubPath) {
-    const body = await req.json().catch(() => ({}));
-    return createKey(userId, body.name);
+    if (!API_KEY_ISSUANCE_ENABLED) return json({ error: 'API key issuance is disabled' }, 403);
+    try {
+      const body = await readJsonObject(req, 4 * 1024);
+      return createKey(userId, body.name);
+    } catch (error) {
+      return json({ error: 'Invalid request body' }, error instanceof RequestBodyError ? error.status : 400);
+    }
   }
   if (req.method === 'DELETE' && isSubPath) return revokeKey(userId, keyId);
 

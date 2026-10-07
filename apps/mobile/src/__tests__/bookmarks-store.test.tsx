@@ -1841,3 +1841,25 @@ test("captures stay accessible during expiry and do not dedupe against hidden ac
     expect(result.current.addBookmark({ url: row.url! }).status).toBe("duplicate");
   });
 });
+
+
+test("CAPTCHA loading and failure preserve local captures and their durable sync queue", async () => {
+  fakeRepo.__reset([]);
+  mockAuthStatus = "loading";
+  const { result, rerender } = await renderStore();
+  let capturedId = "";
+  await act(async () => {
+    const outcome = result.current.addBookmark({ url: "https://example.com/captcha-local", title: "Saved during verification" });
+    expect(outcome.status).toBe("created");
+    if (outcome.status === "created") capturedId = outcome.bookmark.id;
+  });
+  await waitFor(() => expect(fakeRepo.__bookmarks().find((row) => row.id === capturedId)).toBeDefined());
+  await waitFor(() => expect(fakeRepo.__queue().find((row) => row.local_id === capturedId)).toBeDefined());
+  const storedBefore = fakeRepo.__bookmarks().find((row) => row.id === capturedId);
+  const queueBefore = fakeRepo.__queue().find((row) => row.local_id === capturedId);
+  mockAuthStatus = "error";
+  await rerender({});
+  expect(result.current.inbox).toEqual(expect.arrayContaining([expect.objectContaining({ id: capturedId, title: "Saved during verification" })]));
+  expect(fakeRepo.__bookmarks().find((row) => row.id === capturedId)).toEqual(storedBefore);
+  expect(fakeRepo.__queue().find((row) => row.local_id === capturedId)).toEqual(queueBefore);
+});

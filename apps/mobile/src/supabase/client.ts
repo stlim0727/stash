@@ -7,6 +7,7 @@ import {
   writeSupabaseSession,
 } from '@/supabase/session-storage';
 import { buildAuthorizeQuery } from '@/supabase/oauth';
+import { isCaptchaToken, CAPTCHA_FAILED_MESSAGE } from '@/supabase/captcha';
 import type {
   OAuthProvider,
   SupabaseAuthResponse,
@@ -193,6 +194,18 @@ export function errorMessageFrom(payload: unknown, status: number): string {
   return `Supabase request failed with HTTP ${status}`;
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    const reason = (signal as { reason?: unknown }).reason;
+    if (reason instanceof Error) {
+      throw reason;
+    }
+    const error = new Error(typeof reason === 'string' ? reason : 'This operation was aborted');
+    error.name = 'AbortError';
+    throw error;
+  }
+}
+
 export class StashSupabaseClient {
   constructor(private readonly config: SupabaseConfig = requireConfig()) {}
 
@@ -309,11 +322,15 @@ export class StashSupabaseClient {
     return parseContentRangeTotal(response.headers.get('content-range'));
   }
 
-  async signInAnonymously(): Promise<SupabaseAuthSession> {
+  async signInAnonymously(options: { captchaToken?: string; signal?: AbortSignal } = {}): Promise<SupabaseAuthSession> {
+    throwIfAborted(options.signal);
+    if (options.captchaToken !== undefined && !isCaptchaToken(options.captchaToken)) throw new Error(CAPTCHA_FAILED_MESSAGE);
     const payload = (await this.request('/auth/v1/signup', {
       method: 'POST',
-      body: {},
+      body: options.captchaToken === undefined ? {} : { gotrue_meta_security: { captcha_token: options.captchaToken } },
+      signal: options.signal,
     })) as SupabaseAuthResponse;
+    throwIfAborted(options.signal);
     const session = toSession(payload);
     await writeSupabaseSession(session);
     return session;
@@ -406,6 +423,9 @@ export class StashSupabaseClient {
       .join('/');
     return {
       uploadUrl: `${this.config.url}/storage/v1/object/${bucket}/${encodedPath}`,
+      // Keep a stable reference in the bookmark; temporary signatures belong
+      // only in the view. Preserve public references until older clients retire;
+      // ProtectedImage signs these same references after the bucket turns private.
       publicUrl: `${this.config.url}/storage/v1/object/public/${bucket}/${encodedPath}`,
       headers: {
         apikey: this.config.anonKey,

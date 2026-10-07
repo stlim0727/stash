@@ -3,6 +3,35 @@ import { mock, test } from 'node:test';
 
 import { DEFAULT_REQUEST_TIMEOUT_MS, errorMessageFrom, StashSupabaseClient, SupabaseRequestError } from './client.ts';
 import { syncErrorKind } from '../sync/sync-bookmarks.ts';
+import { clearSupabaseSession, readSupabaseSession } from './session-storage.ts';
+
+test('anonymous CAPTCHA token uses GoTrue security metadata and is not persisted with the session', async () => {
+  const calls: RequestInit[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url: string, init: RequestInit) => {
+    calls.push(init);
+    return new Response(JSON.stringify({ access_token: 'access', refresh_token: 'refresh', token_type: 'bearer', expires_in: 3600, user: { id: 'anon', is_anonymous: true } }));
+  }) as typeof fetch;
+  try {
+    const client = new StashSupabaseClient({ url: 'https://project.test', anonKey: 'public-key' });
+    await client.signInAnonymously({ captchaToken: 'one-use-token' });
+    assert.deepEqual(JSON.parse(calls[0].body as string), { gotrue_meta_security: { captcha_token: 'one-use-token' } });
+    assert.equal(JSON.stringify(await readSupabaseSession()).includes('one-use-token'), false);
+    await client.signInAnonymously();
+    assert.deepEqual(JSON.parse(calls[1].body as string), {});
+    for (const captchaToken of ['', 'a b', 'a'.repeat(2049)]) await assert.rejects(client.signInAnonymously({ captchaToken }));
+    assert.equal(calls.length, 2);
+  } finally { globalThis.fetch = originalFetch; await clearSupabaseSession(); }
+});
+
+test('signInAnonymously abort handling is compatible with signals lacking throwIfAborted', async () => {
+  const client = new StashSupabaseClient({ url: 'https://project.test', anonKey: 'public-key' });
+  const signalWithoutThrowIfAborted = { aborted: true } as unknown as AbortSignal;
+  await assert.rejects(
+    client.signInAnonymously({ signal: signalWithoutThrowIfAborted }),
+    (err: any) => err.name === 'AbortError',
+  );
+});
 
 test('errorMessageFrom prefers GoTrue/PostgREST human-readable keys', () => {
   assert.equal(errorMessageFrom({ msg: 'bad login' }, 400), 'bad login');

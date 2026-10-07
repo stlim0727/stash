@@ -1,0 +1,4 @@
+body { margin: 0; padding: 24px; font: 16px/1.5 system-ui, sans-serif; background: #f5f5f5; color: #161616; }
+main { margin: 32px auto; padding: 24px; max-width: 380px; border-radius: 16px; background: white; }
+h1 { font-size: 24px; }
+button { margin-top: 16px; padding: 12px 16px; font: inherit; cursor: pointer; }

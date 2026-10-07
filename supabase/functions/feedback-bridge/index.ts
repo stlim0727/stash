@@ -12,12 +12,12 @@
 
 import { SentrySink } from './sentry-sink.ts';
 import type { ReportSink } from './sink.ts';
-import { parseWebhookReport } from './sink.ts';
+import { createFeedbackHandler } from './handler.ts';
 
 const SENTRY_DSN = Deno.env.get('SENTRY_DSN') ?? '';
 const APP_RELEASE = Deno.env.get('FEEDBACK_RELEASE') ?? null;
 // Shared secret a Supabase webhook can send as a header so only the database
-// can drive this function. Optional: if unset, the check is skipped.
+// can drive this function. Unset configuration rejects every request.
 const WEBHOOK_SECRET = Deno.env.get('FEEDBACK_BRIDGE_SECRET') ?? '';
 
 // ── The swappable seam ──────────────────────────────────────────────────────
@@ -28,58 +28,4 @@ const sink: ReportSink | null = SENTRY_DSN
   : null;
 // ────────────────────────────────────────────────────────────────────────────
 
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
-// Constant-time-ish comparison so the secret check doesn't leak length/contents
-// via timing. Both strings are short shared secrets.
-function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    return false;
-  }
-  let mismatch = 0;
-  for (let i = 0; i < a.length; i += 1) {
-    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return mismatch === 0;
-}
-
-Deno.serve(async (req) => {
-  if (req.method !== 'POST') {
-    return json({ error: 'Method not allowed' }, 405);
-  }
-
-  if (WEBHOOK_SECRET) {
-    const provided = req.headers.get('x-feedback-bridge-secret') ?? '';
-    if (!safeEqual(provided, WEBHOOK_SECRET)) {
-      return json({ error: 'Unauthorized' }, 401);
-    }
-  }
-
-  let report;
-  try {
-    report = parseWebhookReport(await req.json());
-  } catch (error) {
-    return json(
-      { error: error instanceof Error ? error.message : 'Invalid payload' },
-      400,
-    );
-  }
-
-  if (!sink) {
-    // No destination configured — acknowledge so the webhook doesn't retry.
-    return json({ skipped: true, reason: 'No report sink configured' }, 200);
-  }
-
-  const result = await sink.deliver(report);
-  if (!result.delivered) {
-    // 502: the report is safely persisted in `feedback_reports`; only the
-    // forward failed, so a webhook retry is harmless.
-    return json({ sink: sink.name, ...result }, 502);
-  }
-  return json({ sink: sink.name, ...result }, 200);
-});
+Deno.serve(createFeedbackHandler(WEBHOOK_SECRET, sink));

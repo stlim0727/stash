@@ -1,3 +1,5 @@
+import { isPublicPreviewUrl } from '@/domain/preview-network';
+import { ProtectedImage } from '@/ui/ProtectedImage';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
@@ -1135,9 +1137,9 @@ export default function BookmarkDetailScreen({
           isOpeningLink && { borderColor: palette.accent },
         ]}
       >
-        <Image
+        <ProtectedImage
           testID="bookmark-detail-preview"
-          source={{ uri: previewUri }}
+          uri={previewUri}
           style={styles.preview}
           resizeMode="cover"
           onError={() => markPreviewImageFailed(previewUri)}
@@ -1173,9 +1175,9 @@ export default function BookmarkDetailScreen({
       </Pressable>
     ) : (
       <View style={[styles.previewContainer, { backgroundColor: palette.mutedSurface }]}>
-        <Image
+        <ProtectedImage
           testID="bookmark-detail-preview"
-          source={{ uri: previewUri }}
+          uri={previewUri}
           style={styles.preview}
           resizeMode="cover"
           onError={() => markPreviewImageFailed(previewUri)}
@@ -1210,9 +1212,9 @@ export default function BookmarkDetailScreen({
       ) : null}
       {/* Compact byline: favicon · host · status, instead of a header card. */}
       <View style={styles.byline}>
-        {bookmark.favicon_url ? (
+        {bookmark.favicon_url && isPublicPreviewUrl(bookmark.favicon_url) ? (
           <View style={[styles.bylineFavTile, { borderColor: palette.border }]}>
-            <Image source={{ uri: bookmark.favicon_url }} style={styles.bylineFav} resizeMode="contain" />
+            <ProtectedImage uri={bookmark.favicon_url} style={styles.bylineFav} resizeMode="contain" />
           </View>
         ) : null}
         {/* `accessible` + `accessibilityLabel` on this outer View give
