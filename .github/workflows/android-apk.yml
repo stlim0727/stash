@@ -323,6 +323,11 @@ jobs:
           # Release APKs report under the "production" Sentry environment (the
           # SDK otherwise defaults to "development").
           EXPO_PUBLIC_SENTRY_ENVIRONMENT: production
+          # The Expo plugin supplies the upload organization/project. The
+          # private CLI token is build-only and must never use EXPO_PUBLIC_*.
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          # Builds without upload credentials remain installable.
+          SENTRY_DISABLE_AUTO_UPLOAD: ${{ secrets.SENTRY_AUTH_TOKEN == '' && 'true' || 'false' }}
           # PostHog (both the base hand-rolled analytics client and the full
           # SDK trial). Absent secrets ⇒ both stay no-ops, same pattern as
           # Sentry above.

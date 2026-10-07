@@ -58,7 +58,13 @@
         }
       ],
       "./plugins/withShareReceiver.js",
-      "@sentry/react-native/expo",
+      [
+        "@sentry/react-native/expo",
+        {
+          "organization": "self-463",
+          "project": "stash"
+        }
+      ],
       "expo-notifications",
       "expo-localization",
       "expo-secure-store",

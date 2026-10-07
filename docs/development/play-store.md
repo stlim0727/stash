@@ -111,8 +111,10 @@ Before building:
   in the production EAS environment.
 - Set `EXPO_PUBLIC_SENTRY_DSN` only if production crash reporting should be
   enabled for the store build.
-- Ensure Sentry source map secrets are configured if crash reporting is enabled:
-  `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, and `SENTRY_PROJECT`.
+- Set `SENTRY_AUTH_TOKEN` in the production EAS environment for source map
+  uploads. The Expo plugin in `apps/mobile/app.json` supplies the organization
+  (`self-463`) and project (`stash`) for both EAS and GitHub APK builds.
+  Without upload credentials, set `SENTRY_DISABLE_AUTO_UPLOAD=true` explicitly.
 - Confirm `apps/mobile/app.json` version and EAS remote versionCode are correct.
 
 Post-build checks:
