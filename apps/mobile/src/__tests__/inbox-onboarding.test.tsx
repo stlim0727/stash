@@ -1,6 +1,6 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { Linking, Platform } from 'react-native';
+import { Platform } from 'react-native';
 
 // The Inbox first-run empty state and the anonymous-account nudge banner.
 // - Native teaches the share-sheet capture (a 2-step walkthrough); web has no
@@ -22,7 +22,7 @@ jest.mock('@/domain/enrichment', () => ({
 
 // Mutable auth mock so each test can pick anonymous / authenticated / signed out.
 const mockAuth = {
-  status: 'anonymous' as 'anonymous' | 'authenticated' | 'not_configured',
+  status: 'anonymous' as 'anonymous' | 'authenticated' | 'not_configured' | 'signed_out' | 'loading' | 'session_expired' | 'error',
   email: null as string | null,
   displayName: null as string | null,
   avatarUrl: null as string | null,
@@ -93,16 +93,34 @@ test('native empty state teaches the share-capture flow as a numbered 2-step wal
   expect(screen.getByText('Choose Keepory — saved instantly')).toBeTruthy();
   // The secondary fallback line for the manual paste path.
   expect(screen.getByText('Prefer to paste a link? Tap the + below.')).toBeTruthy();
-  // Reciprocal pointer to the web version — unlike the web pill, this one is a
-  // real link since keepory.app already exists (no Play Store URL to wait on).
-  const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
-  await fireEvent.press(screen.getByText('Also on the web at keepory.app'));
-  expect(openURL).toHaveBeenCalledWith('https://keepory.app');
+  expect(screen.queryByText('Also on the web at keepory.app')).toBeNull();
   // Never promises the (native-only) share flow's web-broken copy or the web variant.
   expect(screen.queryByText('Tap + to paste a link and save.')).toBeNull();
   expect(
     screen.queryByText('Sharing from other apps works in the Keepory Android app, not on the web yet.'),
   ).toBeNull();
+});
+
+test.each(['anonymous', 'signed_out'] as const)('empty inbox offers %s users sign-in without blocking local saving', async (status) => {
+  mockAuth.status = status;
+  const screen = await renderInbox();
+
+  await waitFor(() => expect(screen.getByTestId('inbox-empty-sign-in')).toBeTruthy());
+  expect(screen.getByText('Sign in to access your saved links across devices.')).toBeTruthy();
+  expect(screen.getByText('You can save links without signing in.')).toBeTruthy();
+  await fireEvent.press(screen.getByLabelText('Add bookmark'));
+  expect(mockPush).toHaveBeenCalledWith('/add');
+  mockPush.mockClear();
+  await fireEvent.press(screen.getByTestId('inbox-empty-sign-in'));
+  expect(mockPush).toHaveBeenCalledWith('/settings');
+});
+
+test.each(['authenticated', 'not_configured', 'loading', 'session_expired', 'error'] as const)('empty inbox does not show an acquisition prompt when auth is %s', async (status) => {
+  mockAuth.status = status;
+  const screen = await renderInbox();
+
+  await waitFor(() => expect(screen.getByTestId('inbox-empty-onboarding')).toBeTruthy());
+  expect(screen.queryByTestId('inbox-empty-account')).toBeNull();
 });
 
 test('web empty state points at paste-a-link instead of the (unavailable) share flow', async () => {

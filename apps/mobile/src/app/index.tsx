@@ -3074,6 +3074,24 @@ export default function InboxScreen() {
               <Text style={[styles.emptyTitle, { color: palette.text }]}>
                 {t('inbox.emptyTitle')}
               </Text>
+              {auth.status === 'anonymous' || auth.status === 'signed_out' ? (
+                <View style={styles.emptyAccount} testID="inbox-empty-account">
+                  <Text style={[styles.emptyAccountBenefit, { color: palette.textSecondary }]}>
+                    {t('inbox.emptySignInBenefit')}
+                  </Text>
+                  <Button
+                    size="md"
+                    style={styles.emptySignInButton}
+                    onPress={() => router.push('/settings')}
+                    testID="inbox-empty-sign-in"
+                  >
+                    {t('settings.account.signIn')}
+                  </Button>
+                  <Text style={[styles.emptyAccountReassurance, { color: palette.textSecondary }]}>
+                    {t('inbox.emptySignInOptional')}
+                  </Text>
+                </View>
+              ) : null}
               {isWeb ? (
                 <>
                   <View style={styles.emptyHintRow} testID="inbox-empty-web-step">
@@ -3127,27 +3145,19 @@ export default function InboxScreen() {
                   <Text style={[styles.emptyHintFallback, { color: palette.textSecondary }]}>
                     {t('inbox.emptyHintFallback')}
                   </Text>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    style={styles.emptyPlatformPill}
-                    onPress={() => void Linking.openURL('https://keepory.app').catch(() => {})}
-                  >
-                    {t('inbox.emptyHintGetWeb')}
-                  </Button>
                 </>
               )}
-              <Button
-                variant="secondary"
-                size="sm"
-                icon="bulb-outline"
-                style={styles.emptyTutorialButton}
+              <Pressable
+                accessibilityRole="button"
+                style={({ pressed }) => [styles.emptyTutorialButton, { opacity: pressed ? 0.7 : 1 }]}
                 onPress={() => setTutorialOpen(true)}
                 testID="inbox-empty-tutorial-button"
                 accessibilityLabel={t('inbox.emptyTutorialA11y')}
               >
-                {t('inbox.emptyTutorialButton')}
-              </Button>
+                <Text style={[styles.emptyTutorialLabel, { color: palette.accentText }]}>
+                  {t('inbox.emptyTutorialButton')}
+                </Text>
+              </Pressable>
             </View>
           )
         }
@@ -4252,6 +4262,29 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginBottom: 20,
   },
+  emptyAccount: {
+    alignItems: 'center',
+    width: '100%',
+    maxWidth: 320,
+    marginTop: -4,
+    marginBottom: 24,
+  },
+  emptyAccountBenefit: {
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  emptySignInButton: {
+    alignSelf: 'stretch',
+    minHeight: 48,
+    marginTop: 16,
+  },
+  emptyAccountReassurance: {
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: 'center',
+    marginTop: 10,
+  },
   emptyHintRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -4292,6 +4325,14 @@ const styles = StyleSheet.create({
   },
   emptyTutorialButton: {
     marginTop: 14,
+    minHeight: 48,
+    minWidth: 48,
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
+  emptyTutorialLabel: {
+    fontSize: 14,
+    textAlign: 'center',
   },
   errorBanner: {
     fontSize: 13,
