@@ -267,6 +267,8 @@ try {
   await Promise.all([new Promise((r) => server.close(r)), new Promise((r) => foreign.close(r))]);
   await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(async () => {
     await delay(500);
-    await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
+    await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch((error) => {
+      console.warn('Chrome temporary-profile cleanup failed after retries:', error?.code ?? 'unknown');
+    });
   });
 }
