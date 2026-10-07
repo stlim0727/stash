@@ -298,8 +298,14 @@ function createUploadPayload(
   entry: LocalPendingBookmark,
   getBookmark: (id: string) => Bookmark | undefined,
 ): CreateBookmarkInput {
+  const isRehome = entry.changes?.some((c) => c.source === 'account_rehome');
   const latestAtUpload = getBookmark(entry.local_id);
   if (!latestAtUpload) {
+    if (isRehome && entry.payload.collection_id !== undefined) {
+      const sanitized = { ...entry.payload };
+      delete sanitized.collection_id;
+      return sanitized;
+    }
     return entry.payload;
   }
   const payload: CreateBookmarkInput = {
@@ -310,6 +316,11 @@ function createUploadPayload(
     ...(latestAtUpload.notes_format !== undefined ? { notes_format: latestAtUpload.notes_format } : {}),
     ...(latestAtUpload.deleted_at ? { deleted_at: latestAtUpload.deleted_at } : {}),
   };
+  // STASH-7M: Account re-home entries cannot reference collections from the
+  // previous account under PostgreSQL Row-Level Security.
+  if (isRehome) {
+    delete payload.collection_id;
+  }
   // A URL-less text/Markdown-memo row's body lives in `description` locally
   // but uploads as `shared_text` — refresh it too, the same as title/notes,
   // so an edit made while the original create is still queued (e.g. offline)
@@ -435,9 +446,15 @@ export async function syncCreateQueueEntryBatch(
       Boolean(output.bookmark_id) &&
       output.bookmark_id !== entry.local_id;
     if (localBookmark) {
+      const isRehome = entry.changes?.some((c) => c.source === 'account_rehome');
+      const nextCollectionId =
+        output.collection_id !== undefined
+          ? output.collection_id
+          : (isRehome ? null : localBookmark.collection_id);
       const syncedBookmark: Bookmark = {
         ...localBookmark,
         id: isDuplicateSwap ? output.bookmark_id : localBookmark.id,
+        collection_id: nextCollectionId,
         sync_status: 'synced',
         ever_synced: true,
         updated_at: now,
@@ -548,8 +565,9 @@ export async function syncQueueEntry(
         : {}),
     };
     try {
+      let remoteBookmark: Bookmark;
       try {
-        await api.updateBookmark(entry.local_id, updatePayload);
+        remoteBookmark = await api.updateBookmark(entry.local_id, updatePayload);
       } catch (error) {
         if (!isMissingOptionalBookmarkColumnError(error, updatePayload)) {
           throw error;
@@ -558,15 +576,21 @@ export async function syncQueueEntry(
           'warn',
           `sync update: optional bookmark dismissal column missing; retrying without AI dismissal fields (${error instanceof Error ? error.message : String(error)})`,
         );
-        await api.updateBookmark(entry.local_id, withoutOptionalBookmarkUpdateColumns(updatePayload));
+        remoteBookmark = await api.updateBookmark(entry.local_id, withoutOptionalBookmarkUpdateColumns(updatePayload));
         throw new Error(
           'Optional AI dismissal fields are waiting for the Supabase schema to update.',
         );
       }
       await removeQueueEntryIfNotSuperseded(repository, entry);
-      if (bookmark.sync_status !== 'synced') {
+      const nextCollectionId =
+        remoteBookmark?.collection_id !== undefined
+          ? remoteBookmark.collection_id
+          : bookmark.collection_id;
+      const collectionChanged = bookmark.collection_id !== nextCollectionId;
+      if (bookmark.sync_status !== 'synced' || collectionChanged) {
         const syncedBookmark: Bookmark = {
           ...bookmark,
+          collection_id: nextCollectionId,
           sync_status: 'synced',
           ever_synced: true,
           updated_at: now,
@@ -901,9 +925,15 @@ export async function syncQueueEntry(
     if (localBookmark) {
       const isDuplicateSwap =
         result.status === 'duplicate' && Boolean(result.bookmark_id) && result.bookmark_id !== entry.local_id;
+      const isRehome = entry.changes?.some((c) => c.source === 'account_rehome');
+      const nextCollectionId =
+        result.collection_id !== undefined
+          ? result.collection_id
+          : (isRehome ? null : localBookmark.collection_id);
       const syncedBookmark: Bookmark = {
         ...localBookmark,
         id: isDuplicateSwap ? result.bookmark_id : localBookmark.id,
+        collection_id: nextCollectionId,
         sync_status: 'synced',
         ever_synced: true,
         updated_at: now,
