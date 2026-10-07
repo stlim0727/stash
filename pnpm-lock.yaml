@@ -127,8 +127,8 @@ importers:
         specifier: ^12.0.0
         version: 12.0.0
       marked:
-        specifier: ^18.0.10
-        version: 18.0.10
+        specifier: ^18.0.14
+        version: 18.0.14
       posthog-react-native:
         specifier: ^4.62.0
         version: 4.62.0(expo-application@58.0.4(expo@58.0.6))(expo-device@58.0.5(expo@58.0.6))(expo-file-system@58.0.7(expo@58.0.6)(react-native@0.88.0-rc.3(@babel/core@7.29.7)(@react-native/metro-config@0.88.0-rc.3(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0)))(expo-localization@58.0.3(expo@58.0.6)(react@19.3.0))(posthog-react-native-session-replay@1.6.0(react-native@0.88.0-rc.3(@babel/core@7.29.7)(@react-native/metro-config@0.88.0-rc.3(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0))(react-native-safe-area-context@5.9.1(react-native@0.88.0-rc.3(@babel/core@7.29.7)(@react-native/metro-config@0.88.0-rc.3(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0))(react-native-svg@15.15.5(react-native@0.88.0-rc.3(@babel/core@7.29.7)(@react-native/metro-config@0.88.0-rc.3(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0))
@@ -3402,8 +3402,8 @@ packages:
   makeerror@1.0.12:
     resolution: {integrity: sha512-JmqCvUhmt43madlpFzG4BQzG2Z3m6tvQDNKdClZnO3VbIudJYmxsT0FNJMeiB2+JTSlTQTSbU8QdesVmwJcmLg==}
 
-  marked@18.0.10:
-    resolution: {integrity: sha512-FJeH4bRpYoXiggcgriCGItKCSv3xkngJc4QCZ/rkQCogU3VYaLxYJoZl8Nw/b4+x7iij/pd+09mZ6A1dXzpL0A==}
+  marked@18.0.14:
+    resolution: {integrity: sha512-mBHK6FBHuBAlhgRe88w9F0O1AbwwXJUcQibUbC/QcdTbVGAD7aWza+xt3N6oT/jCZx3/OMeS+8rnuiHZcQ9s7A==}
     engines: {node: '>= 20'}
     hasBin: true
 
@@ -8410,7 +8410,7 @@ snapshots:
     dependencies:
       tmpl: 1.0.5
 
-  marked@18.0.10: {}
+  marked@18.0.14: {}
 
   mdn-data@2.0.14: {}
 
