@@ -88,7 +88,7 @@ export function FloatingReportButton({ children, enabled: enabledProp }: Floatin
   const pathname = usePathname();
   const palette = usePalette();
   const insets = useSafeAreaInsets();
-  const captureRef = useRef<View>(null);
+  const captureRef = useRef<React.ComponentRef<typeof View>>(null);
   const [capturing, setCapturing] = useState(false);
   const [minimized, setMinimized] = useState(false);
   const [prefEnabled] = useFloatingReportPreference();

@@ -73,7 +73,7 @@ export function ShareConfirmHandler() {
   // foreground from a true background.
   useEffect(() => {
     const onChange = (next: AppStateStatus) => {
-      const wasBackgrounded = appState.current.match(/inactive|background/);
+      const wasBackgrounded = appState.current?.match(/inactive|background/);
       appState.current = next;
       if (wasBackgrounded && next === 'active') {
         void flush();

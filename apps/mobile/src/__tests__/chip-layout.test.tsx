@@ -8,11 +8,11 @@
  * the glyph descenders inside the pill.
  */
 import { render } from '@testing-library/react-native';
-import { StyleSheet, type TextStyle } from 'react-native';
+import { StyleSheet, type StyleProp, type TextStyle } from 'react-native';
 
 import { Chip } from '@/ui/Chip';
 
-function labelStyle(node: { props: { style?: unknown } }): TextStyle {
+function labelStyle(node: { props: { style?: StyleProp<TextStyle> } }): TextStyle {
   return StyleSheet.flatten(node.props.style) as TextStyle;
 }
 

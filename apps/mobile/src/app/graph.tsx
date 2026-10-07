@@ -11,7 +11,6 @@ import {
 import {
   ActivityIndicator,
   Animated,
-  InteractionManager,
   PanResponder,
   Platform,
   Pressable,
@@ -91,7 +90,7 @@ const SETTLE_STAGE_MESSAGE_KEY: Record<
 };
 
 // Pure + exported for testing: `null` (no stage recorded yet, e.g. the first
-// render before the settle effect's InteractionManager callback runs) falls
+// render before the settle effect's idle callback runs) falls
 // back to the generic "Building your map…" message.
 export function settleStageMessageKey(
   stage: SettleStage | null,
@@ -658,8 +657,7 @@ export default function GraphScreen() {
   // The settle is O(ticks·n²) and would block the JS thread through the screen's
   // slide-in if run during render — enough to trip Stash's 2s hang detector on a
   // large stash. So we hold the result in state and compute it in an effect AFTER
-  // `runAfterInteractions`, letting the screen paint and the navigation animation
-  // finish first. Deterministic seeded layout, so it only runs once per topology.
+  // an idle callback, letting the screen paint before heavy layout work. Deterministic seeded layout, so it only runs once per topology.
   const [settled, setSettled] = useState<SettledGraph | null>(null);
   // Which settle stage is currently running, so the loading state (rendered
   // further down, while `settled === null`) can show what's actually
@@ -676,7 +674,7 @@ export default function GraphScreen() {
     // rather than a stale graph.
     setSettled(null);
     setSettleStage(null);
-    const handle = InteractionManager.runAfterInteractions(() => {
+    const settleWhenIdle = () => {
       if (cancelled) {
         return;
       }
@@ -740,10 +738,16 @@ export default function GraphScreen() {
           setSettleStage(null);
         }
       })();
-    });
+    };
+    // Safari and older web runtimes may not implement requestIdleCallback.
+    const idleHandle = typeof requestIdleCallback === "function"
+      ? requestIdleCallback(settleWhenIdle)
+      : null;
+    const timeoutHandle = idleHandle === null ? setTimeout(settleWhenIdle, 0) : null;
     return () => {
       cancelled = true;
-      handle.cancel();
+      if (idleHandle !== null) cancelIdleCallback(idleHandle);
+      if (timeoutHandle !== null) clearTimeout(timeoutHandle);
     };
   }, [input, mode]);
 
@@ -907,7 +911,7 @@ export default function GraphScreen() {
   }, [fitViewBoxRect]);
 
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
-  const containerRef = useRef<View>(null);
+  const containerRef = useRef<React.ComponentRef<typeof View>>(null);
   const containerOriginRef = useRef({ x: 0, y: 0 });
   // The pan clamp reads the live viewport from a ref (not the state) because the
   // panResponder is memoized and would otherwise close over a stale {w,h}.

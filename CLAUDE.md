@@ -86,7 +86,7 @@ Headless build check (no emulator): `cd apps/mobile && CI=1 pnpm exec expo expor
 
 ## Architecture
 
-Monorepo (`apps/*`, `packages/*`) — currently one app, `apps/mobile` (Expo SDK 56, RN 0.85, expo-router, TypeScript). Routes live in `apps/mobile/src/app`. Key layers under `apps/mobile/src`:
+Monorepo (`apps/*`, `packages/*`) — currently one app, `apps/mobile` (Expo SDK 58, RN 0.88, expo-router, TypeScript). Routes live in `apps/mobile/src/app`. Key layers under `apps/mobile/src`:
 
 - **`domain/`** — pure, platform-free logic and types. `types.ts` mirrors the snake_case Postgres schema (`docs/architecture/data-model.md`) 1:1 on purpose, for direct row mapping. URL handling (`urls.ts`), metadata enrichment (`enrichment.ts`, `page-metadata.ts`), search, and pending-mutation engines live here and are heavily unit-tested.
 - **`storage/`** — durable persistence behind the `BookmarkRepository` interface. Platform is chosen by **Metro platform extensions**: `repository.native.ts` (expo-sqlite) on iOS/Android, `repository.ts` (localStorage / in-memory during SSR) on web. New/changed bookmarks enqueue entries in a local pending queue carrying a sync `operation` (create/update/delete), one entry per bookmark (newer mutations supersede older).

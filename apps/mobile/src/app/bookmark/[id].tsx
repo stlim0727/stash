@@ -8,7 +8,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  type ImageLoadEventData,
+  type ImageLoadEvent,
   Linking,
   type NativeSyntheticEvent,
   Platform,
@@ -1143,7 +1143,7 @@ export default function BookmarkDetailScreen({
           style={styles.preview}
           resizeMode="cover"
           onError={() => markPreviewImageFailed(previewUri)}
-          onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
+          onLoad={(event: ImageLoadEvent) => {
             if (!didPreviewImageLoad(event.nativeEvent)) {
               markPreviewImageFailed(previewUri);
             } else {
@@ -1181,7 +1181,7 @@ export default function BookmarkDetailScreen({
           style={styles.preview}
           resizeMode="cover"
           onError={() => markPreviewImageFailed(previewUri)}
-          onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
+          onLoad={(event: ImageLoadEvent) => {
             if (!didPreviewImageLoad(event.nativeEvent)) {
               markPreviewImageFailed(previewUri);
             } else {

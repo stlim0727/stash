@@ -95,7 +95,7 @@ test('native empty state teaches the share-capture flow as a numbered 2-step wal
   expect(screen.getByText('Prefer to paste a link? Tap the + below.')).toBeTruthy();
   // Reciprocal pointer to the web version — unlike the web pill, this one is a
   // real link since keepory.app already exists (no Play Store URL to wait on).
-  const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(true);
+  const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
   await fireEvent.press(screen.getByText('Also on the web at keepory.app'));
   expect(openURL).toHaveBeenCalledWith('https://keepory.app');
   // Never promises the (native-only) share flow's web-broken copy or the web variant.

@@ -47,7 +47,7 @@ export default function AddBookmarkScreen() {
   const [memo, setMemo] = useState('');
   const [format, setFormat] = useState<TextFormat>('plain');
   const [error, setError] = useState<string | null>(null);
-  const titleInputRef = useRef<TextInput | null>(null);
+  const titleInputRef = useRef<React.ComponentRef<typeof TextInput> | null>(null);
   const [mode, setMode] = useState<'link' | 'note'>('link');
   const [detailsOpen, setDetailsOpen] = useState(false);
   const focusTitleAfterExpand = useRef(false);

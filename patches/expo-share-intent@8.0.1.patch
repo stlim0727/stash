@@ -255,7 +255,7 @@ index db573ec..d244ea9 100644
      }
  }
 \ No newline at end of file
-diff --git a/share-patched/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt b/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt
+diff --git a/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt b/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt
 new file mode 100644
 index 0000000..c101682
 --- /dev/null
@@ -479,3 +479,14 @@ index 3d343c6..85944f2 100644
              files: shareIntent?.files
                  ? shareIntent.files.reduce((acc, file) => {
                      if (!file.path && !file.contentUri)
+diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -76,6 +76,6 @@
+   },
+   "peerDependencies": {
+-    "expo": "^57",
++    "expo": "^58",
+     "expo-constants": ">=57.0.3",
+     "expo-linking": ">=57.0.1",
+     "react": "*",

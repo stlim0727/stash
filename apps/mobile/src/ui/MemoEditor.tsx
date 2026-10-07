@@ -42,7 +42,7 @@ export function MemoEditor({
   const [preview, setPreview] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [focusRequest, setFocusRequest] = useState(0);
-  const inputRef = useRef<TextInput | null>(null);
+  const inputRef = useRef<React.ComponentRef<typeof TextInput> | null>(null);
   const inputScrollRef = useRef<number | null>(null);
   const focusRequestedRef = useRef(false);
   const latest = useRef<MemoDraft>({ value, format });

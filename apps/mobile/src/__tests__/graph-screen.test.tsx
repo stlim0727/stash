@@ -1,6 +1,6 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { InteractionManager, Pressable, Text, processColor } from 'react-native';
+import { Pressable, Text, processColor } from 'react-native';
 
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaProvider: ({ children }: { children: ReactNode }) => children,
@@ -156,19 +156,24 @@ function nativeColorPayload(value: unknown) {
 }
 
 // The screen settles the layout OFF the render path, inside
-// InteractionManager.runAfterInteractions. Capture those callbacks so the test
+// requestIdleCallback. Capture those callbacks so the test
 // controls when the settle runs — that lets us assert the loading state renders
 // FIRST, then flush the settle and assert the graph.
 let pendingInteractions: Array<() => void> = [];
+const originalRequestIdleCallback = globalThis.requestIdleCallback;
+const originalCancelIdleCallback = globalThis.cancelIdleCallback;
 beforeAll(() => {
-  jest
-    .spyOn(InteractionManager, 'runAfterInteractions')
-    .mockImplementation((task?: (() => void) | { gen?: () => void }) => {
-      if (typeof task === 'function') {
-        pendingInteractions.push(task);
-      }
-      return { then: () => {}, done: () => {}, cancel: () => {} } as never;
-    });
+  globalThis.requestIdleCallback = jest.fn((task) => {
+    pendingInteractions.push(() => task({ didTimeout: false, timeRemaining: () => 50 }));
+    return pendingInteractions.length;
+  });
+  globalThis.cancelIdleCallback = jest.fn();
+});
+afterAll(() => {
+  if (originalRequestIdleCallback) globalThis.requestIdleCallback = originalRequestIdleCallback;
+  else Reflect.deleteProperty(globalThis, 'requestIdleCallback');
+  if (originalCancelIdleCallback) globalThis.cancelIdleCallback = originalCancelIdleCallback;
+  else Reflect.deleteProperty(globalThis, 'cancelIdleCallback');
 });
 
 async function flushSettle() {
@@ -263,7 +268,7 @@ test('shows stage-specific progress text as the settle advances, instead of a ba
 
   const screen = await renderScreen();
   await waitFor(() => expect(screen.getByTestId('graph-loading')).toBeTruthy());
-  // Before the settle's InteractionManager callback has run at all, the
+  // Before the settle's idle callback has run at all, the
   // generic message shows (no stage recorded yet).
   expect(screen.getByText('Building your map…')).toBeTruthy();
 

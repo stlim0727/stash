@@ -72,12 +72,12 @@ export function ShelfEdge({
  */
 export function useShelfEdges(active: boolean, geometryDeps: DependencyList) {
   const isWeb = Platform.OS === 'web';
-  const shelfRef = useRef<ScrollView>(null);
+  const shelfRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const [canLeft, setCanLeft] = useState(false);
   const [canRight, setCanRight] = useState(false);
   // `getScrollableNode()` returns the underlying DOM `div` on web.
   const node = useCallback(
-    () => (isWeb ? (shelfRef.current?.getScrollableNode() as HTMLElement | null) : null),
+    () => (isWeb ? (shelfRef.current?.getScrollableNode() as unknown as HTMLElement | null) : null),
     [isWeb],
   );
   const updateEdges = useCallback(() => {

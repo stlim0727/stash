@@ -18,7 +18,7 @@ import {
   BackHandler,
   FlatList,
   Image,
-  type ImageLoadEventData,
+  type ImageLoadEvent,
   Keyboard,
   LayoutAnimation,
   Linking,
@@ -538,7 +538,7 @@ export default function InboxScreen() {
     }
   }, []);
   useEffect(() => clearBlurHide, [clearBlurHide]);
-  const searchRef = useRef<TextInput>(null);
+  const searchRef = useRef<React.ComponentRef<typeof TextInput>>(null);
   // STASH-33/34/35/36 root cause: the list has `keyboardDismissMode="on-drag"`
   // (below, near the FlatList) so scrolling the results dismisses the
   // keyboard. Opening search from a collapsed header forces a large relayout
@@ -3468,7 +3468,7 @@ export default function InboxScreen() {
                       uri={thumbUri}
                       style={[styles.compactThumb, { backgroundColor: palette.mutedSurface }]}
                       onError={() => markPreviewImageFailed(thumbUri)}
-                      onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
+                      onLoad={(event: ImageLoadEvent) => {
                         if (!didPreviewImageLoad(event.nativeEvent)) {
                           markPreviewImageFailed(thumbUri);
                         } else {
@@ -3637,7 +3637,7 @@ export default function InboxScreen() {
                           uri={previewUri}
                           style={styles.cardPreview}
                           onError={() => markPreviewImageFailed(previewUri)}
-                          onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
+                          onLoad={(event: ImageLoadEvent) => {
                             if (!didPreviewImageLoad(event.nativeEvent)) {
                               markPreviewImageFailed(previewUri);
                             } else {
