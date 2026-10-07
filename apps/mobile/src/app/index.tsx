@@ -2650,7 +2650,7 @@ export default function InboxScreen() {
               status={<LibraryStatus inline bookmarks={inbox} queue={queue} authStatus={auth.status}
                 flow={librarySyncFlow} scopeKey={auth.userId}
                 loading={isLoading} loadError={loadError} syncing={isSyncing} paused={syncPaused}
-                signIn={() => router.push('/settings')} />} />
+                signIn={() => router.push({ pathname: '/settings', params: { focus: 'account' } })} />} />
       )}
         </View>
         {/* Everything below the hero — error/session banners, search, sort/
@@ -2997,7 +2997,7 @@ export default function InboxScreen() {
             <LibraryStatus bookmarks={inbox} queue={queue} authStatus={auth.status}
               flow={librarySyncFlow} scopeKey={auth.userId}
               loading={isLoading} loadError={loadError} syncing={isSyncing} paused={syncPaused}
-              signIn={() => router.push('/settings')}
+              signIn={() => router.push({ pathname: '/settings', params: { focus: 'account' } })}
               />
             <AnonymousNudgeBanner
               isAnonymous={auth.status === 'anonymous'}
@@ -3983,6 +3983,20 @@ export default function InboxScreen() {
         title={t('inbox.menuA11y')}
         onClose={() => setHomeMenuOpen(false)}
         actions={[
+          ...(auth.status !== 'authenticated'
+            ? [
+                {
+                  key: 'sign-in',
+                  testID: 'inbox-menu-sign-in',
+                  label: t('settings.account.signIn'),
+                  icon: 'log-in-outline' as const,
+                  onPress: () => {
+                    setHomeMenuOpen(false);
+                    router.push({ pathname: '/settings', params: { focus: 'account' } });
+                  },
+                },
+              ]
+            : []),
           { key: 'review', testID: 'inbox-menu-review', label: t('inbox.aiReviewMenu', { count: newSuggestionsCount }), icon: 'sparkles-outline', onPress: () => {
             setHomeMenuOpen(false);
             router.push('/review');

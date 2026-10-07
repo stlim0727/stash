@@ -23,6 +23,14 @@ test('guest persistence is claimed only after a matching durable read', async ()
   await waitFor(() => expect(screen.getByText('· Saved on this device')).toBeTruthy());
 });
 
+test('guest persistence claims are interactive and direct the user to sign in', async () => {
+  read.mockResolvedValue(bookmarks);
+  const screen = await render(<LibraryStatus {...props} />);
+  await waitFor(() => expect(screen.getByText('· Saved on this device')).toBeTruthy());
+  await fireEvent.press(screen.getByText('· Saved on this device'));
+  expect(props.signIn).toHaveBeenCalledTimes(1);
+});
+
 test.each([null, [], [makeStoredBookmark({ title: 'Older persisted contents' })]])('memory fallback or stale snapshot makes no persistence claim (%p)', async (snapshot) => {
   read.mockResolvedValue(snapshot);
   const screen = await render(<LibraryStatus {...props} />);
