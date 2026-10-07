@@ -47,6 +47,7 @@ export interface CreateBookmarkOutput {
   bookmark_id: string;
   status: 'created' | 'duplicate' | 'queued';
   metadata_status: MetadataStatus;
+  collection_id?: string | null;
 }
 
 export interface BulkCreateBookmarkOutput extends CreateBookmarkOutput {
@@ -461,6 +462,7 @@ export class BookmarkApi {
         bookmark_id: existing.id,
         status: 'duplicate',
         metadata_status: existing.metadata_status,
+        collection_id: existing.collection_id,
       };
     }
 
@@ -504,6 +506,25 @@ export class BookmarkApi {
         body: createBody,
       });
     } catch (error) {
+      // If collection_id violated PostgreSQL Row-Level Security (STASH-7M),
+      // retry without collection_id. RLS on public.bookmarks enforces that
+      // collection_id must belong to auth.uid(). If an unowned collection_id
+      // (e.g. from an account re-home or deleted collection) is sent, PostgREST
+      // returns HTTP 403 Forbidden ("new row violates row-level security policy").
+      // Stripping collection_id allows the bookmark to be saved safely under the
+      // user's account.
+      if (
+        error instanceof SupabaseRequestError &&
+        error.status === 403 &&
+        Boolean(createBody.collection_id) &&
+        error.message.toLowerCase().includes('row-level security')
+      ) {
+        return this.createBookmark({
+          ...input,
+          collection_id: null,
+        });
+      }
+
       // If a concurrent (or retried) insert won the race between our lookup and
       // our own insert, treat the unique-index conflict as the documented
       // duplicate save. Try the active-URL key first, then fall back to the
@@ -541,6 +562,7 @@ export class BookmarkApi {
             bookmark_id: duplicate.id,
             status: 'duplicate',
             metadata_status: duplicate.metadata_status,
+            collection_id: duplicate.collection_id,
           };
         }
 
@@ -572,6 +594,7 @@ export class BookmarkApi {
             bookmark_id: retryCreated.id,
             status: 'duplicate',
             metadata_status: retryCreated.metadata_status,
+            collection_id: retryCreated.collection_id,
           };
         }
       }
@@ -587,6 +610,7 @@ export class BookmarkApi {
       bookmark_id: created.id,
       status: 'created',
       metadata_status: created.metadata_status,
+      collection_id: created.collection_id,
     };
   }
 
@@ -737,7 +761,11 @@ export class BookmarkApi {
           body: inserts.map((item) => item.body),
         });
       } catch (error) {
-        if (!(error instanceof SupabaseRequestError) || error.status !== 409) {
+        if (
+          !(error instanceof SupabaseRequestError) ||
+          (error.status !== 409 &&
+            !(error.status === 403 && error.message.toLowerCase().includes('row-level security')))
+        ) {
           throw error;
         }
 
@@ -747,6 +775,10 @@ export class BookmarkApi {
         // identify that owner-scoped row by its permanent id, while unrelated
         // rows in the chunk still upload normally. The common bulk path keeps
         // its one-request behavior.
+        // Similarly, an unowned collection_id from an account re-home or deleted
+        // collection causes a 403 row-level security error on the bulk insert;
+        // retrying item-by-item allows createBookmark to self-heal by stripping
+        // the unowned collection_id.
         const settled = await Promise.allSettled(
           inserts.map(async (item) => ({
             item,
@@ -805,6 +837,7 @@ export class BookmarkApi {
           bookmark_id: created.id,
           status: 'created',
           metadata_status: created.metadata_status,
+          collection_id: created.collection_id,
           client_id: created.client_id,
           url_hash: created.url_hash,
         };
@@ -814,6 +847,7 @@ export class BookmarkApi {
             bookmark_id: created.id,
             status: 'duplicate',
             metadata_status: created.metadata_status,
+            collection_id: created.collection_id,
             client_id: created.client_id,
             url_hash: created.url_hash,
           };
@@ -1063,31 +1097,52 @@ export class BookmarkApi {
     bookmarkId: string,
     input: UpdateBookmarkInput & { last_saved_at?: string },
   ): Promise<Bookmark> {
-    const rows = await this.requestArray<RemoteBookmark>(
-      appendSearchParams(
-        '/rest/v1/bookmarks',
-        new URLSearchParams({
-          id: `eq.${bookmarkId}`,
-          user_id: `eq.${this.session.user.id}`,
-        }),
-      ),
-      {
-        method: 'PATCH',
-        accessToken: this.session.access_token,
-        headers: { Prefer: 'return=representation' },
-        body: {
-          ...input,
-          updated_at: nowIso(),
+    try {
+      const rows = await this.requestArray<RemoteBookmark>(
+        appendSearchParams(
+          '/rest/v1/bookmarks',
+          new URLSearchParams({
+            id: `eq.${bookmarkId}`,
+            user_id: `eq.${this.session.user.id}`,
+          }),
+        ),
+        {
+          method: 'PATCH',
+          accessToken: this.session.access_token,
+          headers: { Prefer: 'return=representation' },
+          body: {
+            ...input,
+            updated_at: nowIso(),
+          },
         },
-      },
-    );
+      );
 
-    const updated = rows[0];
-    if (!updated) {
-      throw new Error(BOOKMARK_NOT_FOUND_ERROR_MESSAGE);
+      const updated = rows[0];
+      if (!updated) {
+        throw new Error(BOOKMARK_NOT_FOUND_ERROR_MESSAGE);
+      }
+
+      return remoteToBookmark(updated);
+    } catch (error) {
+      // If collection_id violated PostgreSQL Row-Level Security, retry
+      // without collection_id. RLS on public.bookmarks enforces that
+      // collection_id must belong to auth.uid(). If an unowned collection_id
+      // is sent, PostgREST returns HTTP 403 Forbidden ("new row violates
+      // row-level security policy"). Stripping collection_id allows the bookmark
+      // update to land safely.
+      if (
+        error instanceof SupabaseRequestError &&
+        error.status === 403 &&
+        Boolean(input.collection_id) &&
+        error.message.toLowerCase().includes('row-level security')
+      ) {
+        return this.updateBookmark(bookmarkId, {
+          ...input,
+          collection_id: null,
+        });
+      }
+      throw error;
     }
-
-    return remoteToBookmark(updated);
   }
 
   async deleteBookmark(bookmarkId: string, permanent = false): Promise<void> {

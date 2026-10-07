@@ -167,6 +167,7 @@ import {
   readCacheOwner,
   writeCacheOwner,
   planLogoutCacheClear,
+  repairStalledCollectionRlsEntries,
 } from "@/sync/account-transition";
 import {
   LAST_PULLED_AT_KEY,
@@ -2601,18 +2602,43 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 );
             }
 
+            // STASH-7M: Self-heal queue entries and bookmarks stalled on PostgreSQL
+            // RLS errors (HTTP 403 / permission) due to unowned collection IDs from
+            // an account transition.
+            let initialBookmarks = sanitizedBookmarks;
+            let initialQueue = storedQueue;
+            const { repairedEntries, repairedBookmarks } = repairStalledCollectionRlsEntries(
+              initialBookmarks,
+              initialQueue,
+            );
+            if (repairedEntries.length > 0 || repairedBookmarks.length > 0) {
+              const repairedEntryMap = new Map(repairedEntries.map((e) => [e.local_id, e]));
+              const repairedBookmarkMap = new Map(repairedBookmarks.map((b) => [b.id, b]));
+              initialQueue = initialQueue.map((e) => repairedEntryMap.get(e.local_id) ?? e);
+              initialBookmarks = initialBookmarks.map((b) => repairedBookmarkMap.get(b.id) ?? b);
+              recordLog('warn', `sync: self-healed ${repairedEntries.length} stalled collection RLS queue entries`);
+              (async () => {
+                for (const b of repairedBookmarks) {
+                  await repository.updateBookmark(b);
+                }
+                for (const e of repairedEntries) {
+                  await repository.updateQueueEntry(e);
+                }
+              })().catch((error) => logStorageError("stalled collection RLS repair", error));
+            }
+
             // Merge instead of replace: saves made while loading must survive.
             setBookmarks((current) =>
               current === null
-                ? sanitizedBookmarks
+                ? initialBookmarks
                 : mergeById(
                     current,
-                    sanitizedBookmarks,
+                    initialBookmarks,
                     (bookmark) => bookmark.id,
                   ),
             );
             setQueue((current) =>
-              mergeById(current, storedQueue, (entry) => entry.local_id),
+              mergeById(current, initialQueue, (entry) => entry.local_id),
             );
             // Self-heal stranded bookmarks: a non-synced row whose queue entry
             // never persisted (storage hiccup, or the app killed between the two
@@ -2620,8 +2646,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // pending" forever. Re-enqueue an upload so the background loop
             // finishes it. Idempotent on the server, so it's safe to repeat.
             const orphanEntries = reconcileOrphanedQueueEntries(
-              sanitizedBookmarks,
-              storedQueue,
+              initialBookmarks,
+              initialQueue,
             );
             if (orphanEntries.length > 0) {
               const orphanIds = new Set(
@@ -6544,8 +6570,24 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const priorCredentials = syncCredentialsRef.current;
         const recoverAuth = !!restoredSession && (recoveryRequested ||
           (!!priorCredentials && (priorCredentials.userId !== session.user.id || priorCredentials.accessToken !== session.access_token)));
-        const durableBookmarks = await repository.listBookmarks();
-        const durableQueue = await repository.listQueue();
+        let durableBookmarks = await repository.listBookmarks();
+        let durableQueue = await repository.listQueue();
+        const { repairedEntries, repairedBookmarks } = repairStalledCollectionRlsEntries(
+          durableBookmarks,
+          durableQueue,
+        );
+        if (repairedEntries.length > 0 || repairedBookmarks.length > 0) {
+          const repairedEntryMap = new Map(repairedEntries.map((e) => [e.local_id, e]));
+          const repairedBookmarkMap = new Map(repairedBookmarks.map((b) => [b.id, b]));
+          durableQueue = durableQueue.map((e) => repairedEntryMap.get(e.local_id) ?? e);
+          durableBookmarks = durableBookmarks.map((b) => repairedBookmarkMap.get(b.id) ?? b);
+          for (const b of repairedBookmarks) {
+            await repository.updateBookmark(b);
+          }
+          for (const e of repairedEntries) {
+            await repository.updateQueueEntry(e);
+          }
+        }
         if (restoredSession) {
           syncCredentialsRef.current = { userId: session.user.id, accessToken: session.access_token };
           credentialsWereUsedRef.current = true;

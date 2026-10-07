@@ -1167,3 +1167,110 @@ test('mergeCollections invokes transactional RPC merge_user_collections', async 
     target_collection_id: 'col-target',
   });
 });
+
+test('createBookmark retries with collection_id: null when server returns HTTP 403 RLS violation (STASH-7M)', async () => {
+  const posts: Array<Record<string, unknown>> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.includes('url_hash=')) return [];
+      if (path === '/rest/v1/bookmarks' && options.method === 'POST') {
+        const body = options.body as Record<string, unknown>;
+        posts.push(body);
+        if (body.collection_id === 'unowned-col') {
+          throw new SupabaseRequestError(
+            'new row violates row-level security policy for table "bookmarks"',
+            403,
+          );
+        }
+        return [remoteBookmark({ id: 'b-new', collection_id: null })];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const result = await api.createBookmark({
+    id: 'b-new',
+    url: 'https://example.com/rls',
+    collection_id: 'unowned-col',
+  });
+
+  assert.equal(result.status, 'created');
+  assert.equal(result.collection_id, null);
+  assert.equal(posts.length, 2);
+  assert.equal(posts[0].collection_id, 'unowned-col');
+  assert.equal(posts[1].collection_id, null);
+});
+
+test('createBookmarks bulk insert retries individual bookmarks with collection_id: null on HTTP 403 RLS violation (STASH-7M)', async () => {
+  let bulkPostAttempted = false;
+  const singlePosts: Array<Record<string, unknown>> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.includes('url_hash=')) return [];
+      if (path === '/rest/v1/bookmarks' && options.method === 'POST') {
+        if (Array.isArray(options.body)) {
+          bulkPostAttempted = true;
+          throw new SupabaseRequestError(
+            'new row violates row-level security policy for table "bookmarks"',
+            403,
+          );
+        }
+        const body = options.body as Record<string, unknown>;
+        singlePosts.push(body);
+        if (body.collection_id === 'unowned-col') {
+          throw new SupabaseRequestError(
+            'new row violates row-level security policy for table "bookmarks"',
+            403,
+          );
+        }
+        return [remoteBookmark({ id: body.id as string, collection_id: (body.collection_id as string | null) ?? null })];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const results = await api.createBookmarks([
+    { id: 'b-1', url: 'https://example.com/1', collection_id: 'unowned-col' },
+    { id: 'b-2', url: 'https://example.com/2', collection_id: null },
+  ]);
+
+  assert.equal(bulkPostAttempted, true);
+  assert.equal(results.length, 2);
+  assert.equal(results[0].bookmark_id, 'b-1');
+  assert.equal(results[0].collection_id, null);
+  assert.equal(results[1].bookmark_id, 'b-2');
+});
+
+test('updateBookmark retries with collection_id: null when server returns HTTP 403 RLS violation (STASH-7M)', async () => {
+  const patches: Array<Record<string, unknown>> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (options.method === 'PATCH') {
+        const body = options.body as Record<string, unknown>;
+        patches.push(body);
+        if (body.collection_id === 'unowned-col') {
+          throw new SupabaseRequestError(
+            'new row violates row-level security policy for table "bookmarks"',
+            403,
+          );
+        }
+        return [remoteBookmark({ id: 'b-1', collection_id: null })];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const result = await api.updateBookmark('b-1', {
+    title: 'Updated Title',
+    collection_id: 'unowned-col',
+  });
+
+  assert.equal(result.id, 'b-1');
+  assert.equal(result.collection_id, null);
+  assert.equal(patches.length, 2);
+  assert.equal(patches[0].collection_id, 'unowned-col');
+  assert.equal(patches[1].collection_id, null);
+});

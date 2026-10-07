@@ -7,6 +7,7 @@ import {
   readCacheOwner,
   planAccountTransition,
   planLogoutCacheClear,
+  repairStalledCollectionRlsEntries,
 } from './account-transition.ts';
 import {
   getSyncStatusDiagnostics,
@@ -839,4 +840,102 @@ test('cleared cache owner overrides stale legacy ownership after interrupted log
   assert.deepEqual(await readCacheOwner(repository), {
     id: 'previous-real-user', isAnonymous: false,
   });
+});
+
+test('applyAccountTransition clears unowned collection_id on rehome (STASH-7M)', async () => {
+  const oldRow = bookmark({
+    id: REMOTE_A,
+    collection_id: 'c-prev-anon-user',
+    sync_status: 'synced',
+    ever_synced: true,
+  });
+  const plan = planAccountTransition(
+    { id: 'anon', isAnonymous: true },
+    { id: 'real', isAnonymous: false },
+    [oldRow],
+  );
+  assert.equal(plan.rehome.length, 1);
+
+  let rehomedBookmarks: Bookmark[] = [];
+  let rehomedEntries: LocalPendingBookmark[] = [];
+  await applyAccountTransition(
+    plan,
+    fakeRepository(),
+    (updater) => {
+      rehomedBookmarks = updater([oldRow]) ?? [];
+    },
+    (updater) => {
+      rehomedEntries = updater([]);
+    },
+    () => 'local-rehomed-bookmark',
+    async () => {},
+  );
+
+  const rehomed = rehomedBookmarks.find((b) => b.id === 'local-rehomed-bookmark');
+  assert.equal(rehomed?.collection_id, null);
+
+  const entry = rehomedEntries.find((e) => e.local_id === 'local-rehomed-bookmark');
+  assert.equal(entry?.payload.collection_id, undefined);
+});
+
+test('repairStalledCollectionRlsEntries repairs queue entries and local bookmarks stuck with unowned collection_id or RLS/permission errors (STASH-7M)', () => {
+  const stuckBookmark = bookmark({
+    id: 'b-stuck',
+    collection_id: 'col-anon',
+    sync_status: 'failed',
+  });
+  const unstuckBookmark = bookmark({
+    id: 'b-ok',
+    collection_id: null,
+    sync_status: 'synced',
+  });
+
+  const stuckEntry: LocalPendingBookmark = {
+    local_id: 'b-stuck',
+    remote_id: null,
+    operation: 'create',
+    changes: [{ source: 'account_rehome', fields: [], at: '2026-10-07T00:00:00Z' }],
+    payload: {
+      url: 'https://example.com/stuck',
+      collection_id: 'col-anon',
+    },
+    sync_status: 'failed',
+    retry_count: 3,
+    last_error: 'new row violates row-level security policy for table "bookmarks"',
+    last_error_kind: 'permission',
+    created_at: '2026-10-07T00:00:00Z',
+    updated_at: '2026-10-07T00:00:00Z',
+  };
+
+  const normalEntry: LocalPendingBookmark = {
+    local_id: 'b-ok',
+    remote_id: null,
+    operation: 'create',
+    changes: [{ source: 'capture', fields: [], at: '2026-10-07T00:00:00Z' }],
+    payload: { url: 'https://example.com/ok' },
+    sync_status: 'synced',
+    retry_count: 0,
+    last_error: null,
+    last_error_kind: null,
+    created_at: '2026-10-07T00:00:00Z',
+    updated_at: '2026-10-07T00:00:00Z',
+  };
+
+  const { repairedEntries, repairedBookmarks } = repairStalledCollectionRlsEntries(
+    [stuckBookmark, unstuckBookmark],
+    [stuckEntry, normalEntry],
+  );
+
+  assert.equal(repairedEntries.length, 1);
+  assert.equal(repairedEntries[0].local_id, 'b-stuck');
+  assert.equal(repairedEntries[0].payload.collection_id, undefined);
+  assert.equal(repairedEntries[0].sync_status, 'pending');
+  assert.equal(repairedEntries[0].last_error, null);
+  assert.equal(repairedEntries[0].last_error_kind, null);
+  assert.equal(repairedEntries[0].retry_count, 0);
+
+  assert.equal(repairedBookmarks.length, 1);
+  assert.equal(repairedBookmarks[0].id, 'b-stuck');
+  assert.equal(repairedBookmarks[0].collection_id, null);
+  assert.equal(repairedBookmarks[0].sync_status, 'pending');
 });
