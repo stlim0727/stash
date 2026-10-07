@@ -365,6 +365,7 @@ export const ko: Catalog = {
     '이 버튼을 북마크 바로 드래그하세요 (또는 클릭해서 복사). 이후 아무 페이지에서나 눌러 저장할 수 있습니다.',
   'settings.account.signedIn': '로그인됨',
   'settings.account.signIn': '로그인',
+  'settings.account.signInGuide': '아래 버튼에서 로그인 방법을 선택하세요.',
   'settings.account.sessionExpired': '세션 만료됨',
   'settings.account.sessionExpiredBody': '다시 로그인하면 동기화가 재개됩니다. 북마크는 안전합니다.',
   'settings.account.signOut': '로그아웃',

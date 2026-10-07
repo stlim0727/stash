@@ -2,13 +2,14 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Application from "expo-application";
 import Constants from "expo-constants";
 import * as Clipboard from "expo-clipboard";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useOpenReport } from "@/feedback/open-report";
 import { useFloatingReportPreference } from "@/feedback/floating-report-preference";
 import { PostHogMaskView } from "posthog-react-native";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ElementRef } from "react";
 import {
   ActivityIndicator,
+  AccessibilityInfo,
   Alert,
   Linking,
   Platform,
@@ -169,6 +170,9 @@ export default function SettingsScreen() {
   const palette = usePalette();
   const styles = makeStyles(palette);
   const router = useRouter();
+  const params = useLocalSearchParams<{ focus?: string }>();
+  const scrollRef = useRef<ElementRef<typeof ScrollView>>(null);
+  const accountScrollPending = useRef(false);
   const { openReport, capturing } = useOpenReport('/settings');
   const [floatingReport, setFloatingReport] = useFloatingReportPreference();
   // Wide viewports present Settings as a right-side sheet over a dimmed Inbox;
@@ -622,6 +626,16 @@ export default function SettingsScreen() {
 
   const insets = useSafeAreaInsets();
   const isAuthenticated = auth.status === "authenticated";
+  const accountFocused = params.focus === "account" &&
+    !isAuthenticated && auth.status !== "loading" && auth.status !== "not_configured";
+
+  useEffect(() => {
+    accountScrollPending.current = accountFocused;
+    if (accountFocused) {
+      scrollRef.current?.scrollTo({ y: 0, animated: false });
+      AccessibilityInfo.announceForAccessibility(t("settings.account.signInGuide"));
+    }
+  }, [accountFocused, t]);
 
   // Push notification for AI-catchup (STASH #579): "notify once the AI
   // enrichment overflow queue (#578) fully drains for this user." Opt-in
@@ -882,6 +896,13 @@ export default function SettingsScreen() {
 
   const content = (
     <ScrollView
+      ref={scrollRef}
+      onContentSizeChange={() => {
+        if (accountScrollPending.current) {
+          accountScrollPending.current = false;
+          scrollRef.current?.scrollTo({ y: 0, animated: false });
+        }
+      }}
       style={[styles.scroll, webOverscrollContain]}
       contentContainerStyle={[
         styles.container,
@@ -893,8 +914,12 @@ export default function SettingsScreen() {
           card is purely who's signed in, not what's happening. */}
       <View style={styles.section}>
         <Text style={styles.sectionLabel}>{t("settings.section.account")}</Text>
-        <Card style={styles.account} elevated={false}>
-          <View style={styles.accountHeaderOnly}>
+        <Card
+          style={[styles.account, accountFocused && styles.accountFocused]}
+          elevated={false}
+          testID="settings-account-card"
+        >
+          <View style={[styles.accountHeaderOnly, accountFocused && styles.accountFocusedHeader]}>
             {isAuthenticated ? (
               <>
                 <View style={styles.accountText}>
@@ -942,7 +967,7 @@ export default function SettingsScreen() {
               </View>
             ) : (
               <>
-                <View style={styles.accountText}>
+                <View style={accountFocused ? styles.accountFocusedText : styles.accountText}>
                   <Text style={styles.accountName} numberOfLines={1}>
                     {t(
                       auth.status === "session_expired"
@@ -950,24 +975,29 @@ export default function SettingsScreen() {
                         : "settings.account.signIn",
                     )}
                   </Text>
+                  {accountFocused ? (
+                    <Text style={styles.accountGuide} testID="settings-account-sign-in-guide">
+                      {t("settings.account.signInGuide")}
+                    </Text>
+                  ) : null}
                   {auth.status === "session_expired" ? (
                     <Text style={styles.accountMeta} numberOfLines={2}>
                       {t("settings.account.sessionExpiredBody")}
                     </Text>
                   ) : null}
                 </View>
-                <View style={styles.authButtons}>
+                <View style={[styles.authButtons, accountFocused && styles.accountFocusedButtons]}>
                   {AUTH_PROVIDERS.map(({ id, label, icon, a11yKey }) => (
                     <Button
                       key={id}
-                      variant="ghost"
-                      size="sm"
+                      variant={accountFocused && id === "google" ? "primary" : "ghost"}
+                      size={accountFocused ? "md" : "sm"}
                       icon={icon}
                       accessibilityLabel={t(a11yKey)}
                       disabled={authBusy !== null}
                       onPress={() => void handleSignIn(id)}
                     >
-                      {label}
+                      {accountFocused ? t(a11yKey) : label}
                     </Button>
                   ))}
                 </View>
@@ -2014,6 +2044,29 @@ const makeStyles = (palette: AppPalette) =>
       paddingHorizontal: 0,
       paddingVertical: 0,
       overflow: "hidden",
+    },
+    accountFocused: {
+      borderColor: palette.accent,
+      borderWidth: 2,
+      backgroundColor: palette.accentSoft,
+    },
+    accountFocusedHeader: {
+      flexDirection: "column",
+      alignItems: "stretch",
+      gap: 16,
+    },
+    accountFocusedButtons: {
+      flexDirection: "column",
+      alignItems: "stretch",
+    },
+    accountFocusedText: {
+      gap: 2,
+    },
+    accountGuide: {
+      fontSize: 14,
+      lineHeight: 20,
+      color: palette.accentText,
+      marginTop: 6,
     },
     // No bottom border: the Account card now holds identity only (the sync
     // row that used to follow it moved to the Activity section), so there's

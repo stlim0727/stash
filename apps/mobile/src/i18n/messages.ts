@@ -493,6 +493,7 @@ export const en = {
     'Drag this button to your bookmarks bar (or click to copy it). Then click it on any page to save it.',
   'settings.account.signedIn': 'Signed in',
   'settings.account.signIn': 'Sign In',
+  'settings.account.signInGuide': 'Choose a sign-in method below.',
   'settings.account.sessionExpired': 'Session expired',
   'settings.account.sessionExpiredBody': 'Sign back in to resume syncing. Your bookmarks are safe.',
   'settings.account.signOut': 'Sign out',

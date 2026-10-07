@@ -34,6 +34,7 @@ jest.mock('@/domain/enrichment', () => ({
   enrichBookmark: () => new Promise(() => {}),
 }));
 jest.mock('expo-router', () => ({
+  useLocalSearchParams: () => ({}),
   useRouter: () => ({
     push: jest.fn(),
     navigate: jest.fn(),

@@ -30,7 +30,9 @@ jest.mock('@/supabase/auth-provider', () => ({
 jest.mock('@/domain/enrichment', () => ({
   enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
 }));
+const mockSettingsParams: { focus?: string } = {};
 jest.mock('expo-router', () => ({
+  useLocalSearchParams: () => (mockSettingsParams),
   useRouter: () => ({ push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn() }),
 }));
 jest.mock('@/share/export-data', () => ({ deliverExport: jest.fn(async () => {}) }));
@@ -48,6 +50,7 @@ function renderSettings() {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  delete mockSettingsParams.focus;
   mockAuth.status = 'anonymous';
   mockAuth.email = null;
   mockAuth.displayName = null;
@@ -58,6 +61,7 @@ test('anonymous: shows Sign In with provider buttons and complete processing', a
   const screen = await renderSettings();
 
   expect(screen.getByText('Sign In')).toBeTruthy();
+  expect(screen.queryByTestId('settings-account-sign-in-guide')).toBeNull();
   // Nothing queued + a cloud session (anonymous counts) → all work complete.
   await waitFor(() => expect(screen.getByText('All work complete')).toBeTruthy());
 
@@ -65,6 +69,38 @@ test('anonymous: shows Sign In with provider buttons and complete processing', a
     fireEvent.press(screen.getByLabelText('Sign in with Google'));
   });
   expect(mockAuth.signIn).toHaveBeenCalledWith('google');
+});
+
+test('login shortcut highlights the account choices and calls the selected provider', async () => {
+  mockSettingsParams.focus = 'account';
+  const screen = await renderSettings();
+
+  expect(screen.getByTestId('settings-account-sign-in-guide')).toHaveTextContent('Choose a sign-in method below.');
+  expect(screen.getByTestId('settings-account-card')).toHaveStyle({ borderWidth: 2 });
+  expect(screen.getByText('Sign in with Google')).toBeTruthy();
+  expect(screen.getByText('Sign in with Apple')).toBeTruthy();
+  await fireEvent.press(screen.getByLabelText('Sign in with Google'));
+  expect(mockAuth.signIn).toHaveBeenCalledWith('google');
+});
+
+test('cancelling sign-in leaves the targeted account choices available', async () => {
+  mockSettingsParams.focus = 'account';
+  mockAuth.signIn.mockResolvedValueOnce({ ok: false });
+  const screen = await renderSettings();
+
+  await fireEvent.press(screen.getByLabelText('Sign in with Apple'));
+  expect(mockAuth.signIn).toHaveBeenCalledWith('apple');
+  expect(screen.getByTestId('settings-account-sign-in-guide')).toBeTruthy();
+  expect(screen.getByLabelText('Sign in with Google')).not.toBeDisabled();
+});
+
+test.each(['authenticated', 'not_configured'] as const)('targeted login guidance is hidden when auth is %s', async (status) => {
+  mockSettingsParams.focus = 'account';
+  mockAuth.status = status;
+  const screen = await renderSettings();
+
+  expect(screen.queryByTestId('settings-account-sign-in-guide')).toBeNull();
+  expect(screen.getByTestId('settings-account-card')).not.toHaveStyle({ borderWidth: 2 });
 });
 
 test('authenticated: Sign out asks to confirm before signing out', async () => {
