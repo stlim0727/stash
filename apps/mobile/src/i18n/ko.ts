@@ -136,6 +136,8 @@ export const ko: Catalog = {
   'inbox.scopeClearSearchA11y': '검색 지우기',
   'inbox.emptyView': '이 보기에는 아직 아무것도 없습니다.',
   'inbox.emptyTitle': '아직 비어 있습니다',
+  'inbox.emptySignInBenefit': '로그인하고 다른 기기에서도 이용하세요.',
+  'inbox.emptySignInOptional': '로그인 없이도 링크를 저장할 수 있어요.',
   'inbox.emptyHintStep1': '어떤 앱에서든 공유 버튼을 누르세요',
   'inbox.emptyHintStep2': 'Keepory를 선택하면 바로 저장돼요',
   'inbox.emptyHintFallback': '링크를 붙여넣고 싶다면? 아래 ＋ 를 누르세요.',

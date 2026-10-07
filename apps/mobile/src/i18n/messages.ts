@@ -188,6 +188,8 @@ export const en = {
   'inbox.scopeClearSearchA11y': 'Clear the search',
   'inbox.emptyView': 'Nothing in this view yet.',
   'inbox.emptyTitle': 'Nothing saved yet',
+  'inbox.emptySignInBenefit': 'Sign in to access your saved links across devices.',
+  'inbox.emptySignInOptional': 'You can save links without signing in.',
   // Native first-run teach: a numbered 2-step share-capture walkthrough, plus a
   // smaller fallback line for the manual add path. Web has no share sheet
   // (expo-share-intent is a no-op there), so it gets a distinct single-step
