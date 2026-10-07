@@ -24,11 +24,37 @@ import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
 import { recordLog } from '@/observability/log-buffer';
 import type { BookmarkRepository, IdentityRekeyState } from '@/storage/types';
 import { hasRemoteIdentity, isLocalOnlyBookmark } from '@/sync/sync-bookmarks';
+import { SYNCED_USER_ID_KEY, SYNCED_USER_ANON_KEY } from '@/sync/pull-bookmarks';
 import { excludeFromSyncStatusDiagnostics } from '@/sync/sync-status-diagnostics';
 
 export interface SyncedUserRef {
   id: string;
   isAnonymous: boolean;
+}
+
+/** Local cache ownership must be durable BEFORE uploads, even if the pull fails. */
+export const CACHE_OWNER_KEY = 'bookmark_cache_owner';
+
+export async function readCacheOwner(repository: BookmarkRepository): Promise<SyncedUserRef | null> {
+  const raw = await repository.getMeta(CACHE_OWNER_KEY);
+  // An empty marker is a logout tombstone, even if legacy clears were interrupted.
+  if (raw === '') return null;
+  if (raw !== null) {
+    const owner = JSON.parse(raw) as SyncedUserRef;
+    if (!owner || typeof owner.id !== 'string' || !owner.id || typeof owner.isAnonymous !== 'boolean') {
+      throw new Error('Invalid bookmark cache ownership.');
+    }
+    return owner;
+  }
+  // Upgrade from the older pull-only ownership marker.
+  const id = await repository.getMeta(SYNCED_USER_ID_KEY);
+  if (!id) return null;
+  return { id, isAnonymous: (await repository.getMeta(SYNCED_USER_ANON_KEY)) === 'true' };
+}
+
+export async function writeCacheOwner(repository: BookmarkRepository, owner: SyncedUserRef): Promise<void> {
+  // One value avoids a crash between the id and anonymity writes.
+  await repository.setMeta(CACHE_OWNER_KEY, JSON.stringify(owner));
 }
 
 export type AccountTransitionKind = 'first' | 'none' | 'carry-over' | 'switch' | 'logout';
@@ -70,11 +96,12 @@ export interface AccountTransitionPlan {
  * upload them), even though their `bookmark-…` id was never a real cloud row —
  * `hasRemoteIdentity` filters those out; every genuine bookmark (old-scheme or
  * new) has a real UUID id regardless of sync state, so this never excludes a
- * legitimately synced row. `synced` also makes a transition self-idempotent:
+ * legitimately synced row. `ever_synced` resets when re-homed, making the transition self-idempotent:
  * once re-homed (now `pending` under a freshly-minted id), a row no longer
  * matches.
  *
- * Re-home is deliberately `synced`-only: a not-yet-synced row has no confirmed
+ * Previously synced rows with a queued edit/delete carry their latest local
+ * content too. A not-yet-synced row has no confirmed
  * cloud copy under the anon account, and its create entry is still in the queue,
  * so leaving it untouched lets it upload under the new account as-is — EXCEPT
  * for an image bookmark's binary, which uploads to Storage before the row is
@@ -92,7 +119,7 @@ function cloudOwnedRows(localBookmarks: Bookmark[]): Bookmark[] {
   return localBookmarks.filter(
     (bookmark) =>
       hasRemoteIdentity(bookmark.id) &&
-      bookmark.sync_status === 'synced' &&
+      (bookmark.sync_status === 'synced' || bookmark.ever_synced === true) &&
       !isLocalOnlyBookmark(bookmark),
   );
 }
@@ -242,7 +269,7 @@ export function planAccountTransition(
     // Carry-over: re-home synced rows (see cloudOwnedRows) AND local-only
     // image rows whose upload already landed but whose create was never
     // confirmed (see staleUploadedImageRows) — cloudOwnedRows deliberately
-    // doesn't cover the latter (it's synced-only). Their create entries are
+    // doesn't cover the latter (it excludes unconfirmed rows). Their create entries are
     // re-issued under the new account (see applyAccountTransition's rehome
     // handling), so nothing is queue-dropped here.
     return {

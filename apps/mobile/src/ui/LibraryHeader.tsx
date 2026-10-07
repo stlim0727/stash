@@ -6,7 +6,7 @@ import { usePalette } from '@/theme';
 import { YellowDuck } from '@/ui/assets/YellowDuck';
 
 export function LibraryHeader({ count, status, unread, menuOpen, disabled, onTop, onMenu }: {
-  count: number; status: ReactNode; unread: number; menuOpen: boolean; disabled: boolean;
+  count: number | null; status: ReactNode; unread: number; menuOpen: boolean; disabled: boolean;
   onTop: () => void; onMenu: () => void;
 }) {
   const t = useT();
@@ -29,7 +29,7 @@ export function LibraryHeader({ count, status, unread, menuOpen, disabled, onTop
       </Pressable>
     </View>
     <View style={styles.status}>
-      <Text style={{ fontSize: 13, color: palette.textSecondary }}>{t('inbox.savedCount', { count })}</Text>
+      {count !== null ? <Text style={{ fontSize: 13, color: palette.textSecondary }}>{t('inbox.savedCount', { count })}</Text> : null}
       {status}
     </View>
   </View>;

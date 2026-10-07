@@ -72,6 +72,7 @@ import { TutorialModal } from "@/ui/TutorialModal";
 import { deliverExport, saveExportToDevice } from "@/share/export-data";
 import { pickImportFile } from "@/share/import-data";
 import { useBookmarks } from "@/store/bookmarks";
+import { AccountLibraryNotice } from "@/ui/AccountLibraryNotice";
 import { isPermanentlyUnsyncableUrl } from "@/sync/sync-bookmarks";
 import { useSupabaseAuth } from "@/supabase/auth-provider";
 import { useNetworkOffline } from "@/ui/use-network-offline";
@@ -190,6 +191,9 @@ export default function SettingsScreen() {
     isSyncing,
     syncNow,
     librarySyncFlow,
+    accountLibraryState = 'ready',
+    accountTransferCount = 0,
+    dismissAccountTransfer,
     syncPaused,
     setSyncPaused,
     inbox,
@@ -984,6 +988,8 @@ export default function SettingsScreen() {
                     <Text style={styles.accountMeta} numberOfLines={2}>
                       {t("settings.account.sessionExpiredBody")}
                     </Text>
+                  ) : auth.status === "anonymous" || auth.status === "signed_out" ? (
+                    <Text style={styles.accountMeta}>{t("account.guestCarryOver")}</Text>
                   ) : null}
                 </View>
                 <View style={[styles.authButtons, accountFocused && styles.accountFocusedButtons]}>
@@ -1004,6 +1010,9 @@ export default function SettingsScreen() {
               </>
             )}
           </View>
+          <AccountLibraryNotice state={accountLibraryState} transferredCount={accountTransferCount} onDismiss={dismissAccountTransfer}
+            offline={offline} paused={syncPaused} resumeHere
+            onRetry={() => { void syncNow({ force: true }); }} onSettings={() => { void setSyncPaused(false); }} />
         </Card>
       </View>
 

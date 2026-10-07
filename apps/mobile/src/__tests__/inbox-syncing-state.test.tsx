@@ -1,4 +1,4 @@
-import { render, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 
 // The post-sign-in "empty for several seconds" gap: the local durable load has
@@ -88,4 +88,20 @@ test('falls through to the empty onboarding once the pull settles with no bookma
 
   await waitFor(() => expect(screen.getByTestId('inbox-empty-onboarding')).toBeTruthy());
   expect(screen.queryByTestId('inbox-syncing')).toBeNull();
+});
+
+
+test.each(['checking', 'error'])('unresolved account library shows %s without an empty-library claim or zero count', async (state) => {
+  const retry = jest.fn();
+  mockStoreOverrides = { accountLibraryState: state, syncNow: retry, isSyncing: false };
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByTestId('account-library-notice')).toBeTruthy());
+  expect(screen.queryByTestId('inbox-empty-onboarding')).toBeNull();
+  expect(screen.queryByText('0 saved')).toBeNull();
+  if (state === 'error') {
+    await fireEvent.press(screen.getByText('Retry'));
+    expect(retry).toHaveBeenCalledWith({ force: true });
+  } else {
+    expect(screen.getByText('Checking bookmarks for your account…')).toBeTruthy();
+  }
 });

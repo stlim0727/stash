@@ -3,6 +3,8 @@ import { test } from 'node:test';
 
 import {
   applyAccountTransition,
+  CACHE_OWNER_KEY,
+  readCacheOwner,
   planAccountTransition,
   planLogoutCacheClear,
 } from './account-transition.ts';
@@ -809,4 +811,32 @@ test('applyAccountTransition does not exclude a non-image single-row rehome outs
   noteSyncEntryStatus(newId!, 'synced', 'create');
 
   assert.equal(getSyncStatusDiagnostics()!.syncedWithoutFailure, 1);
+});
+
+
+test('anonymous rows with pending or failed edits and deletes are carried over with latest content', () => {
+  for (const sync_status of ['pending', 'failed'] as const) {
+    const edited = bookmark({ sync_status, ever_synced: true, notes: 'Latest local note' });
+    const deleted = bookmark({ id: REMOTE_B, sync_status, ever_synced: true, deleted_at: '2026-10-07T00:00:00Z' });
+    const plan = planAccountTransition({ id: 'anon', isAnonymous: true }, { id: 'real', isAnonymous: false }, [edited, deleted]);
+    assert.deepEqual(plan.rehome, [edited, deleted]);
+    assert.deepEqual(plan.drop, []);
+  }
+});
+
+
+test('cleared cache owner overrides stale legacy ownership after interrupted logout', async () => {
+  const metadata = new Map([
+    [CACHE_OWNER_KEY, ''],
+    ['synced_user_id', 'previous-real-user'],
+    ['synced_user_is_anonymous', 'false'],
+  ]);
+  const repository = {
+    getMeta: async (key: string) => metadata.get(key) ?? null,
+  } as BookmarkRepository;
+  assert.equal(await readCacheOwner(repository), null);
+  metadata.delete(CACHE_OWNER_KEY);
+  assert.deepEqual(await readCacheOwner(repository), {
+    id: 'previous-real-user', isAnonymous: false,
+  });
 });

@@ -163,6 +163,9 @@ import type { SupabaseAuthSession } from "@/supabase/types";
 import {
   applyAccountTransition,
   planAccountTransition,
+  CACHE_OWNER_KEY,
+  readCacheOwner,
+  writeCacheOwner,
   planLogoutCacheClear,
 } from "@/sync/account-transition";
 import {
@@ -302,6 +305,10 @@ interface BookmarksContextValue {
   isLoading: boolean;
   /** Set when the durable store failed to load and in-memory fallback is used. */
   loadError: boolean;
+  /** Account library verification is distinct from an empty library. */
+  accountLibraryState: "ready" | "checking" | "error";
+  accountTransferCount: number;
+  dismissAccountTransfer: () => void;
   /** Active (non-trashed) bookmarks, newest first. */
   inbox: Bookmark[];
   /** Trashed bookmarks, most recently trashed first. */
@@ -990,6 +997,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     reconciledCacheUserIdRef.current = userId;
     setReconciledCacheUserIdState(userId);
   }, []);
+  const [accountLibraryFailureUserId, setAccountLibraryFailureUserId] = useState<string | null>(null);
+  const [loadedAccountUserId, setLoadedAccountUserId] = useState<string | null>(null);
+  const [accountTransfer, setAccountTransfer] = useState<{ userId: string; count: number } | null>(null);
+  const dismissAccountTransfer = useCallback(() => setAccountTransfer(null), []);
+  useEffect(() => {
+    // A direct A → B → A switch must not reuse A's previous successful pull.
+    setAccountTransfer(null);
+    setLoadedAccountUserId(null);
+    setAccountLibraryFailureUserId(null);
+  }, [auth.userId]);
   const hideAccountCache = auth.status === "loading" || auth.status === "error" ||
     auth.status === "session_expired" ||
     ((auth.status === "authenticated" || auth.status === "anonymous") &&
@@ -4568,6 +4585,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         logStorageError("library reset local clear", error);
         return { ok: false, reason: "local" };
       }
+      setAccountTransfer(null);
       // In-memory mirrors last, after the durable writes, so a kill in between
       // re-reads the already-cleared repository on the next launch. The apply*
       // helpers also persist their (now empty) meta blobs.
@@ -6300,16 +6318,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       isAnonymous: boolean;
     }): Promise<boolean> => {
       try {
-        const previousUserId = await repository.getMeta(SYNCED_USER_ID_KEY);
-        const previousAnon =
-          (await repository.getMeta(SYNCED_USER_ANON_KEY)) === "true";
-        const plan = planAccountTransition(
-          previousUserId
-            ? { id: previousUserId, isAnonymous: previousAnon }
-            : null,
-          currentUser,
-          bookmarksRef.current ?? [],
-        );
+        const previousOwner = await readCacheOwner(repository);
+        if (authRef.current.userId !== currentUser.id) return false;
+        const localRows = bookmarksRef.current ?? [];
+        const plan = planAccountTransition(previousOwner, currentUser, localRows);
+        const transferCount = !currentUser.isAnonymous && (previousOwner?.isAnonymous || !previousOwner)
+          ? localRows.filter((row) => !isBookmarkSyncedOnce(row) || (previousOwner?.isAnonymous && hasRemoteIdentity(row.id))).length
+          : 0;
         await serializeTagWork(() => applyAccountTransition(
           plan,
           repository,
@@ -6371,7 +6386,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // Publish the reconciled snapshot before allowing account-owned rows
         // through the UI. A failed or stale reconciliation never reveals them.
         const reconciledRows = await repository.listBookmarks();
+        // An interrupted pull must never make already-uploaded guest captures
+        // look ownerless at the next login. Keep this separate from pull meta.
+        if (!(previousOwner && !previousOwner.isAnonymous && currentUser.isAnonymous)) {
+          await writeCacheOwner(repository, currentUser);
+        }
         if (authRef.current.userId === currentUser.id) {
+          if (transferCount > 0) setAccountTransfer({ userId: currentUser.id, count: transferCount });
+          setAccountLibraryFailureUserId(null);
           const changed = !sameRecordSnapshot(bookmarksRef.current ?? [], reconciledRows);
           bookmarksRef.current = reconciledRows;
           if (changed) setBookmarks(reconciledRows);
@@ -6379,6 +6401,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         }
         return true;
       } catch (error) {
+        if (authRef.current.userId === currentUser.id) setAccountLibraryFailureUserId(currentUser.id);
         logStorageError("account transition", error);
         try {
           await ensureRepositoryReady();
@@ -6463,23 +6486,23 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // lock was almost always held). The lock is only taken for the
         // reconcile itself, which is rare (self-terminates after one run) and
         // does write local state.
-        await ensureRepositoryReady();
-        const previousUserId = await repository.getMeta(SYNCED_USER_ID_KEY);
         const sessionUser = auth.session.user;
-        if (previousUserId !== null && previousUserId !== sessionUser.id) {
-          syncInFlight.current = true;
-          try {
-            await reconcileAccountTransition({
-              id: sessionUser.id,
-              isAnonymous: sessionUser.is_anonymous !== false,
-            });
-          } finally {
-            syncInFlight.current = false;
+        try {
+          await ensureRepositoryReady();
+          const owner = await readCacheOwner(repository);
+          if (owner?.id !== sessionUser.id || owner.isAnonymous !== (sessionUser.is_anonymous !== false)) {
+            syncInFlight.current = true;
+            try {
+              await reconcileAccountTransition({ id: sessionUser.id, isAnonymous: sessionUser.is_anonymous !== false });
+            } finally {
+              syncInFlight.current = false;
+            }
+          } else if (authRef.current.userId === sessionUser.id) {
+            setReconciledCacheUserId(sessionUser.id);
           }
-        } else if (authRef.current.userId === sessionUser.id) {
-          // Matching durable ownership needs no destructive transition, even
-          // when remote sync is paused.
-          setReconciledCacheUserId(sessionUser.id);
+        } catch (error) {
+          if (authRef.current.userId === sessionUser.id) setAccountLibraryFailureUserId(sessionUser.id);
+          logStorageError("paused account transition", error);
         }
         if (syncPausedRef.current) syncPendingRef.current = true;
         return false;
@@ -7992,6 +8015,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               () => !syncPausedRef.current,
               getQueuedWorkIds,
             );
+            if (authRef.current.userId === currentUser.id) {
+              setLoadedAccountUserId(currentUser.id);
+              setAccountLibraryFailureUserId(null);
+            }
             // STASH-7A: the pull's storage awaits can span a local batch move.
             // Recheck the outbox at publication time so an older snapshot never
             // rolls back the optimistic edit while its upload is still pending.
@@ -8184,6 +8211,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   userId: auth.userId, kind: syncErrorKind(error), at: Date.now(), attempts: (previous?.attempts ?? 0) + 1,
                 }));
               }
+              if (authRef.current.userId === currentUser.id) setAccountLibraryFailureUserId(currentUser.id);
               logStorageError("pull", error);
             }
           }
@@ -8220,6 +8248,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             userId: auth.userId, kind: syncErrorKind(error), at: Date.now(), attempts: (previous?.attempts ?? 0) + 1,
           }));
         }
+        if (authRef.current.userId === auth.userId) setAccountLibraryFailureUserId(auth.userId);
         logStorageError("sync run", error);
       } finally {
         syncInFlight.current = false;
@@ -9256,6 +9285,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // Reset the synced-user meta + watermark so the next session does a full
         // refresh (planAccountTransition + pullRemoteChanges read these). Empty
         // strings read back as falsy/null in both call sites.
+        await repository.setMeta(CACHE_OWNER_KEY, "");
         await repository.setMeta(SYNCED_USER_ID_KEY, "");
         await repository.setMeta(SYNCED_USER_ANON_KEY, "");
         await repository.setMeta(LAST_PULLED_AT_KEY, "");
@@ -9380,10 +9410,19 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   }, [auth.status, auth.session, isSyncing, lastPulledAt, previewRefreshingIds,
     aiServerQueueSnapshot, aiSuggestionsMode, aiQuotaExceeded]);
 
+  const accountLibraryState = auth.status === "authenticated" &&
+    (hideAccountCache || loadedAccountUserId !== auth.userId)
+      ? accountLibraryFailureUserId === auth.userId ? "error" : "checking"
+      : "ready";
+  const accountTransferCount = accountTransfer?.userId === auth.userId ? accountTransfer.count : 0;
+
   const value = useMemo<BookmarksContextValue>(
     () => ({
       isLoading: bookmarks === null,
       loadError,
+      accountLibraryState,
+      accountTransferCount,
+      dismissAccountTransfer,
       inbox,
       trash,
       queue,
@@ -9451,6 +9490,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [
       bookmarks,
       loadError,
+      accountLibraryState,
+      accountTransferCount,
+      dismissAccountTransfer,
       inbox,
       trash,
       queue,

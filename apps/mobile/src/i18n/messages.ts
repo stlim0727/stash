@@ -20,6 +20,10 @@ export type Message = string | PluralMessage;
 
 export const en = {
   // App identity (brand name is intentionally never translated).
+  'account.libraryChecking': 'Checking bookmarks for your account…',
+  'account.libraryError': 'Couldn’t load your bookmarks. Try again.',
+  'account.localBookmarksKept': { one: 'Kept your existing bookmark on this device when you signed in.', other: 'Kept your {count} existing bookmarks on this device when you signed in.' },
+  'account.guestCarryOver': 'Bookmarks saved on this device will be added to your account when you sign in.',
   'library.paused': 'Sync paused',
   'library.retry': 'Retry',
   'library.resume': 'Sign in to resume sync',
