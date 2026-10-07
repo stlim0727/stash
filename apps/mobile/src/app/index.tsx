@@ -3082,7 +3082,7 @@ export default function InboxScreen() {
                   <Button
                     size="md"
                     style={styles.emptySignInButton}
-                    onPress={() => router.push('/settings')}
+                    onPress={() => router.push({ pathname: '/settings', params: { focus: 'account' } })}
                     testID="inbox-empty-sign-in"
                   >
                     {t('settings.account.signIn')}

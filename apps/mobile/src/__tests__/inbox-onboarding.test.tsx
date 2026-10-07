@@ -112,7 +112,7 @@ test.each(['anonymous', 'signed_out'] as const)('empty inbox offers %s users sig
   expect(mockPush).toHaveBeenCalledWith('/add');
   mockPush.mockClear();
   await fireEvent.press(screen.getByTestId('inbox-empty-sign-in'));
-  expect(mockPush).toHaveBeenCalledWith('/settings');
+  expect(mockPush).toHaveBeenCalledWith({ pathname: '/settings', params: { focus: 'account' } });
 });
 
 test.each(['authenticated', 'not_configured', 'loading', 'session_expired', 'error'] as const)('empty inbox does not show an acquisition prompt when auth is %s', async (status) => {
