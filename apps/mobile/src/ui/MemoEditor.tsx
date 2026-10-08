@@ -243,6 +243,20 @@ export function MemoEditor({
                                 void Linking.openURL(segment.url!).catch(() => {});
                               }
                             }}
+                            {...(Platform.OS === 'web'
+                              ? ({
+                                  href: segment.url,
+                                  hrefAttrs: { target: '_blank', rel: 'noreferrer noopener' },
+                                  onKeyDown: (event: { key: string; preventDefault: () => void }) => {
+                                    if (event.key === 'Enter' || event.key === ' ') {
+                                      event.preventDefault();
+                                      if (isSafeMarkdownLink(segment.url!)) {
+                                        void Linking.openURL(segment.url!).catch(() => {});
+                                      }
+                                    }
+                                  },
+                                } as Record<string, unknown>)
+                              : {})}
                           >
                             {segment.text}
                           </Text>

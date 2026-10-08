@@ -1,6 +1,6 @@
 import { fireEvent, render } from '@testing-library/react-native';
 import { useState } from 'react';
-import { Linking } from 'react-native';
+import { Linking, Platform } from 'react-native';
 
 import { MemoEditor, type MemoDraft } from '@/ui/MemoEditor';
 
@@ -79,4 +79,30 @@ test('plain text renders clickable URLs that open external links', async () => {
   expect(openUrlSpy).toHaveBeenCalledWith('https://maps.app.goo.gl/xyz');
 
   openUrlSpy.mockRestore();
+});
+
+test('plain text link activates via keyboard Enter and Space on web', async () => {
+  const originalPlatform = Platform.OS;
+  Platform.OS = 'web';
+  const openUrlSpy = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+  try {
+    const source = 'Visit https://keepory.app here';
+    const screen = await render(<Editor initial={{ value: source, format: 'plain' }} />);
+    const link = screen.getByRole('link', { name: 'https://keepory.app' });
+    expect(link.props.href).toBe('https://keepory.app');
+
+    const preventDefaultEnter = jest.fn();
+    link.props.onKeyDown({ key: 'Enter', preventDefault: preventDefaultEnter });
+    expect(preventDefaultEnter).toHaveBeenCalled();
+    expect(openUrlSpy).toHaveBeenCalledWith('https://keepory.app');
+
+    openUrlSpy.mockClear();
+    const preventDefaultSpace = jest.fn();
+    link.props.onKeyDown({ key: ' ', preventDefault: preventDefaultSpace });
+    expect(preventDefaultSpace).toHaveBeenCalled();
+    expect(openUrlSpy).toHaveBeenCalledWith('https://keepory.app');
+  } finally {
+    Platform.OS = originalPlatform;
+    openUrlSpy.mockRestore();
+  }
 });

@@ -70,10 +70,17 @@ test('cleanTrailingUrlPunctuation strips nested brackets and repeated closers', 
     url: 'https://example.com',
     trailing: '].)',
   });
-  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com）。'), {
-    url: 'https://example.com',
-    trailing: '）。',
+  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com/path…'), {
+    url: 'https://example.com/path',
+    trailing: '…',
   });
+  assert.deepEqual(
+    cleanTrailingUrlPunctuation('https://example.com' + ')'.repeat(1000)),
+    {
+      url: 'https://example.com',
+      trailing: ')'.repeat(1000),
+    },
+  );
 });
 
 test('parsePlainTextLinks returns empty array for empty string', () => {

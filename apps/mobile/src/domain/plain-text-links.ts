@@ -7,8 +7,8 @@ export interface PlainTextSegment {
 }
 
 // Punctuation characters commonly appended to URLs in natural language,
-// including ASCII and Unicode quotes, sentence enders, and CJK punctuation.
-const TRAILING_PUNCTUATION = /[.,;:!?"'<>。，、；：！？“”‘’«»‹›]+$/u;
+// including ASCII and Unicode quotes, sentence enders, ellipses, and CJK punctuation.
+const TRAILING_PUNCTUATION = /[.,;:!?"'<>…。，、；：！？“”‘’«»‹›]+$/u;
 
 const BRACKET_PAIRS: [string, string][] = [
   ['(', ')'],
@@ -24,7 +24,7 @@ const BRACKET_PAIRS: [string, string][] = [
 
 // Prose punctuation delimiters that can separate adjacent URLs without whitespace.
 const PROSE_DELIMITERS =
-  '[.,;:!?"\'<>|\\\\^()\\[\\]{}。，、；：！？“”‘’«»‹›（）【】「」『』《》〈〉]';
+  '[.,;:!?"\'<>|\\\\^()\\[\\]{}…。，、；：！？“”‘’«»‹›（）【】「」『』《》〈〉]';
 const URL_REGEX = new RegExp(
   `https?:\\/\\/(?:(?!${PROSE_DELIMITERS}+https?:\\/\\/)[^\\s])+`,
   'gi',
@@ -33,8 +33,9 @@ const URL_REGEX = new RegExp(
 /**
  * Trims trailing punctuation from a matched URL while preserving balanced
  * parentheses, brackets, and braces (e.g. Wikipedia links or URLs wrapped in parens),
- * including smart quotes and CJK punctuation. Repeats pair cleanup after outer
+ * including smart quotes, ellipses, and CJK punctuation. Repeats pair cleanup after outer
  * closers are removed so nested wrappers (e.g. 『「...」』) are fully stripped.
+ * Counts bracket pairs in linear time to avoid quadratic rescans on runs of closers.
  */
 export function cleanTrailingUrlPunctuation(rawUrl: string): { url: string; trailing: string } {
   let url = rawUrl;
@@ -50,16 +51,39 @@ export function cleanTrailingUrlPunctuation(rawUrl: string): { url: string; trai
     return false;
   };
 
+  // Pre-count bracket occurrences across rawUrl once in linear time.
+  const pairCounts = BRACKET_PAIRS.map(([openChar, closeChar]) => {
+    let openCount = 0;
+    let closeCount = 0;
+    for (let i = 0; i < rawUrl.length; i++) {
+      if (rawUrl[i] === openChar) openCount++;
+      else if (rawUrl[i] === closeChar) closeCount++;
+    }
+    return { openCount, closeCount };
+  });
+
   let changed = true;
   while (changed) {
     changed = stripPunct();
-    for (const [openChar, closeChar] of BRACKET_PAIRS) {
-      if (url.endsWith(closeChar)) {
-        const openCount = url.split(openChar).length - 1;
-        const closeCount = url.split(closeChar).length - 1;
-        if (closeCount > openCount) {
-          trailing = closeChar + trailing;
-          url = url.slice(0, -closeChar.length);
+    for (let i = 0; i < BRACKET_PAIRS.length; i++) {
+      const [, closeChar] = BRACKET_PAIRS[i];
+      const counts = pairCounts[i];
+      if (counts.closeCount > counts.openCount && url.endsWith(closeChar)) {
+        let endIndex = url.length;
+        while (
+          endIndex >= closeChar.length &&
+          url.slice(endIndex - closeChar.length, endIndex) === closeChar
+        ) {
+          endIndex -= closeChar.length;
+        }
+        const runCount = Math.floor((url.length - endIndex) / closeChar.length);
+        const excess = counts.closeCount - counts.openCount;
+        const countToRemove = Math.min(runCount, excess);
+        if (countToRemove > 0) {
+          const charsToRemove = countToRemove * closeChar.length;
+          trailing = url.slice(url.length - charsToRemove) + trailing;
+          url = url.slice(0, url.length - charsToRemove);
+          counts.closeCount -= countToRemove;
           changed = true;
           break;
         }
