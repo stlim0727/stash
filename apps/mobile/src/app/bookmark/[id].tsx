@@ -1626,9 +1626,7 @@ export default function BookmarkDetailScreen({
                     accessibilityRole="link"
                     accessibilityLabel={`${row.label}: ${row.value}`}
                     accessibilityHint={t('detail.openWebsite')}
-                    onPress={() => {
-                      void Linking.openURL(row.value).catch(() => {});
-                    }}
+                    onPress={handleOpenLink}
                     style={rowStyle}
                   >
                     <Text style={[styles.detailLabel, { color: palette.textSecondary }]}>{row.label}</Text>

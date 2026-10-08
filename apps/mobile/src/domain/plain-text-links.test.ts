@@ -61,6 +61,21 @@ test('cleanTrailingUrlPunctuation preserves balanced parens while stripping unba
   );
 });
 
+test('cleanTrailingUrlPunctuation strips nested brackets and repeated closers', () => {
+  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com」』'), {
+    url: 'https://example.com',
+    trailing: '」』',
+  });
+  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com].)'), {
+    url: 'https://example.com',
+    trailing: '].)',
+  });
+  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com）。'), {
+    url: 'https://example.com',
+    trailing: '）。',
+  });
+});
+
 test('parsePlainTextLinks returns empty array for empty string', () => {
   assert.deepEqual(parsePlainTextLinks(''), []);
 });
@@ -125,4 +140,34 @@ test('parsePlainTextLinks ignores unsafe schemes like javascript: or file:', () 
   assert.deepEqual(parsePlainTextLinks(content), [
     { type: 'text', text: content },
   ]);
+});
+
+test('parsePlainTextLinks splits adjacent URLs separated by punctuation delimiters', () => {
+  const content = 'https://a.com,https://b.com;https://c.com、https://d.com';
+  const segments = parsePlainTextLinks(content);
+  assert.deepEqual(segments, [
+    { type: 'link', text: 'https://a.com', url: 'https://a.com' },
+    { type: 'text', text: ',' },
+    { type: 'link', text: 'https://b.com', url: 'https://b.com' },
+    { type: 'text', text: ';' },
+    { type: 'link', text: 'https://c.com', url: 'https://c.com' },
+    { type: 'text', text: '、' },
+    { type: 'link', text: 'https://d.com', url: 'https://d.com' },
+  ]);
+  assert.equal(segments.map((s) => s.text).join(''), content);
+});
+
+test('parsePlainTextLinks handles nested bracket wrappers', () => {
+  const content = '『「https://example.com」』 and (https://a.com)(https://b.com)';
+  const segments = parsePlainTextLinks(content);
+  assert.deepEqual(segments, [
+    { type: 'text', text: '『「' },
+    { type: 'link', text: 'https://example.com', url: 'https://example.com' },
+    { type: 'text', text: '」』 and (' },
+    { type: 'link', text: 'https://a.com', url: 'https://a.com' },
+    { type: 'text', text: ')(' },
+    { type: 'link', text: 'https://b.com', url: 'https://b.com' },
+    { type: 'text', text: ')' },
+  ]);
+  assert.equal(segments.map((s) => s.text).join(''), content);
 });

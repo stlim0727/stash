@@ -22,10 +22,19 @@ const BRACKET_PAIRS: [string, string][] = [
   ['〈', '〉'],
 ];
 
+// Prose punctuation delimiters that can separate adjacent URLs without whitespace.
+const PROSE_DELIMITERS =
+  '[.,;:!?"\'<>|\\\\^()\\[\\]{}。，、；：！？“”‘’«»‹›（）【】「」『』《》〈〉]';
+const URL_REGEX = new RegExp(
+  `https?:\\/\\/(?:(?!${PROSE_DELIMITERS}+https?:\\/\\/)[^\\s])+`,
+  'gi',
+);
+
 /**
  * Trims trailing punctuation from a matched URL while preserving balanced
  * parentheses, brackets, and braces (e.g. Wikipedia links or URLs wrapped in parens),
- * including smart quotes and CJK punctuation.
+ * including smart quotes and CJK punctuation. Repeats pair cleanup after outer
+ * closers are removed so nested wrappers (e.g. 『「...」』) are fully stripped.
  */
 export function cleanTrailingUrlPunctuation(rawUrl: string): { url: string; trailing: string } {
   let url = rawUrl;
@@ -36,21 +45,24 @@ export function cleanTrailingUrlPunctuation(rawUrl: string): { url: string; trai
     if (punctMatch) {
       trailing = punctMatch[0] + trailing;
       url = url.slice(0, url.length - punctMatch[0].length);
+      return true;
     }
+    return false;
   };
 
-  stripPunct();
-
-  for (const [openChar, closeChar] of BRACKET_PAIRS) {
-    while (url.endsWith(closeChar)) {
-      const openCount = url.split(openChar).length - 1;
-      const closeCount = url.split(closeChar).length - 1;
-      if (closeCount > openCount) {
-        trailing = closeChar + trailing;
-        url = url.slice(0, -closeChar.length);
-        stripPunct();
-      } else {
-        break;
+  let changed = true;
+  while (changed) {
+    changed = stripPunct();
+    for (const [openChar, closeChar] of BRACKET_PAIRS) {
+      if (url.endsWith(closeChar)) {
+        const openCount = url.split(openChar).length - 1;
+        const closeCount = url.split(closeChar).length - 1;
+        if (closeCount > openCount) {
+          trailing = closeChar + trailing;
+          url = url.slice(0, -closeChar.length);
+          changed = true;
+          break;
+        }
       }
     }
   }
@@ -67,7 +79,7 @@ export function parsePlainTextLinks(content: string): PlainTextSegment[] {
     return [];
   }
 
-  const urlRegex = /https?:\/\/[^\s]+/gi;
+  const urlRegex = new RegExp(URL_REGEX.source, URL_REGEX.flags);
   const segments: PlainTextSegment[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -76,7 +88,7 @@ export function parsePlainTextLinks(content: string): PlainTextSegment[] {
     const rawMatch = match[0];
     const matchIndex = match.index;
 
-    const { url, trailing } = cleanTrailingUrlPunctuation(rawMatch);
+    const { url } = cleanTrailingUrlPunctuation(rawMatch);
 
     if (url && isSafeMarkdownLink(url)) {
       if (matchIndex > lastIndex) {
