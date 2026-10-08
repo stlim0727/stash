@@ -289,6 +289,15 @@ Stash uses [EAS Build](https://docs.expo.dev/build/introduction/) to produce
 installable iOS and Android builds. Build profiles are defined in
 `apps/mobile/eas.json`.
 
+The **Android Play Store Release** GitHub workflow accepts an optional `version`
+input, like the APK workflow: `v1.0.0` or `v1.0.0-rc1` (the `v` is optional).
+To use the same version as an APK build, enter that APK's version here. Leaving
+it blank uses the selected branch's `apps/mobile/app.json` version; it does not
+allocate a new RC or automatically copy the rolling APK release's version.
+The workflow passes the resolved version through the production EAS profile so
+the remote build receives it. EAS still automatically increments the Android
+`versionCode` independently.
+
 > **Why builds, not Expo Go:** the app depends on native modules
 > (`expo-sqlite`, `expo-share-intent`) that are not part of the Expo Go
 > runtime. Use a development build / dev client instead of Expo Go.

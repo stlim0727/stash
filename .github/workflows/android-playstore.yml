@@ -31,7 +31,12 @@ name: Android Play Store Release
 # this workflow after that one-time bootstrap upload.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'App version (e.g. v1.0.0 or v1.0.0-rc1). Blank = app.json version.'
+        required: false
+        default: ''
 
 concurrency:
   group: android-playstore
@@ -66,6 +71,27 @@ jobs:
         with:
           node-version-file: .node-version
           cache: pnpm
+
+      # Profile env reaches both the local CLI and the remote EAS worker.
+      # Keep remote versionCode auto-increment independent of the app version.
+      - name: Set EAS app version
+        working-directory: apps/mobile
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const app = JSON.parse(fs.readFileSync('app.json', 'utf8'));
+          const version = (process.env.INPUT_VERSION || app.expo.version).replace(/^v/, '');
+          if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(version)) {
+            throw new Error('Invalid app version: use vX.Y.Z or vX.Y.Z-rcN.');
+          }
+          const eas = JSON.parse(fs.readFileSync('eas.json', 'utf8'));
+          eas.build.production.env = { ...eas.build.production.env, APP_VERSION: version };
+          fs.writeFileSync('eas.json', JSON.stringify(eas, null, 2) + '\n');
+          console.log(`EAS app version: ${version} (versionCode auto-increments remotely)`);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `App version: **${version}**\n`);
+          NODE
 
       - run: pnpm install --frozen-lockfile
 
