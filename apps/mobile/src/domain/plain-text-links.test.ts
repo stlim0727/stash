@@ -206,6 +206,33 @@ test('parsePlainTextLinks stops URL match before attached Korean prose on domain
     { type: 'text', text: '입니다' },
   ]);
   assert.equal(idnSegs.map((s) => s.text).join(''), idnCase);
+
+  const mapsCase = '지도: https://maps.app.goo.gl/hBX7aD55YpUUN7Ji6입니다';
+  const mapsSegs = parsePlainTextLinks(mapsCase);
+  assert.deepEqual(mapsSegs, [
+    { type: 'text', text: '지도: ' },
+    { type: 'link', text: 'https://maps.app.goo.gl/hBX7aD55YpUUN7Ji6', url: 'https://maps.app.goo.gl/hBX7aD55YpUUN7Ji6' },
+    { type: 'text', text: '입니다' },
+  ]);
+  assert.equal(mapsSegs.map((s) => s.text).join(''), mapsCase);
+
+  const wikiParticleCase = '참고: https://ko.wikipedia.org/wiki/대한민국을 보세요';
+  const wikiSegs = parsePlainTextLinks(wikiParticleCase);
+  assert.deepEqual(wikiSegs, [
+    { type: 'text', text: '참고: ' },
+    { type: 'link', text: 'https://ko.wikipedia.org/wiki/대한민국', url: 'https://ko.wikipedia.org/wiki/대한민국' },
+    { type: 'text', text: '을 보세요' },
+  ]);
+  assert.equal(wikiSegs.map((s) => s.text).join(''), wikiParticleCase);
+
+  const middleKoreanCase = '경로: https://keepory.app입니다/path';
+  const middleSegs = parsePlainTextLinks(middleKoreanCase);
+  assert.deepEqual(middleSegs, [
+    { type: 'text', text: '경로: ' },
+    { type: 'link', text: 'https://keepory.app', url: 'https://keepory.app' },
+    { type: 'text', text: '입니다/path' },
+  ]);
+  assert.equal(middleSegs.map((s) => s.text).join(''), middleKoreanCase);
 });
 
 test('parsePlainTextLinks handles large delimiter runs without quadratic stalling', () => {

@@ -27,12 +27,16 @@ const PROSE_DELIMITER_CHARS = new Set(
   '.,;:!?"\'<>|\\^()[]{}…。，、；：！？“”‘’«»‹›（）【】「」『』《》〈〉'.split(''),
 );
 
+const KOREAN_PARTICLES =
+  /(?:입니다|입니까|이었다|였다|이라서|이라는|이다|이고|이나|이란|이라|이며|이면|에서|에게|한테|으로|은|는|이|가|을|를|에|로|와|과|의|도|만|까지|부터|마저|조차|처럼|보다)$/;
+
 /**
  * Trims trailing punctuation from a matched URL while preserving balanced
  * parentheses, brackets, and braces (e.g. Wikipedia links or URLs wrapped in parens),
  * including smart quotes, ellipses, and CJK punctuation. Repeats pair cleanup after outer
  * closers are removed so nested wrappers (e.g. 『「...」』) are fully stripped.
  * Counts bracket pairs in linear time to avoid quadratic rescans on runs of closers.
+ * Also trims attached Korean prose suffixes (e.g. "입니다", "을", "에서") after complete URL components.
  */
 export function cleanTrailingUrlPunctuation(rawUrl: string): { url: string; trailing: string } {
   let url = rawUrl;
@@ -88,6 +92,23 @@ export function cleanTrailingUrlPunctuation(rawUrl: string): { url: string; trai
     }
   }
 
+  // Strip attached Korean prose suffixes after complete URL components.
+  // 1. Any Hangul attached to an ASCII letter, digit, dot, or port (e.g. /xyz입니다).
+  const asciiAttachedMatch = url.match(/^(.+[a-zA-Z0-9])([가-힣]+)$/);
+  if (asciiAttachedMatch) {
+    trailing = asciiAttachedMatch[2] + trailing;
+    url = asciiAttachedMatch[1];
+  } else {
+    // 2. Known Korean grammatical particles attached after slash, query, hash, etc.
+    const particleMatch = url.match(KOREAN_PARTICLES);
+    if (particleMatch) {
+      trailing = particleMatch[0] + trailing;
+      url = url.slice(0, -particleMatch[0].length);
+    }
+  }
+
+  stripPunct();
+
   return { url, trailing };
 }
 
@@ -124,20 +145,17 @@ export function parsePlainTextLinks(content: string): PlainTextSegment[] {
       }
     }
 
-    // 2. Stop URL matches before attached Korean prose on domain boundary.
-    // e.g. "https://keepory.app입니다" -> "https://keepory.app" + "입니다"
-    const authMatch = candidate.match(/^(https?:\/\/(?:[^\s/@:]+@)?)([^\s/?#]+)(.*)$/i);
-    if (authMatch) {
-      const [, proto, authority, rest] = authMatch;
-      const koreanBoundary = authority.match(
-        /^([^\s/:]+\.[a-zA-Z]{2,}(?::\d+)?)([가-힣ㄱ-ㅎㅏ-ㅣ].*)$/,
-      );
-      if (koreanBoundary) {
-        candidate = proto + koreanBoundary[1] + rest;
-      }
+    // 2. Stop candidate URL before Korean prose following an ASCII domain/port before any path:
+    // e.g. "https://keepory.app입니다/path" -> URL stops at "https://keepory.app",
+    // preserving source offsets without deleting from the middle of the candidate.
+    const authKoreanMatch = candidate.match(
+      /^(https?:\/\/(?:[^\s/@:]+@)?[^\s/:?#]+\.[a-zA-Z]{2,}(?::\d+)?)([가-힣].*)$/,
+    );
+    if (authKoreanMatch) {
+      candidate = authKoreanMatch[1];
     }
 
-    // 3. Clean trailing punctuation and bracket pairs in linear time.
+    // 3. Clean trailing punctuation, bracket pairs, and Korean prose suffixes in linear time.
     const { url } = cleanTrailingUrlPunctuation(candidate);
 
     if (url && isSafeMarkdownLink(url)) {
