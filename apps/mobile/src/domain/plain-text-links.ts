@@ -23,11 +23,8 @@ const BRACKET_PAIRS: [string, string][] = [
 ];
 
 // Prose punctuation delimiters that can separate adjacent URLs without whitespace.
-const PROSE_DELIMITERS =
-  '[.,;:!?"\'<>|\\\\^()\\[\\]{}…。，、；：！？“”‘’«»‹›（）【】「」『』《》〈〉]';
-const URL_REGEX = new RegExp(
-  `https?:\\/\\/(?:(?!${PROSE_DELIMITERS}+https?:\\/\\/)[^\\s])+`,
-  'gi',
+const PROSE_DELIMITER_CHARS = new Set(
+  '.,;:!?"\'<>|\\^()[]{}…。，、；：！？“”‘’«»‹›（）【】「」『』《》〈〉'.split(''),
 );
 
 /**
@@ -103,16 +100,45 @@ export function parsePlainTextLinks(content: string): PlainTextSegment[] {
     return [];
   }
 
-  const urlRegex = new RegExp(URL_REGEX.source, URL_REGEX.flags);
+  const urlRegex = /https?:\/\/[^\s]+/gi;
   const segments: PlainTextSegment[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
   while ((match = urlRegex.exec(content)) !== null) {
-    const rawMatch = match[0];
+    let candidate = match[0];
     const matchIndex = match.index;
 
-    const { url } = cleanTrailingUrlPunctuation(rawMatch);
+    // 1. Single-pass adjacent URL split at prose delimiters (avoids quadratic lookahead).
+    const protoMatch = candidate.match(/^https?:\/\//i);
+    const protoLen = protoMatch ? protoMatch[0].length : 8;
+    const nextProtoOffset = candidate.slice(protoLen).search(/https?:\/\//i);
+    if (nextProtoOffset !== -1) {
+      const nextProtoIndex = protoLen + nextProtoOffset;
+      let delimStart = nextProtoIndex;
+      while (delimStart > 0 && PROSE_DELIMITER_CHARS.has(candidate[delimStart - 1])) {
+        delimStart--;
+      }
+      if (delimStart < nextProtoIndex && delimStart > 0) {
+        candidate = candidate.slice(0, delimStart);
+      }
+    }
+
+    // 2. Stop URL matches before attached Korean prose on domain boundary.
+    // e.g. "https://keepory.app입니다" -> "https://keepory.app" + "입니다"
+    const authMatch = candidate.match(/^(https?:\/\/(?:[^\s/@:]+@)?)([^\s/?#]+)(.*)$/i);
+    if (authMatch) {
+      const [, proto, authority, rest] = authMatch;
+      const koreanBoundary = authority.match(
+        /^([^\s/:]+\.[a-zA-Z]{2,}(?::\d+)?)([가-힣ㄱ-ㅎㅏ-ㅣ].*)$/,
+      );
+      if (koreanBoundary) {
+        candidate = proto + koreanBoundary[1] + rest;
+      }
+    }
+
+    // 3. Clean trailing punctuation and bracket pairs in linear time.
+    const { url } = cleanTrailingUrlPunctuation(candidate);
 
     if (url && isSafeMarkdownLink(url)) {
       if (matchIndex > lastIndex) {

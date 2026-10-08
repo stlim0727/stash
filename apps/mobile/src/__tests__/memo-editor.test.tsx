@@ -81,7 +81,7 @@ test('plain text renders clickable URLs that open external links', async () => {
   openUrlSpy.mockRestore();
 });
 
-test('plain text link activates via keyboard Enter and Space on web', async () => {
+test('plain text link relies on anchor navigation on web and supports Space activation', async () => {
   const originalPlatform = Platform.OS;
   Platform.OS = 'web';
   const openUrlSpy = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
@@ -90,13 +90,8 @@ test('plain text link activates via keyboard Enter and Space on web', async () =
     const screen = await render(<Editor initial={{ value: source, format: 'plain' }} />);
     const link = screen.getByRole('link', { name: 'https://keepory.app' });
     expect(link.props.href).toBe('https://keepory.app');
+    expect(link.props.onPress).toBeUndefined();
 
-    const preventDefaultEnter = jest.fn();
-    link.props.onKeyDown({ key: 'Enter', preventDefault: preventDefaultEnter });
-    expect(preventDefaultEnter).toHaveBeenCalled();
-    expect(openUrlSpy).toHaveBeenCalledWith('https://keepory.app');
-
-    openUrlSpy.mockClear();
     const preventDefaultSpace = jest.fn();
     link.props.onKeyDown({ key: ' ', preventDefault: preventDefaultSpace });
     expect(preventDefaultSpace).toHaveBeenCalled();

@@ -178,3 +178,46 @@ test('parsePlainTextLinks handles nested bracket wrappers', () => {
   ]);
   assert.equal(segments.map((s) => s.text).join(''), content);
 });
+
+test('parsePlainTextLinks stops URL match before attached Korean prose on domain boundary', () => {
+  const content = '링크는 https://keepory.app입니다 확인바랍니다';
+  const segments = parsePlainTextLinks(content);
+  assert.deepEqual(segments, [
+    { type: 'text', text: '링크는 ' },
+    { type: 'link', text: 'https://keepory.app', url: 'https://keepory.app' },
+    { type: 'text', text: '입니다 확인바랍니다' },
+  ]);
+  assert.equal(segments.map((s) => s.text).join(''), content);
+
+  const portCase = '포트: https://keepory.app:3000입니다';
+  const portSegs = parsePlainTextLinks(portCase);
+  assert.deepEqual(portSegs, [
+    { type: 'text', text: '포트: ' },
+    { type: 'link', text: 'https://keepory.app:3000', url: 'https://keepory.app:3000' },
+    { type: 'text', text: '입니다' },
+  ]);
+  assert.equal(portSegs.map((s) => s.text).join(''), portCase);
+
+  const idnCase = 'IDN: https://한글.com입니다';
+  const idnSegs = parsePlainTextLinks(idnCase);
+  assert.deepEqual(idnSegs, [
+    { type: 'text', text: 'IDN: ' },
+    { type: 'link', text: 'https://한글.com', url: 'https://한글.com' },
+    { type: 'text', text: '입니다' },
+  ]);
+  assert.equal(idnSegs.map((s) => s.text).join(''), idnCase);
+});
+
+test('parsePlainTextLinks handles large delimiter runs without quadratic stalling', () => {
+  const content = 'https://x.com/' + ')'.repeat(10_000);
+  const start = Date.now();
+  const segments = parsePlainTextLinks(content);
+  const duration = Date.now() - start;
+  assert.ok(duration < 100, `Expected duration < 100ms, took ${duration}ms`);
+  assert.equal(segments.length, 2);
+  assert.equal(segments[0].type, 'link');
+  assert.equal(segments[0].text, 'https://x.com/');
+  assert.equal(segments[1].type, 'text');
+  assert.equal(segments[1].text, ')'.repeat(10_000));
+  assert.equal(segments.map((s) => s.text).join(''), content);
+});

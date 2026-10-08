@@ -238,17 +238,21 @@ export function MemoEditor({
                             accessibilityLabel={segment.text}
                             accessibilityHint={t('detail.openWebsite')}
                             style={[styles.link, { color: palette.accent }]}
-                            onPress={() => {
-                              if (isSafeMarkdownLink(segment.url!)) {
-                                void Linking.openURL(segment.url!).catch(() => {});
-                              }
-                            }}
+                            onPress={
+                              Platform.OS === 'web'
+                                ? undefined
+                                : () => {
+                                    if (isSafeMarkdownLink(segment.url!)) {
+                                      void Linking.openURL(segment.url!).catch(() => {});
+                                    }
+                                  }
+                            }
                             {...(Platform.OS === 'web'
                               ? ({
                                   href: segment.url,
                                   hrefAttrs: { target: '_blank', rel: 'noreferrer noopener' },
                                   onKeyDown: (event: { key: string; preventDefault: () => void }) => {
-                                    if (event.key === 'Enter' || event.key === ' ') {
+                                    if (event.key === ' ') {
                                       event.preventDefault();
                                       if (isSafeMarkdownLink(segment.url!)) {
                                         void Linking.openURL(segment.url!).catch(() => {});
