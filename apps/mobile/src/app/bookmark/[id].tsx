@@ -44,6 +44,7 @@ import { useCaptureToast } from '@/ui/capture-toast';
 import { nextFacetNonce } from '@/domain/facet-nonce';
 import { hostFromUrl } from '@/domain/item-icon';
 import { displayTitle, isTitleDerived } from '@/domain/item-display';
+import { isSafeMarkdownLink } from '@/domain/markdown';
 import {
   isTitleRestatement,
   pendingSuggestedFolder,
@@ -1628,9 +1629,22 @@ export default function BookmarkDetailScreen({
               >
                 <Text style={[styles.detailLabel, { color: palette.textSecondary }]}>{row.label}</Text>
                 <PostHogMaskView>
-                  <Text style={[styles.detailValue, { color: palette.text }]} selectable>
-                    {row.value}
-                  </Text>
+                  {row.label === t('detail.rowUrl') && isSafeMarkdownLink(row.value) ? (
+                    <Text
+                      accessibilityRole="link"
+                      accessibilityLabel={row.value}
+                      style={[styles.detailValue, { color: palette.accent, textDecorationLine: 'underline' }]}
+                      onPress={() => {
+                        void Linking.openURL(row.value).catch(() => {});
+                      }}
+                    >
+                      {row.value}
+                    </Text>
+                  ) : (
+                    <Text style={[styles.detailValue, { color: palette.text }]} selectable>
+                      {row.value}
+                    </Text>
+                  )}
                 </PostHogMaskView>
               </View>
             ))}

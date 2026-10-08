@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Linking, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { PostHogMaskView } from 'posthog-react-native';
 
+import { isSafeMarkdownLink } from '@/domain/markdown';
+import { parsePlainTextLinks } from '@/domain/plain-text-links';
 import type { TextFormat } from '@/domain/types';
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
@@ -82,6 +84,15 @@ export function MemoEditor({
     setMenuOpen(false);
     restoreInputFocus();
   }
+
+  const plainSegments = useMemo(
+    () => (format === 'plain' ? parsePlainTextLinks(value) : []),
+    [format, value],
+  );
+  const hasPlainLinks = useMemo(
+    () => plainSegments.some((segment) => segment.type === 'link'),
+    [plainSegments],
+  );
 
   return (
     <View style={styles.container}>
@@ -214,7 +225,33 @@ export function MemoEditor({
                   sibling that announces the literal source, as MarkdownBody does. */}
               <View accessible accessibilityLabel={value} style={styles.srOnly} />
               <PostHogMaskView>
-                <Text selectable style={[styles.body, { color: palette.text }]}>{value}</Text>
+                <Text
+                  selectable={Platform.OS === 'android' ? !hasPlainLinks : true}
+                  style={[styles.body, { color: palette.text }]}
+                >
+                  {hasPlainLinks
+                    ? plainSegments.map((segment, index) =>
+                        segment.type === 'link' && segment.url ? (
+                          <Text
+                            key={`link-${index}`}
+                            accessibilityRole="link"
+                            accessibilityLabel={segment.text}
+                            accessibilityHint={t('detail.openWebsite')}
+                            style={[styles.link, { color: palette.accent }]}
+                            onPress={() => {
+                              if (isSafeMarkdownLink(segment.url!)) {
+                                void Linking.openURL(segment.url!).catch(() => {});
+                              }
+                            }}
+                          >
+                            {segment.text}
+                          </Text>
+                        ) : (
+                          segment.text
+                        ),
+                      )
+                    : value}
+                </Text>
               </PostHogMaskView>
             </View>
           )}
@@ -240,6 +277,7 @@ const styles = StyleSheet.create({
   input: { minHeight: 120, maxHeight: 420, borderWidth: StyleSheet.hairlineWidth, borderRadius: 14, padding: 14, fontSize: 15, lineHeight: 22, textAlignVertical: 'top' },
   reading: { borderRadius: 14, padding: 14 },
   body: { fontSize: 16, lineHeight: 24 },
+  link: { textDecorationLine: 'underline' },
   empty: { minHeight: 44, justifyContent: 'center' },
   srOnly: { position: 'absolute', width: 1, height: 1, overflow: 'hidden', opacity: 0 },
 });

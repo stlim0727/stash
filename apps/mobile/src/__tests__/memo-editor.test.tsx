@@ -1,5 +1,6 @@
 import { fireEvent, render } from '@testing-library/react-native';
 import { useState } from 'react';
+import { Linking } from 'react-native';
 
 import { MemoEditor, type MemoDraft } from '@/ui/MemoEditor';
 
@@ -59,4 +60,23 @@ test('a format-only change preserves long stored source including whitespace', a
   await fireEvent.press(screen.getByRole('radio', { name: 'Plain text' }));
   expect(commit).toHaveBeenCalledWith({ value: source, format: 'plain' });
   expect(screen.getByText(source).props.selectable).toBe(true);
+});
+
+test('plain text renders clickable URLs that open external links', async () => {
+  const openUrlSpy = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+  const source = 'Check out https://keepory.app and https://maps.app.goo.gl/xyz today';
+  const screen = await render(<Editor initial={{ value: source, format: 'plain' }} />);
+
+  const link1 = screen.getByRole('link', { name: 'https://keepory.app' });
+  const link2 = screen.getByRole('link', { name: 'https://maps.app.goo.gl/xyz' });
+  expect(link1).toBeTruthy();
+  expect(link2).toBeTruthy();
+
+  await fireEvent.press(link1);
+  expect(openUrlSpy).toHaveBeenCalledWith('https://keepory.app');
+
+  await fireEvent.press(link2);
+  expect(openUrlSpy).toHaveBeenCalledWith('https://maps.app.goo.gl/xyz');
+
+  openUrlSpy.mockRestore();
 });
