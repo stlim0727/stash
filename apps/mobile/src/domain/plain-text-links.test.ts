@@ -14,6 +14,29 @@ test('cleanTrailingUrlPunctuation strips basic punctuation', () => {
   });
 });
 
+test('cleanTrailingUrlPunctuation strips Unicode quotes and CJK punctuation', () => {
+  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com”'), {
+    url: 'https://example.com',
+    trailing: '”',
+  });
+  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com。'), {
+    url: 'https://example.com',
+    trailing: '。',
+  });
+  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com，'), {
+    url: 'https://example.com',
+    trailing: '，',
+  });
+  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com』'), {
+    url: 'https://example.com',
+    trailing: '』',
+  });
+  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com）'), {
+    url: 'https://example.com',
+    trailing: '）',
+  });
+});
+
 test('cleanTrailingUrlPunctuation preserves balanced parens while stripping unbalanced parens', () => {
   assert.deepEqual(
     cleanTrailingUrlPunctuation('https://en.wikipedia.org/wiki/React_(software)'),

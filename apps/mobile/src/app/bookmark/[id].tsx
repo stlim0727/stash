@@ -1610,44 +1610,60 @@ export default function BookmarkDetailScreen({
         </Pressable>
         {showDetails ? (
           <Card elevated={false} style={styles.field}>
-            {details.map((row, index) => (
-              <View
-                key={row.label}
-                // `accessible` + `accessibilityLabel` combine the label and
-                // value into one announced unit for VoiceOver/TalkBack — the
-                // masked value Text below has no accessible ancestor of its
-                // own otherwise, and could be skipped or announced as the
-                // mask's own sentinel label instead of its real content.
-                accessible
-                accessibilityLabel={`${row.label}: ${row.value}`}
-                style={[
-                  styles.detailRow,
-                  index > 0
-                    ? { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.border }
-                    : null,
-                ]}
-              >
-                <Text style={[styles.detailLabel, { color: palette.textSecondary }]}>{row.label}</Text>
-                <PostHogMaskView>
-                  {row.label === t('detail.rowUrl') && isSafeMarkdownLink(row.value) ? (
-                    <Text
-                      accessibilityRole="link"
-                      accessibilityLabel={row.value}
-                      style={[styles.detailValue, { color: palette.accent, textDecorationLine: 'underline' }]}
-                      onPress={() => {
-                        void Linking.openURL(row.value).catch(() => {});
-                      }}
-                    >
-                      {row.value}
-                    </Text>
-                  ) : (
+            {details.map((row, index) => {
+              const isUrlRow = row.label === t('detail.rowUrl') && isSafeMarkdownLink(row.value);
+              const rowStyle = [
+                styles.detailRow,
+                index > 0
+                  ? { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.border }
+                  : null,
+              ];
+
+              if (isUrlRow) {
+                return (
+                  <Pressable
+                    key={row.label}
+                    accessibilityRole="link"
+                    accessibilityLabel={`${row.label}: ${row.value}`}
+                    accessibilityHint={t('detail.openWebsite')}
+                    onPress={() => {
+                      void Linking.openURL(row.value).catch(() => {});
+                    }}
+                    style={rowStyle}
+                  >
+                    <Text style={[styles.detailLabel, { color: palette.textSecondary }]}>{row.label}</Text>
+                    <PostHogMaskView>
+                      <Text
+                        style={[styles.detailValue, { color: palette.accent, textDecorationLine: 'underline' }]}
+                      >
+                        {row.value}
+                      </Text>
+                    </PostHogMaskView>
+                  </Pressable>
+                );
+              }
+
+              return (
+                <View
+                  key={row.label}
+                  // `accessible` + `accessibilityLabel` combine the label and
+                  // value into one announced unit for VoiceOver/TalkBack — the
+                  // masked value Text below has no accessible ancestor of its
+                  // own otherwise, and could be skipped or announced as the
+                  // mask's own sentinel label instead of its real content.
+                  accessible
+                  accessibilityLabel={`${row.label}: ${row.value}`}
+                  style={rowStyle}
+                >
+                  <Text style={[styles.detailLabel, { color: palette.textSecondary }]}>{row.label}</Text>
+                  <PostHogMaskView>
                     <Text style={[styles.detailValue, { color: palette.text }]} selectable>
                       {row.value}
                     </Text>
-                  )}
-                </PostHogMaskView>
-              </View>
-            ))}
+                  </PostHogMaskView>
+                </View>
+              );
+            })}
             {bookmark.url ? (
               <Button
                 testID="detail-drawer-refresh-preview"

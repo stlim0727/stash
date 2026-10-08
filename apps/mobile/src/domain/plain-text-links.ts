@@ -6,67 +6,52 @@ export interface PlainTextSegment {
   url?: string;
 }
 
-const TRAILING_PUNCTUATION = /[.,;:!?"'<>]+$/;
+// Punctuation characters commonly appended to URLs in natural language,
+// including ASCII and Unicode quotes, sentence enders, and CJK punctuation.
+const TRAILING_PUNCTUATION = /[.,;:!?"'<>。，、；：！？“”‘’«»‹›]+$/u;
+
+const BRACKET_PAIRS: [string, string][] = [
+  ['(', ')'],
+  ['[', ']'],
+  ['{', '}'],
+  ['（', '）'],
+  ['【', '】'],
+  ['「', '」'],
+  ['『', '』'],
+  ['《', '》'],
+  ['〈', '〉'],
+];
 
 /**
  * Trims trailing punctuation from a matched URL while preserving balanced
- * parentheses, brackets, and braces (e.g. Wikipedia links or URLs wrapped in parens).
+ * parentheses, brackets, and braces (e.g. Wikipedia links or URLs wrapped in parens),
+ * including smart quotes and CJK punctuation.
  */
 export function cleanTrailingUrlPunctuation(rawUrl: string): { url: string; trailing: string } {
   let url = rawUrl;
   let trailing = '';
 
-  const punctMatch = url.match(TRAILING_PUNCTUATION);
-  if (punctMatch) {
-    trailing = punctMatch[0] + trailing;
-    url = url.slice(0, url.length - punctMatch[0].length);
-  }
-
-  while (url.endsWith(')')) {
-    const openCount = (url.match(/\(/g) || []).length;
-    const closeCount = (url.match(/\)/g) || []).length;
-    if (closeCount > openCount) {
-      trailing = ')' + trailing;
-      url = url.slice(0, -1);
-      const innerPunct = url.match(TRAILING_PUNCTUATION);
-      if (innerPunct) {
-        trailing = innerPunct[0] + trailing;
-        url = url.slice(0, url.length - innerPunct[0].length);
-      }
-    } else {
-      break;
+  const stripPunct = () => {
+    const punctMatch = url.match(TRAILING_PUNCTUATION);
+    if (punctMatch) {
+      trailing = punctMatch[0] + trailing;
+      url = url.slice(0, url.length - punctMatch[0].length);
     }
-  }
+  };
 
-  while (url.endsWith(']')) {
-    const openCount = (url.match(/\[/g) || []).length;
-    const closeCount = (url.match(/\]/g) || []).length;
-    if (closeCount > openCount) {
-      trailing = ']' + trailing;
-      url = url.slice(0, -1);
-      const innerPunct = url.match(TRAILING_PUNCTUATION);
-      if (innerPunct) {
-        trailing = innerPunct[0] + trailing;
-        url = url.slice(0, url.length - innerPunct[0].length);
-      }
-    } else {
-      break;
-    }
-  }
+  stripPunct();
 
-  while (url.endsWith('}')) {
-    const openCount = (url.match(/\{/g) || []).length;
-    const closeCount = (url.match(/\}/g) || []).length;
-    if (closeCount > openCount) {
-      trailing = '}' + trailing;
-      url = url.slice(0, -1);
-      const innerPunct = url.match(TRAILING_PUNCTUATION);
-      if (innerPunct) {
-        trailing = innerPunct[0] + trailing;
-        url = url.slice(0, url.length - innerPunct[0].length);
+  for (const [openChar, closeChar] of BRACKET_PAIRS) {
+    while (url.endsWith(closeChar)) {
+      const openCount = url.split(openChar).length - 1;
+      const closeCount = url.split(closeChar).length - 1;
+      if (closeCount > openCount) {
+        trailing = closeChar + trailing;
+        url = url.slice(0, -closeChar.length);
+        stripPunct();
+      } else {
+        break;
       }
-    } else {
-      break;
     }
   }
 
