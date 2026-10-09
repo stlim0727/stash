@@ -46,17 +46,39 @@ function isFileForPlatform(filePath, platform) {
 
 const files = walk(ROOT);
 
-function extractImports(content) {
-  const specifiers = new Set();
-  const fromRegex = /(?:import|export)\s+(?:type\s+)?(?:[^'"]*?)\s+from\s*['"]([^'"]+)['"]/g;
-  const bareRegex = /import\s+['"]([^'"]+)['"]/g;
-  const callRegex = /(?:import|require)\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+function stripComments(code) {
+  return code.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
+}
 
+function extractImports(content) {
+  const clean = stripComments(content);
+  const importsMap = new Map(); // specifier -> { specifier, isTypeOnly }
+
+  const fromRegex = /(?:import|export)\s+(type\s+)?(?:[\s\S]*?)\s+from\s*['"]([^'"]+)['"]/g;
   let match;
-  while ((match = fromRegex.exec(content)) !== null) specifiers.add(match[1]);
-  while ((match = bareRegex.exec(content)) !== null) specifiers.add(match[1]);
-  while ((match = callRegex.exec(content)) !== null) specifiers.add(match[1]);
-  return [...specifiers];
+  while ((match = fromRegex.exec(clean)) !== null) {
+    const isTypeOnly = Boolean(match[1]);
+    const spec = match[2];
+    if (!importsMap.has(spec)) {
+      importsMap.set(spec, { specifier: spec, isTypeOnly });
+    } else if (!isTypeOnly) {
+      importsMap.get(spec).isTypeOnly = false;
+    }
+  }
+
+  const bareRegex = /import\s+['"]([^'"]+)['"]/g;
+  while ((match = bareRegex.exec(clean)) !== null) {
+    const spec = match[1];
+    importsMap.set(spec, { specifier: spec, isTypeOnly: false });
+  }
+
+  const callRegex = /(?:import|require)\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+  while ((match = callRegex.exec(clean)) !== null) {
+    const spec = match[1];
+    importsMap.set(spec, { specifier: spec, isTypeOnly: false });
+  }
+
+  return [...importsMap.values()];
 }
 
 function resolveModule(importer, specifier, platform, targetFiles = files) {
@@ -116,10 +138,10 @@ for (const platform of ['ios', 'android', 'web']) {
   const platformGraph = new Map();
   for (const file of platformFiles) {
     const content = readFileSync(file, 'utf8');
-    const specifiers = extractImports(content);
+    const imports = extractImports(content);
     const deps = [];
-    for (const spec of specifiers) {
-      const resolved = resolveModule(file, spec, platform, platformFiles);
+    for (const imp of imports) {
+      const resolved = resolveModule(file, imp.specifier, platform, platformFiles);
       if (resolved && !deps.includes(resolved)) deps.push(resolved);
     }
     platformGraph.set(file, deps);
@@ -153,43 +175,99 @@ for (const platform of ['ios', 'android', 'web']) {
 const unifiedGraph = new Map();
 for (const file of files) {
   const content = readFileSync(file, 'utf8');
-  const specifiers = extractImports(content);
+  const imports = extractImports(content);
   const deps = new Set();
   for (const platform of ['ios', 'android', 'web']) {
-    for (const spec of specifiers) {
-      const resolved = resolveModule(file, spec, platform);
+    for (const imp of imports) {
+      const resolved = resolveModule(file, imp.specifier, platform);
       if (resolved) deps.add(resolved);
     }
   }
   unifiedGraph.set(file, [...deps]);
 }
 
-// Explicit allowlist of non-domain module contracts that domain modules are permitted to import:
-// - storage/types.ts: Pure durable storage row and entity types.
-// - observability/log-buffer.ts: Dependency-free in-memory diagnostic log ring buffer.
-// - i18n/messages.ts: Pure message key catalog type for domain-derived UI status.
-const ALLOWED_DOMAIN_EXTERNAL_MODULES = new Set([
+// Pure bare utility packages permitted for domain modules:
+const ALLOWED_DOMAIN_BARE_PACKAGES = new Set([
+  'punycode/punycode.js',
+  'tldts',
+  '@zxing/text-encoding/cjs/encoding.js',
+  '@zxing/text-encoding/cjs/encoding-indexes.js',
+  'marked',
+  'htmlparser2',
+  'expo/fetch',
+  'react',
+]);
+
+// Explicit external contracts for domain modules:
+// - storage/types.ts: TYPE-ONLY contract for durable storage row/entity types
+// - i18n/messages.ts: TYPE-ONLY contract for MessageKey
+// - observability/log-buffer.ts: Explicit runtime exception for diagnostic logging
+const TYPE_ONLY_DOMAIN_EXTERNAL_MODULES = new Set([
   'storage/types.ts',
-  'observability/log-buffer.ts',
   'i18n/messages.ts',
 ]);
 
+const RUNTIME_DOMAIN_EXTERNAL_MODULES = new Set([
+  'observability/log-buffer.ts',
+]);
+
 const violations = [];
-for (const [file, deps] of unifiedGraph.entries()) {
+for (const file of files) {
   const rel = normalizePath(relative(ROOT, file));
   const layer = rel.split('/')[0];
+  const content = readFileSync(file, 'utf8');
+  const extractedImports = extractImports(content);
+
+  // Check domain layer constraints (both bare packages and internal module boundaries)
+  if (layer === 'domain') {
+    for (const imp of extractedImports) {
+      const { specifier, isTypeOnly } = imp;
+
+      // 1. Bare package imports (external npm packages)
+      if (!specifier.startsWith('@/') && !specifier.startsWith('.')) {
+        if (!ALLOWED_DOMAIN_BARE_PACKAGES.has(specifier)) {
+          violations.push(
+            `DIP violation: domain module "${rel}" imports forbidden bare package "${specifier}" (framework/delivery packages not permitted in pure domain)`
+          );
+        }
+        continue;
+      }
+
+      // 2. Local module imports (internal paths)
+      const resolvedPaths = new Set();
+      for (const platform of ['ios', 'android', 'web']) {
+        const resolved = resolveModule(file, specifier, platform);
+        if (resolved) resolvedPaths.add(resolved);
+      }
+
+      for (const resolved of resolvedPaths) {
+        const depRel = normalizePath(relative(ROOT, resolved));
+        const depLayer = depRel.split('/')[0];
+
+        if (depLayer === 'domain') continue;
+
+        if (TYPE_ONLY_DOMAIN_EXTERNAL_MODULES.has(depRel)) {
+          if (!isTypeOnly) {
+            violations.push(
+              `DIP violation: domain module "${rel}" value-imports from contract "${depRel}" (only type-only imports permitted)`
+            );
+          }
+        } else if (RUNTIME_DOMAIN_EXTERNAL_MODULES.has(depRel)) {
+          // Explicitly allowed runtime diagnostic logging contract
+        } else {
+          violations.push(
+            `DIP violation: domain module "${rel}" imports non-domain module "${depRel}"`
+          );
+        }
+      }
+    }
+  }
+
+  // Check higher-level layer boundaries using unified resolved dependencies
+  const deps = unifiedGraph.get(file) || [];
   for (const dep of deps) {
     const depRel = normalizePath(relative(ROOT, dep));
     const depLayer = depRel.split('/')[0];
-
-    // Domain must remain pure: enforce an explicit local-import allowlist.
-    // Domain modules may only import internal domain logic and explicit allowed contracts.
-    if (layer === 'domain') {
-      const isAllowed = depLayer === 'domain' || ALLOWED_DOMAIN_EXTERNAL_MODULES.has(depRel);
-      if (!isAllowed) {
-        violations.push(`DIP violation: domain module "${rel}" imports non-domain module "${depRel}"`);
-      }
-    }
 
     // Features must remain decoupled from Expo Router routes
     // Documented exception: InboxItemRenderer embeds BookmarkDetailScreen for desktop inline detail view
