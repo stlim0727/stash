@@ -1397,6 +1397,7 @@ export default function BookmarkDetailScreen({
           maxLength={MAX_MEMO_LENGTH}
           onChange={changeDescription}
           onCommit={commitDescription}
+          onOpenLink={() => markBookmarkAccessed(bookmark.id)}
         />
       ) : null}
       <MemoEditor
@@ -1408,6 +1409,7 @@ export default function BookmarkDetailScreen({
         format={currentNotesFormat}
         onChange={changeNotes}
         onCommit={commitNotes}
+        onOpenLink={() => markBookmarkAccessed(bookmark.id)}
       />
 
       {/* Collection — no title; the folder-icon picker speaks for itself.

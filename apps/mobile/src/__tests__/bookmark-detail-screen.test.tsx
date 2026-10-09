@@ -125,11 +125,11 @@ const apiMock = jest.requireMock('@/api/bookmarks') as {
   __spies: { requestEnrichment: jest.Mock };
 };
 
-function renderDetail() {
+function renderDetail(props?: Parameters<typeof BookmarkDetailScreen>[0]) {
   return render(
     <BookmarksProvider>
       <CaptureToastProvider>
-        <BookmarkDetailScreen />
+        <BookmarkDetailScreen {...props} />
       </CaptureToastProvider>
     </BookmarksProvider>,
   );
@@ -1769,4 +1769,29 @@ test.each(['image', 'url'] as const)('%s content keeps its intended reading orde
   expect(previewIndex).toBeGreaterThanOrEqual(0);
   expect(notesIndex).toBeGreaterThanOrEqual(0);
   expect(previewIndex < notesIndex).toBe(contentType === 'image');
+});
+
+test('clicking a link in a plain text memo records bookmark access', async () => {
+  const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+  mockRouteId = 'memo-link-access';
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: mockRouteId,
+      title: 'Memo with link',
+      url: null,
+      content_type: 'text',
+      description: 'Check out https://keepory.app for details',
+      description_format: 'plain',
+      last_accessed_at: null,
+    }),
+  ]);
+  const screen = await renderDetail({ markAccessOnMount: false });
+  await waitFor(() => expect(screen.getByText('Memo with link')).toBeTruthy());
+  const link = screen.getByRole('link', { name: 'https://keepory.app' });
+  await fireEvent.press(link);
+  await waitFor(() => {
+    expect(fakeRepo.__bookmarks()[0].last_accessed_at).toBeTruthy();
+  });
+  expect(openURL).toHaveBeenCalledWith('https://keepory.app');
+  openURL.mockRestore();
 });

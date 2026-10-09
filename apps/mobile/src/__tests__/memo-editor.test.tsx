@@ -5,7 +5,21 @@ import * as Clipboard from 'expo-clipboard';
 
 import { MemoEditor, type MemoDraft } from '@/ui/MemoEditor';
 
-function Editor({ initial, commit = jest.fn() }: { initial: MemoDraft; commit?: jest.Mock }) {
+const mockToastShow = jest.fn();
+jest.mock('@/ui/capture-toast', () => ({
+  ...jest.requireActual('@/ui/capture-toast'),
+  useOptionalCaptureToast: () => ({ show: mockToastShow, isVisible: false }),
+}));
+
+function Editor({
+  initial,
+  commit = jest.fn(),
+  onOpenLink,
+}: {
+  initial: MemoDraft;
+  commit?: jest.Mock;
+  onOpenLink?: (url: string) => void;
+}) {
   const [draft, setDraft] = useState(initial);
   return (
     <MemoEditor
@@ -15,6 +29,7 @@ function Editor({ initial, commit = jest.fn() }: { initial: MemoDraft; commit?: 
       placeholder="Add a note"
       onChange={setDraft}
       onCommit={commit}
+      onOpenLink={onOpenLink}
     />
   );
 }
@@ -86,17 +101,24 @@ test('plain text link relies on anchor navigation on web and supports Space acti
   const originalPlatform = Platform.OS;
   Platform.OS = 'web';
   const openUrlSpy = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+  const onOpenLink = jest.fn();
   try {
     const source = 'Visit https://keepory.app here';
-    const screen = await render(<Editor initial={{ value: source, format: 'plain' }} />);
+    const screen = await render(<Editor initial={{ value: source, format: 'plain' }} onOpenLink={onOpenLink} />);
     const link = screen.getByRole('link', { name: 'https://keepory.app' });
     expect(link.props.href).toBe('https://keepory.app');
-    expect(link.props.onPress).toBeUndefined();
+    expect(typeof link.props.onPress).toBe('function');
+
+    // Pressing the link on web notifies onOpenLink for access tracking without duplicating openURL
+    await fireEvent.press(link);
+    expect(onOpenLink).toHaveBeenCalledWith('https://keepory.app');
+    expect(openUrlSpy).not.toHaveBeenCalled();
 
     const preventDefaultSpace = jest.fn();
     link.props.onKeyDown({ key: ' ', preventDefault: preventDefaultSpace });
     expect(preventDefaultSpace).toHaveBeenCalled();
     expect(openUrlSpy).toHaveBeenCalledWith('https://keepory.app');
+    expect(onOpenLink).toHaveBeenCalledTimes(2);
   } finally {
     Platform.OS = originalPlatform;
     openUrlSpy.mockRestore();
@@ -106,6 +128,7 @@ test('plain text link relies on anchor navigation on web and supports Space acti
 test('memo editor provides Copy action in header and copies on link long press on Android', async () => {
   const originalPlatform = Platform.OS;
   Platform.OS = 'android';
+  mockToastShow.mockClear();
   const setStringAsync = jest.spyOn(Clipboard, 'setStringAsync').mockResolvedValue(true);
   try {
     const source = 'Notes with https://keepory.app link';
@@ -116,11 +139,36 @@ test('memo editor provides Copy action in header and copies on link long press o
     expect(copyBtn).toBeTruthy();
     await fireEvent.press(copyBtn);
     expect(setStringAsync).toHaveBeenCalledWith(source);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mockToastShow).toHaveBeenCalledWith('Note copied');
 
+    mockToastShow.mockClear();
     // Link long-press copies just the link URL
     const link = screen.getByRole('link', { name: 'https://keepory.app' });
     await fireEvent(link, 'longPress');
     expect(setStringAsync).toHaveBeenCalledWith('https://keepory.app');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mockToastShow).toHaveBeenCalledWith('Link copied');
+  } finally {
+    Platform.OS = originalPlatform;
+    setStringAsync.mockRestore();
+  }
+});
+
+test('memo editor handles clipboard write failure without showing success toast', async () => {
+  const originalPlatform = Platform.OS;
+  Platform.OS = 'android';
+  mockToastShow.mockClear();
+  const setStringAsync = jest.spyOn(Clipboard, 'setStringAsync').mockRejectedValue(new Error('Clipboard denied'));
+  try {
+    const source = 'Notes with https://keepory.app link';
+    const screen = await render(<Editor initial={{ value: source, format: 'plain' }} />);
+
+    const copyBtn = screen.getByLabelText('Copy Note');
+    await fireEvent.press(copyBtn);
+    expect(setStringAsync).toHaveBeenCalledWith(source);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mockToastShow).not.toHaveBeenCalled();
   } finally {
     Platform.OS = originalPlatform;
     setStringAsync.mockRestore();

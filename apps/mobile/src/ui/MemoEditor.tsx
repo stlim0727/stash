@@ -22,6 +22,7 @@ interface MemoEditorProps extends MemoDraft {
   placeholder: string;
   onChange: (draft: MemoDraft) => void;
   onCommit?: (draft: MemoDraft) => void;
+  onOpenLink?: (url: string) => void;
   alwaysEditing?: boolean;
   autoFocus?: boolean;
   maxLength?: number;
@@ -36,6 +37,7 @@ export function MemoEditor({
   placeholder,
   onChange,
   onCommit,
+  onOpenLink,
   alwaysEditing = false,
   autoFocus = false,
   maxLength = 10_000,
@@ -99,14 +101,20 @@ export function MemoEditor({
   const toast = useOptionalCaptureToast();
   const handleCopy = useCallback(() => {
     if (!value) return;
-    void Clipboard.setStringAsync(value);
-    toast?.show(t('toast.memoCopied'));
+    void Clipboard.setStringAsync(value)
+      .then(() => {
+        toast?.show(t('toast.memoCopied'));
+      })
+      .catch(() => {});
   }, [value, toast, t]);
 
   const handleCopyLink = useCallback(
     (linkUrl: string) => {
-      void Clipboard.setStringAsync(linkUrl);
-      toast?.show(t('toast.linkCopied'));
+      void Clipboard.setStringAsync(linkUrl)
+        .then(() => {
+          toast?.show(t('toast.linkCopied'));
+        })
+        .catch(() => {});
     },
     [toast, t],
   );
@@ -248,7 +256,7 @@ export function MemoEditor({
         </Pressable>
       ) : !showingInput ? (
         <View style={[styles.reading, { backgroundColor: palette.surfaceElevated }]}>
-          {format === 'markdown' ? <MarkdownBody markdown={value} /> : (
+          {format === 'markdown' ? <MarkdownBody markdown={value} onOpenLink={onOpenLink} /> : (
             <View>
               {/* The mask replaces its wrapper's accessibility label. Keep a
                   sibling that announces the literal source, as MarkdownBody does. */}
@@ -270,10 +278,13 @@ export function MemoEditor({
                             style={[styles.link, { color: palette.accent }]}
                             onPress={
                               Platform.OS === 'web'
-                                ? undefined
+                                ? () => {
+                                    onOpenLink?.(segment.url!);
+                                  }
                                 : () => {
+                                    onOpenLink?.(segment.url!);
                                     if (isSafeMarkdownLink(segment.url!)) {
-                                      void Linking.openURL(segment.url!).catch(() => {});
+                                      void Promise.resolve(Linking.openURL(segment.url!)).catch(() => {});
                                     }
                                   }
                             }
@@ -286,7 +297,8 @@ export function MemoEditor({
                                     if (event.key === ' ') {
                                       event.preventDefault();
                                       if (isSafeMarkdownLink(segment.url!)) {
-                                        void Linking.openURL(segment.url!).catch(() => {});
+                                        onOpenLink?.(segment.url!);
+                                        void Promise.resolve(Linking.openURL(segment.url!)).catch(() => {});
                                       }
                                     }
                                   },
