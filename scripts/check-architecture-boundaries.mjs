@@ -70,7 +70,7 @@ function resolveModule(importer, specifier, platform, targetFiles = files) {
   }
 
   // Exact file match
-  if (targetFiles.includes(candidatePath) && candidatePath !== importer) {
+  if (targetFiles.includes(candidatePath)) {
     return candidatePath;
   }
 
@@ -102,7 +102,7 @@ function resolveModule(importer, specifier, platform, targetFiles = files) {
 
   for (const ext of candidateExtensions) {
     const full = candidatePath + ext;
-    if (full !== importer && targetFiles.includes(full)) {
+    if (targetFiles.includes(full)) {
       return full;
     }
   }
@@ -241,6 +241,7 @@ for (const layer of trackedLayers) {
   layerCe[layer] = externalDependencies.size;
 }
 
+const layerInstability = {};
 console.log('--- SOLID Architectural Metrics ---');
 console.log('Layer      | Inbound (Ca) | Outbound (Ce) | Instability (I = Ce/(Ca+Ce))');
 console.log('------------------------------------------------------------------------');
@@ -248,8 +249,9 @@ for (const layer of trackedLayers) {
   const ca = layerCa[layer];
   const ce = layerCe[layer];
   const total = ca + ce;
-  const inst = total === 0 ? '0.00' : (ce / total).toFixed(2);
-  console.log(`${layer.padEnd(10)} | ${String(ca).padStart(12)} | ${String(ce).padStart(13)} | ${inst.padStart(15)}`);
+  const inst = total === 0 ? 0 : ce / total;
+  layerInstability[layer] = inst;
+  console.log(`${layer.padEnd(10)} | ${String(ca).padStart(12)} | ${String(ce).padStart(13)} | ${inst.toFixed(2).padStart(15)}`);
 }
 console.log('------------------------------------------------------------------------');
 
@@ -259,16 +261,45 @@ const MAX_ALLOWED_INSTABILITY = {
   storage: 0.25,
 };
 
+// Baselined architectural exceptions where destination instability exceeds source:
+const ALLOWED_SDP_EDGE_EXCEPTIONS = new Set([
+  'domain -> storage',     // domain type contracts in storage/types
+  'features -> app',       // InboxItemRenderer desktop inline detail embed
+  'storage -> supabase',   // storage/image-store.native.ts authenticated asset download
+  'sync -> api',           // sync coordinator driving API transport
+  'ui -> store',           // top-level toast and splash observers bound to bookmarks store
+]);
+
 const instabilityViolations = [];
 for (const [layer, maxInst] of Object.entries(MAX_ALLOWED_INSTABILITY)) {
-  const ca = layerCa[layer];
-  const ce = layerCe[layer];
-  const total = ca + ce;
-  const inst = total === 0 ? 0 : ce / total;
+  const inst = layerInstability[layer] || 0;
   if (inst > maxInst) {
     instabilityViolations.push(
-      `SDP violation: "${layer}" instability is ${inst.toFixed(2)}, exceeding maximum allowed threshold of ${maxInst.toFixed(2)}`
+      `SDP threshold violation: "${layer}" instability is ${inst.toFixed(2)}, exceeding maximum allowed threshold of ${maxInst.toFixed(2)}`
     );
+  }
+}
+
+// Compare instability across all inter-layer dependency edges: dependencies must flow toward stability (dest <= source)
+for (const [file, deps] of unifiedGraph.entries()) {
+  const sourceRel = normalizePath(relative(ROOT, file));
+  const sourceLayer = sourceRel.split('/')[0];
+  if (!trackedLayers.includes(sourceLayer)) continue;
+
+  for (const dep of deps) {
+    const destRel = normalizePath(relative(ROOT, dep));
+    const destLayer = destRel.split('/')[0];
+    if (!trackedLayers.includes(destLayer) || sourceLayer === destLayer) continue;
+
+    const sourceI = layerInstability[sourceLayer];
+    const destI = layerInstability[destLayer];
+    const edgeKey = `${sourceLayer} -> ${destLayer}`;
+
+    if (destI > sourceI && !ALLOWED_SDP_EDGE_EXCEPTIONS.has(edgeKey)) {
+      instabilityViolations.push(
+        `SDP direction violation: "${sourceRel}" (${sourceLayer}, I=${sourceI.toFixed(2)}) depends on less stable "${destRel}" (${destLayer}, I=${destI.toFixed(2)})`
+      );
+    }
   }
 }
 
@@ -301,7 +332,7 @@ if (instabilityViolations.length > 0) {
   }
   hasError = true;
 } else {
-  console.log('✓ Stable Dependencies Principle (SDP) check passed: Core foundational layers (domain, storage) meet stability requirements.');
+  console.log('✓ Stable Dependencies Principle (SDP) check passed: Dependencies flow in the direction of stability.');
 }
 
 if (process.env.GITHUB_STEP_SUMMARY) {
