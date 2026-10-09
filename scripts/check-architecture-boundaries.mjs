@@ -3,13 +3,18 @@
 //
 // 1. Dependency Inversion Principle (DIP): High-level domain logic must never
 //    depend on low-level delivery details, frameworks, UI, or route drivers.
-// 2. Single Responsibility & Clean Modularity: Zero circular dependencies.
+// 2. Single Responsibility & Clean Modularity: Zero circular dependencies
+//    across both native and web platform module resolutions.
 // 3. Stable Dependencies Principle (SDP): Depend in the direction of stability.
 
 import { appendFileSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 
 const ROOT = resolve('apps/mobile/src');
+
+function normalizePath(p) {
+  return p.replace(/\\/g, '/');
+}
 
 function walk(dir) {
   let files = [];
@@ -25,83 +30,124 @@ function walk(dir) {
 }
 
 const files = walk(ROOT);
-const graph = new Map();
 
-for (const file of files) {
-  const content = readFileSync(file, 'utf8');
-  // Match import/export declarations and dynamic import/require statements.
-  const regex =
-    /(?:(?:import|export)\s+(?:type\s+)?(?:[\s\S]*?)\s+from|(?:import|require)\s*\()\s*['"]([.a-zA-Z0-9_\-/@]+)['"]/g;
+function extractImports(content) {
+  const specifiers = new Set();
+  const fromRegex = /(?:import|export)\s+(?:type\s+)?(?:[^'"]*?)\s+from\s*['"]([.a-zA-Z0-9_\-/@]+)['"]/g;
+  const bareRegex = /import\s+['"]([.a-zA-Z0-9_\-/@]+)['"]/g;
+  const callRegex = /(?:import|require)\s*\(\s*['"]([.a-zA-Z0-9_\-/@]+)['"]\s*\)/g;
+
   let match;
-  const deps = [];
-  while ((match = regex.exec(content)) !== null) {
-    const specifier = match[1];
-    let candidatePath = null;
-    if (specifier.startsWith('@/')) {
-      candidatePath = join(ROOT, specifier.slice(2));
-    } else if (specifier.startsWith('.')) {
-      candidatePath = resolve(dirname(file), specifier);
+  while ((match = fromRegex.exec(content)) !== null) specifiers.add(match[1]);
+  while ((match = bareRegex.exec(content)) !== null) specifiers.add(match[1]);
+  while ((match = callRegex.exec(content)) !== null) specifiers.add(match[1]);
+  return [...specifiers];
+}
+
+function resolveModule(importer, specifier, platform) {
+  let candidatePath = null;
+  if (specifier.startsWith('@/')) {
+    candidatePath = join(ROOT, specifier.slice(2));
+  } else if (specifier.startsWith('.')) {
+    candidatePath = resolve(dirname(importer), specifier);
+  } else {
+    return null;
+  }
+
+  // Exact file match
+  if (files.includes(candidatePath) && candidatePath !== importer) {
+    return candidatePath;
+  }
+
+  const candidateExtensions = [
+    `.${platform}.ts`,
+    `.${platform}.tsx`,
+    '.ts',
+    '.tsx',
+    `/index.${platform}.ts`,
+    `/index.${platform}.tsx`,
+    '/index.ts',
+    '/index.tsx',
+  ];
+
+  for (const ext of candidateExtensions) {
+    const full = candidatePath + ext;
+    if (full !== importer && files.includes(full)) {
+      return full;
     }
-    if (candidatePath) {
-      const extensions = [
-        '',
-        '.ts',
-        '.tsx',
-        '.native.ts',
-        '.native.tsx',
-        join(candidatePath, 'index.ts'),
-        join(candidatePath, 'index.tsx'),
-      ];
-      for (const ext of extensions) {
-        const fullPath = ext.startsWith(candidatePath) ? ext : candidatePath + ext;
-        if (files.includes(fullPath)) {
-          deps.push(fullPath);
-          break;
-        }
+  }
+  return null;
+}
+
+// 1. Cycle detection (DIP & SRP guard) across both native and web targets
+const allCycles = [];
+for (const platform of ['native', 'web']) {
+  const platformGraph = new Map();
+  for (const file of files) {
+    const content = readFileSync(file, 'utf8');
+    const specifiers = extractImports(content);
+    const deps = [];
+    for (const spec of specifiers) {
+      const resolved = resolveModule(file, spec, platform);
+      if (resolved && !deps.includes(resolved)) deps.push(resolved);
+    }
+    platformGraph.set(file, deps);
+  }
+
+  const visited = new Map(); // node -> "visiting" | "visited"
+  function detectCycles(node, path) {
+    visited.set(node, 'visiting');
+    path.push(node);
+    for (const next of platformGraph.get(node) || []) {
+      if (visited.get(next) === 'visiting') {
+        const cycleStart = path.indexOf(next);
+        allCycles.push({
+          platform,
+          cycle: path.slice(cycleStart).map((f) => normalizePath(relative(ROOT, f))),
+        });
+      } else if (!visited.has(next)) {
+        detectCycles(next, path);
       }
     }
+    path.pop();
+    visited.set(node, 'visited');
   }
-  graph.set(file, deps);
-}
 
-// 1. Cycle detection (DIP & SRP guard)
-const visited = new Map(); // node -> "visiting" | "visited"
-const cycles = [];
-
-function detectCycles(node, path) {
-  visited.set(node, 'visiting');
-  path.push(node);
-  const nextNodes = graph.get(node) || [];
-  for (const next of nextNodes) {
-    if (visited.get(next) === 'visiting') {
-      const cycleStart = path.indexOf(next);
-      cycles.push(path.slice(cycleStart).map((f) => relative(ROOT, f)));
-    } else if (!visited.has(next)) {
-      detectCycles(next, path);
-    }
-  }
-  path.pop();
-  visited.set(node, 'visited');
-}
-
-for (const file of files) {
-  if (!visited.has(file)) {
-    detectCycles(file, []);
+  for (const file of files) {
+    if (!visited.has(file)) detectCycles(file, []);
   }
 }
 
 // 2. Layer boundary rules (DIP & Clean Architecture)
+const unifiedGraph = new Map();
+for (const file of files) {
+  const content = readFileSync(file, 'utf8');
+  const specifiers = extractImports(content);
+  const deps = new Set();
+  for (const platform of ['native', 'web']) {
+    for (const spec of specifiers) {
+      const resolved = resolveModule(file, spec, platform);
+      if (resolved) deps.add(resolved);
+    }
+  }
+  unifiedGraph.set(file, [...deps]);
+}
+
 const violations = [];
-for (const [file, deps] of graph.entries()) {
-  const rel = relative(ROOT, file);
+for (const [file, deps] of unifiedGraph.entries()) {
+  const rel = normalizePath(relative(ROOT, file));
   const layer = rel.split('/')[0];
   for (const dep of deps) {
-    const depRel = relative(ROOT, dep);
+    const depRel = normalizePath(relative(ROOT, dep));
     const depLayer = depRel.split('/')[0];
 
-    // Domain must remain pure: no UI, routes, features, sync, api, or supabase
-    if (layer === 'domain' && ['features', 'app', 'sync', 'api', 'ui'].includes(depLayer)) {
-      violations.push(`DIP violation: domain module "${rel}" imports from "${depLayer}" ("${depRel}")`);
+    // Domain must remain pure: no UI, routes, features, sync, api, supabase, or runtime storage
+    if (layer === 'domain') {
+      if (['features', 'app', 'sync', 'api', 'ui', 'supabase'].includes(depLayer)) {
+        violations.push(`DIP violation: domain module "${rel}" imports from "${depLayer}" ("${depRel}")`);
+      } else if (depLayer === 'storage' && !depRel.startsWith('storage/types')) {
+        violations.push(`DIP violation: domain module "${rel}" imports runtime storage module ("${depRel}")`);
+      }
     }
 
     // Features must remain decoupled from Expo Router routes
@@ -127,7 +173,7 @@ for (const [file, deps] of graph.entries()) {
 const trackedLayers = ['domain', 'storage', 'sync', 'api', 'supabase', 'store', 'features', 'ui', 'app'];
 const layerFiles = Object.fromEntries(trackedLayers.map((l) => [l, []]));
 for (const file of files) {
-  const layer = relative(ROOT, file).split('/')[0];
+  const layer = normalizePath(relative(ROOT, file)).split('/')[0];
   if (layerFiles[layer]) layerFiles[layer].push(file);
 }
 
@@ -140,14 +186,14 @@ for (const layer of trackedLayers) {
   const externalDependents = new Set();
 
   for (const f of filesInLayer) {
-    for (const dep of graph.get(f) || []) {
+    for (const dep of unifiedGraph.get(f) || []) {
       if (!filesInLayer.has(dep)) {
         externalDependencies.add(dep);
       }
     }
   }
 
-  for (const [otherFile, deps] of graph.entries()) {
+  for (const [otherFile, deps] of unifiedGraph.entries()) {
     if (!filesInLayer.has(otherFile)) {
       if (deps.some((d) => filesInLayer.has(d))) {
         externalDependents.add(otherFile);
@@ -173,14 +219,14 @@ console.log('-------------------------------------------------------------------
 
 let hasError = false;
 
-if (cycles.length > 0) {
-  console.error(`\nFAILED: Found ${cycles.length} circular dependency cycle(s):`);
-  for (const cycle of cycles) {
-    console.error(`  ${cycle.join(' -> ')} -> ${cycle[0]}`);
+if (allCycles.length > 0) {
+  console.error(`\nFAILED: Found ${allCycles.length} circular dependency cycle(s):`);
+  for (const { platform, cycle } of allCycles) {
+    console.error(`  [${platform}] ${cycle.join(' -> ')} -> ${cycle[0]}`);
   }
   hasError = true;
 } else {
-  console.log('✓ Dependency cycles check passed: 0 circular dependencies detected.');
+  console.log('✓ Dependency cycles check passed: 0 circular dependencies detected across native and web.');
 }
 
 if (violations.length > 0) {
@@ -207,9 +253,9 @@ if (process.env.GITHUB_STEP_SUMMARY) {
       return `| \`${layer}\` | ${ca} | ${ce} | ${inst} |`;
     }),
     '',
-    cycles.length > 0
-      ? `- ❌ **Dependency Cycles:** ${cycles.length} circular dependencies detected.`
-      : '- ✅ **Dependency Cycles:** 0 circular dependencies detected.',
+    allCycles.length > 0
+      ? `- ❌ **Dependency Cycles:** ${allCycles.length} circular dependencies detected.`
+      : '- ✅ **Dependency Cycles:** 0 circular dependencies detected across native and web.',
     violations.length > 0
       ? `- ❌ **Layer Boundaries:** ${violations.length} architectural boundary violations found.`
       : '- ✅ **Layer Boundaries:** All layer dependency constraints satisfied.',

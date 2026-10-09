@@ -7,7 +7,7 @@ import {
   type SecureKvBackend,
 } from '@/supabase/secure-session-core';
 import type { SupabaseAuthSession } from '@/supabase/types';
-import { ensureNativeSqliteDirectory } from '@/storage/sqlite-directory.native';
+import { ensureNativeSqliteDirectory } from '@/storage/sqlite-directory-native';
 import { registerForBackgroundClose } from '@/storage/sqlite-app-lifecycle';
 import { SqliteConnection } from '@/storage/sqlite-connection';
 

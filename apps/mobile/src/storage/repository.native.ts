@@ -4,7 +4,7 @@ import type { AIEnrichment, Bookmark, LocalPendingBookmark, SyncChange } from '@
 import { parseSyncChanges } from '@/domain/sync-changes';
 import { noteSqliteOpenFailure } from '@/storage/diagnostics';
 import { IMPORT_BATCH_SIZE, runImportBatchTransactions } from '@/storage/import-batch';
-import { ensureNativeSqliteDirectory } from '@/storage/sqlite-directory.native';
+import { ensureNativeSqliteDirectory } from '@/storage/sqlite-directory-native';
 import { registerForBackgroundClose } from '@/storage/sqlite-app-lifecycle';
 import { SqliteConnection } from '@/storage/sqlite-connection';
 import type {
