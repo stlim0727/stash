@@ -19,11 +19,11 @@
     "dev:web": "pnpm --filter mobile web",
     "format": "node scripts/format.mjs --write",
     "format:check": "node scripts/format.mjs --check",
-    "lint": "pnpm format:check && pnpm lint:env && pnpm lint:overlay && pnpm lint:workflows",
+    "lint": "pnpm format:check && pnpm lint:env && pnpm lint:overlay && pnpm lint:workflows && pnpm lint:dependency-architecture",
     "lint:workflows": "node scripts/check-workflow-actions.mjs",
     "lint:env": "node scripts/check-static-env.mjs",
     "lint:overlay": "node scripts/check-overlay-elevation.mjs",
-    "test": "pnpm --filter mobile test && node --test scripts/user-bookmark-summary.test.mjs && pnpm test:functions",
+    "test": "pnpm --filter mobile test && node --test scripts/user-bookmark-summary.test.mjs && pnpm test:functions && pnpm test:dependency-architecture",
     "test:functions": "node --no-warnings --experimental-transform-types --test \"supabase/functions/**/*.test.ts\"",
     "typecheck": "pnpm --filter mobile typecheck",
     "verify:supabase": "node --no-warnings --experimental-transform-types scripts/verify-supabase.mjs",
@@ -34,11 +34,15 @@
     "dedupe:supabase": "node --no-warnings --experimental-transform-types scripts/dedupe-bookmarks.mjs",
     "summary:users": "node scripts/user-bookmark-summary.mjs",
     "test:components": "pnpm --filter mobile test:components",
-    "test:apptesting": "firebase apptesting:execute --app \"$FIREBASE_APP_ID\" --test-dir apps/mobile/apptesting --test-devices \"${FIREBASE_TEST_DEVICES:-model=shiba,version=34,locale=en,orientation=portrait}\""
+    "test:apptesting": "firebase apptesting:execute --app \"$FIREBASE_APP_ID\" --test-dir apps/mobile/apptesting --test-devices \"${FIREBASE_TEST_DEVICES:-model=shiba,version=34,locale=en,orientation=portrait}\"",
+    "lint:dependency-architecture": "node scripts/check-dependency-architecture.mjs --report",
+    "test:dependency-architecture": "node scripts/check-dependency-architecture.test.mjs"
   },
   "devDependencies": {
     "@supabase/realtime-js": "^2.110.2",
+    "dependency-cruiser": "18.5.0",
     "pixelmatch": "^7.2.0",
-    "pngjs": "^7.0.0"
+    "pngjs": "^7.0.0",
+    "typescript": "6.0.3"
   }
 }
