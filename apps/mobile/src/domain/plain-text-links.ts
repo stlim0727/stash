@@ -46,6 +46,20 @@ const KOREAN_ASCII_ATTACHED_PARTICLES =
   /(?<=[a-zA-Z0-9])(?:은|는|이|가|을|를|에|로|와|과|의|도|만)$/;
 
 /**
+ * Known Korean Internationalized ccTLDs and gTLDs.
+ */
+const KOREAN_IDN_TLDS = '한국|닷컴|닷넷|삼성';
+
+/**
+ * Checks whether a trailing '!' should be preserved as part of the URL
+ * (e.g. Wikipedia articles like ".../wiki/Yahoo!", or queries like "...?q=Yahoo!"),
+ * rather than being treated as prose punctuation.
+ */
+function shouldPreserveTrailingExclamation(url: string): boolean {
+  return /(?:\/wiki\/[^\s/?#]+|[^\s/?#]+\?[^\s#]+|#[^\s]+)(?<![!.,;:?])!\s*$/i.test(url);
+}
+
+/**
  * Trims trailing punctuation from a matched URL while preserving balanced
  * parentheses, brackets, and braces (e.g. Wikipedia links or URLs wrapped in parens),
  * including smart quotes, ellipses, and CJK punctuation. Repeats pair cleanup after outer
@@ -53,17 +67,36 @@ const KOREAN_ASCII_ATTACHED_PARTICLES =
  * Counts bracket pairs in linear time to avoid quadratic rescans on runs of closers.
  * Also trims identified Korean prose suffixes (e.g. "...입니다", "...에서", ".../xyz로")
  * while strictly preserving legitimate Korean or mixed-language URL components (e.g.
- * ".../search?q=iPhone케이스", ".../wiki/사과").
+ * ".../search?q=iPhone케이스", ".../search?q=Windows에서", ".../wiki/사과", ".../wiki/Yahoo!").
  */
 export function cleanTrailingUrlPunctuation(rawUrl: string): { url: string; trailing: string } {
   let url = rawUrl;
   let trailing = '';
 
   const stripPunct = () => {
+    if (url.endsWith('!') && shouldPreserveTrailingExclamation(url)) {
+      return false;
+    }
     const punctMatch = url.match(TRAILING_PUNCTUATION);
     if (punctMatch) {
-      trailing = punctMatch[0] + trailing;
-      url = url.slice(0, url.length - punctMatch[0].length);
+      const matchedText = punctMatch[0];
+      if (
+        matchedText.includes('!') &&
+        shouldPreserveTrailingExclamation(
+          url.slice(0, url.length - matchedText.length + matchedText.indexOf('!') + 1),
+        )
+      ) {
+        const exclIndex = matchedText.indexOf('!');
+        const outerPunct = matchedText.slice(exclIndex + 1);
+        if (outerPunct.length > 0) {
+          trailing = outerPunct + trailing;
+          url = url.slice(0, url.length - outerPunct.length);
+          return true;
+        }
+        return false;
+      }
+      trailing = matchedText + trailing;
+      url = url.slice(0, url.length - matchedText.length);
       return true;
     }
     return false;
@@ -110,17 +143,24 @@ export function cleanTrailingUrlPunctuation(rawUrl: string): { url: string; trai
   }
 
   // Strip identified Korean prose suffixes (copulas, verb endings, and particles)
-  // while strictly preserving legitimate Korean or mixed-language URL components
-  // (e.g. ".../search?q=iPhone케이스", ".../wiki/사과", ".../item/Galaxy울트라").
-  const multiMatch = url.match(KOREAN_MULTI_SYLLABLE_PROSE);
-  if (multiMatch) {
-    trailing = multiMatch[0] + trailing;
-    url = url.slice(0, -multiMatch[0].length);
-  } else {
-    const singleMatch = url.match(KOREAN_ASCII_ATTACHED_PARTICLES);
-    if (singleMatch) {
-      trailing = singleMatch[0] + trailing;
-      url = url.slice(0, -singleMatch[0].length);
+  // ONLY when following authority, trailing slash, or a shortlink slug.
+  // Avoid treating suffixes as prose when they are inside a path, query, or fragment component
+  // (e.g. ".../search?q=Windows에서", ".../wiki/이다", ".../item/MacBook프로").
+  const hasQueryOrFragment = url.includes('?') || url.includes('#');
+  const pathPart = url.replace(/^https?:\/\/[^/]+/i, '');
+  const isMultiSegmentPath = pathPart.split('/').filter(Boolean).length > 1;
+
+  if (!hasQueryOrFragment && !isMultiSegmentPath) {
+    const multiMatch = url.match(KOREAN_MULTI_SYLLABLE_PROSE);
+    if (multiMatch) {
+      trailing = multiMatch[0] + trailing;
+      url = url.slice(0, -multiMatch[0].length);
+    } else {
+      const singleMatch = url.match(KOREAN_ASCII_ATTACHED_PARTICLES);
+      if (singleMatch) {
+        trailing = singleMatch[0] + trailing;
+        url = url.slice(0, -singleMatch[0].length);
+      }
     }
   }
 
@@ -162,11 +202,15 @@ export function parsePlainTextLinks(content: string): PlainTextSegment[] {
       }
     }
 
-    // 2. Stop candidate URL before Korean prose following an ASCII domain/port before any path:
+    // 2. Stop candidate URL before Korean prose following an ASCII domain, IDN ccTLD, or port before any path:
     // e.g. "https://keepory.app입니다/path" -> URL stops at "https://keepory.app",
+    // "https://예시.한국입니다" -> URL stops at "https://예시.한국",
     // preserving source offsets without deleting from the middle of the candidate.
     const authKoreanMatch = candidate.match(
-      /^(https?:\/\/(?:[^\s/@:]+@)?[^\s/:?#]+\.[a-zA-Z]{2,}(?::\d+)?)([가-힣].*)$/,
+      new RegExp(
+        `^(https?:\\/\\/(?:[^\\s/@:]+@)?[^\\s/:?#]+\\.(?:[a-zA-Z]{2,}|${KOREAN_IDN_TLDS})(?::\\d+)?(?:\\/)?)([가-힣].*)$`,
+        'i',
+      ),
     );
     if (authKoreanMatch) {
       candidate = authKoreanMatch[1];

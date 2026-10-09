@@ -174,3 +174,39 @@ test('memo editor handles clipboard write failure without showing success toast'
     setStringAsync.mockRestore();
   }
 });
+
+test('on iOS, inline links do not intercept long press, leaving native text selection intact', async () => {
+  const originalPlatform = Platform.OS;
+  Platform.OS = 'ios';
+  try {
+    const source = 'Notes with https://keepory.app link';
+    const screen = await render(<Editor initial={{ value: source, format: 'plain' }} />);
+    const link = screen.getByRole('link', { name: 'https://keepory.app' });
+    expect(link.props.onLongPress).toBeUndefined();
+  } finally {
+    Platform.OS = originalPlatform;
+  }
+});
+
+test('on Android, memo body text has text role and custom copy action instead of misleading link role', async () => {
+  const originalPlatform = Platform.OS;
+  Platform.OS = 'android';
+  mockToastShow.mockClear();
+  const setStringAsync = jest.spyOn(Clipboard, 'setStringAsync').mockResolvedValue(true);
+  try {
+    const source = 'Notes with https://keepory.app link';
+    const screen = await render(<Editor initial={{ value: source, format: 'plain' }} />);
+    const bodyText = screen.getByTestId('memo-reading-body');
+    expect(bodyText.props.accessibilityRole).toBe('text');
+    expect(bodyText.props.accessibilityActions).toEqual([{ name: 'copy', label: 'Copy' }]);
+
+    // Triggering custom accessibility action copies the memo
+    await fireEvent(bodyText, 'accessibilityAction', { nativeEvent: { actionName: 'copy' } });
+    expect(setStringAsync).toHaveBeenCalledWith(source);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mockToastShow).toHaveBeenCalledWith('Note copied');
+  } finally {
+    Platform.OS = originalPlatform;
+    setStringAsync.mockRestore();
+  }
+});

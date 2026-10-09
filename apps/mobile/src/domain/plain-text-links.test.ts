@@ -252,15 +252,44 @@ test('parsePlainTextLinks stops URL match before attached Korean prose on domain
   ]);
   assert.equal(mixedIphoneSegs.map((s) => s.text).join(''), mixedIphoneCase);
 
-  // ASCII query followed by attached prose copula
-  const mixedIphoneProseCase = '검색: https://example.com/search?q=iPhone입니다';
-  const mixedIphoneProseSegs = parsePlainTextLinks(mixedIphoneProseCase);
-  assert.deepEqual(mixedIphoneProseSegs, [
+  // Mixed-language query parameters like search?q=Windows에서 must preserve the full query value
+  const mixedWindowsCase = '검색: https://example.com/search?q=Windows에서';
+  const mixedWindowsSegs = parsePlainTextLinks(mixedWindowsCase);
+  assert.deepEqual(mixedWindowsSegs, [
     { type: 'text', text: '검색: ' },
-    { type: 'link', text: 'https://example.com/search?q=iPhone', url: 'https://example.com/search?q=iPhone' },
-    { type: 'text', text: '입니다' },
+    { type: 'link', text: 'https://example.com/search?q=Windows에서', url: 'https://example.com/search?q=Windows에서' },
   ]);
-  assert.equal(mixedIphoneProseSegs.map((s) => s.text).join(''), mixedIphoneProseCase);
+  assert.equal(mixedWindowsSegs.map((s) => s.text).join(''), mixedWindowsCase);
+
+  // Korean IDN domains like https://예시.한국입니다 split cleanly at the IDN TLD boundary
+  const idnKoreaCase = '도메인: https://예시.한국입니다 확인하세요';
+  const idnKoreaSegs = parsePlainTextLinks(idnKoreaCase);
+  assert.deepEqual(idnKoreaSegs, [
+    { type: 'text', text: '도메인: ' },
+    { type: 'link', text: 'https://예시.한국', url: 'https://예시.한국' },
+    { type: 'text', text: '입니다 확인하세요' },
+  ]);
+  assert.equal(idnKoreaSegs.map((s) => s.text).join(''), idnKoreaCase);
+
+  // Legitimate URL-significant punctuation in paths (e.g. Wikipedia article titles) is preserved
+  const wikiYahooCase = '참고: https://en.wikipedia.org/wiki/Yahoo! 문서를 확인하세요.';
+  const wikiYahooSegs = parsePlainTextLinks(wikiYahooCase);
+  assert.deepEqual(wikiYahooSegs, [
+    { type: 'text', text: '참고: ' },
+    { type: 'link', text: 'https://en.wikipedia.org/wiki/Yahoo!', url: 'https://en.wikipedia.org/wiki/Yahoo!' },
+    { type: 'text', text: ' 문서를 확인하세요.' },
+  ]);
+  assert.equal(wikiYahooSegs.map((s) => s.text).join(''), wikiYahooCase);
+
+  // Trailing period after Wikipedia Yahoo! URL is stripped while preserving the exclamation mark
+  const wikiYahooDotCase = '위키: https://en.wikipedia.org/wiki/Yahoo!.';
+  const wikiYahooDotSegs = parsePlainTextLinks(wikiYahooDotCase);
+  assert.deepEqual(wikiYahooDotSegs, [
+    { type: 'text', text: '위키: ' },
+    { type: 'link', text: 'https://en.wikipedia.org/wiki/Yahoo!', url: 'https://en.wikipedia.org/wiki/Yahoo!' },
+    { type: 'text', text: '.' },
+  ]);
+  assert.equal(wikiYahooDotSegs.map((s) => s.text).join(''), wikiYahooDotCase);
 
   // Mixed-language URL ending in a syllable that happens to be a particle character (로 in 프로)
   // preceded by Hangul (프) must not strip the syllable

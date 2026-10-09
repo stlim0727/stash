@@ -263,9 +263,24 @@ export function MemoEditor({
               <View accessible accessibilityLabel={value} style={styles.srOnly} />
               <PostHogMaskView>
                 <Text
+                  testID="memo-reading-body"
+                  accessibilityRole="text"
                   selectable={Platform.OS === 'android' ? !hasPlainLinks : true}
                   style={[styles.body, { color: palette.text }]}
-                  onLongPress={Platform.OS === 'android' && hasPlainLinks ? handleCopy : undefined}
+                  accessibilityActions={
+                    Platform.OS === 'android' && hasPlainLinks
+                      ? [{ name: 'copy', label: t('common.copy') }]
+                      : undefined
+                  }
+                  onAccessibilityAction={
+                    Platform.OS === 'android' && hasPlainLinks
+                      ? (event) => {
+                          if (event.nativeEvent.actionName === 'copy') {
+                            handleCopy();
+                          }
+                        }
+                      : undefined
+                  }
                 >
                   {hasPlainLinks
                     ? plainSegments.map((segment, index) =>
@@ -288,7 +303,9 @@ export function MemoEditor({
                                     }
                                   }
                             }
-                            onLongPress={() => handleCopyLink(segment.url!)}
+                            onLongPress={
+                              Platform.OS === 'android' ? () => handleCopyLink(segment.url!) : undefined
+                            }
                             {...(Platform.OS === 'web'
                               ? ({
                                   href: segment.url,
