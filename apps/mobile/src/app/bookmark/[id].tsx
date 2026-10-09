@@ -1629,7 +1629,7 @@ export default function BookmarkDetailScreen({
                     accessibilityLabel={`${row.label}: ${row.value}`}
                     accessibilityHint={t('detail.openWebsite')}
                     onPress={handleOpenLink}
-                    onLongPress={handleCopyLink}
+                    onLongPress={Platform.OS === 'android' ? handleCopyLink : undefined}
                     style={rowStyle}
                   >
                     <Text style={[styles.detailLabel, { color: palette.textSecondary }]}>{row.label}</Text>

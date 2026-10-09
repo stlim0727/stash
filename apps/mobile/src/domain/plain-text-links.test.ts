@@ -14,6 +14,50 @@ test('cleanTrailingUrlPunctuation strips basic punctuation', () => {
   });
 });
 
+test('cleanTrailingUrlPunctuation preserves punctuation inside query and fragment values', () => {
+  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com/search?q=Who?'), {
+    url: 'https://example.com/search?q=Who?',
+    trailing: '',
+  });
+  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com/search?q=Who?.'), {
+    url: 'https://example.com/search?q=Who?',
+    trailing: '.',
+  });
+  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com/items?filter=a,b;'), {
+    url: 'https://example.com/items?filter=a,b;',
+    trailing: '',
+  });
+  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com/items?filter=a,b;.'), {
+    url: 'https://example.com/items?filter=a,b;',
+    trailing: '.',
+  });
+  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com/tags?t=a,b,'), {
+    url: 'https://example.com/tags?t=a,b,',
+    trailing: '',
+  });
+  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com/doc#faq?'), {
+    url: 'https://example.com/doc#faq?',
+    trailing: '',
+  });
+  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com/doc#section;'), {
+    url: 'https://example.com/doc#section;',
+    trailing: '',
+  });
+  // Without query or fragment, punctuation is stripped as prose
+  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com/path?'), {
+    url: 'https://example.com/path',
+    trailing: '?',
+  });
+  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com/path,'), {
+    url: 'https://example.com/path',
+    trailing: ',',
+  });
+  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com/path;'), {
+    url: 'https://example.com/path',
+    trailing: ';',
+  });
+});
+
 test('cleanTrailingUrlPunctuation strips Unicode quotes and CJK punctuation', () => {
   assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com”'), {
     url: 'https://example.com',
@@ -319,6 +363,44 @@ test('parsePlainTextLinks stops URL match before attached Korean prose on domain
     { type: 'text', text: '입니다/path' },
   ]);
   assert.equal(middleSegs.map((s) => s.text).join(''), middleKoreanCase);
+
+  // Korean initial path segments (e.g. https://example.com/한국) must not be truncated
+  const koreanInitialPathCase = '참고: https://example.com/한국 링크를 확인하세요';
+  const koreanInitialPathSegs = parsePlainTextLinks(koreanInitialPathCase);
+  assert.deepEqual(koreanInitialPathSegs, [
+    { type: 'text', text: '참고: ' },
+    { type: 'link', text: 'https://example.com/한국', url: 'https://example.com/한국' },
+    { type: 'text', text: ' 링크를 확인하세요' },
+  ]);
+  assert.equal(koreanInitialPathSegs.map((s) => s.text).join(''), koreanInitialPathCase);
+
+  // Legitimate query punctuation (question marks, semicolons) in query/fragment values must be preserved
+  const queryQuestionCase = '질문: https://example.com/search?q=Who? 확인';
+  const queryQuestionSegs = parsePlainTextLinks(queryQuestionCase);
+  assert.deepEqual(queryQuestionSegs, [
+    { type: 'text', text: '질문: ' },
+    { type: 'link', text: 'https://example.com/search?q=Who?', url: 'https://example.com/search?q=Who?' },
+    { type: 'text', text: ' 확인' },
+  ]);
+  assert.equal(queryQuestionSegs.map((s) => s.text).join(''), queryQuestionCase);
+
+  const queryQuestionDotCase = '질문: https://example.com/search?q=Who?.';
+  const queryQuestionDotSegs = parsePlainTextLinks(queryQuestionDotCase);
+  assert.deepEqual(queryQuestionDotSegs, [
+    { type: 'text', text: '질문: ' },
+    { type: 'link', text: 'https://example.com/search?q=Who?', url: 'https://example.com/search?q=Who?' },
+    { type: 'text', text: '.' },
+  ]);
+  assert.equal(queryQuestionDotSegs.map((s) => s.text).join(''), queryQuestionDotCase);
+
+  const querySemicolonCase = '필터: https://example.com/items?filter=a,b; 그리고 다음';
+  const querySemicolonSegs = parsePlainTextLinks(querySemicolonCase);
+  assert.deepEqual(querySemicolonSegs, [
+    { type: 'text', text: '필터: ' },
+    { type: 'link', text: 'https://example.com/items?filter=a,b;', url: 'https://example.com/items?filter=a,b;' },
+    { type: 'text', text: ' 그리고 다음' },
+  ]);
+  assert.equal(querySemicolonSegs.map((s) => s.text).join(''), querySemicolonCase);
 });
 
 test('parsePlainTextLinks handles large delimiter runs without quadratic stalling', () => {

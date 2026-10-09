@@ -51,13 +51,25 @@ const KOREAN_ASCII_ATTACHED_PARTICLES =
 const KOREAN_IDN_TLDS = '한국|닷컴|닷넷|삼성';
 
 /**
- * Checks whether a trailing '!' should be preserved as part of the URL
- * (e.g. Wikipedia articles like ".../wiki/Yahoo!", or queries like "...?q=Yahoo!"),
- * rather than being treated as prose punctuation.
+ * Punctuation characters in query or fragment values (and '!' in Wikipedia paths)
+ * that represent valid URL data rather than trailing prose punctuation.
  */
-function shouldPreserveTrailingExclamation(url: string): boolean {
-  return /(?:\/wiki\/[^\s/?#]+|[^\s/?#]+\?[^\s#]+|#[^\s]+)(?<![!.,;:?])!\s*$/i.test(url);
+const PRESERVE_TRAILING_PUNCT_REGEX =
+  /(?:\/wiki\/[^\s/?#]+(?<![!.,;:?])!|(?:[^\s/?#]+\?[^\s#]+|#[^\s]+)(?<![!.,;:?])[!?,;])\s*$/i;
+
+function shouldPreserveTrailingPunctuation(url: string): boolean {
+  if (!url) return false;
+  const lastChar = url[url.length - 1];
+  if (lastChar !== '!' && lastChar !== '?' && lastChar !== ',' && lastChar !== ';') {
+    return false;
+  }
+  return PRESERVE_TRAILING_PUNCT_REGEX.test(url);
 }
+
+const AUTH_KOREAN_PROSE_REGEX = new RegExp(
+  `^(https?:\\/\\/(?:[^\\s/@:]+@)?[^\\s/:?#]+\\.(?:[a-zA-Z]{2,}|${KOREAN_IDN_TLDS})(?::\\d+)?)([가-힣].*)$`,
+  'i',
+);
 
 /**
  * Trims trailing punctuation from a matched URL while preserving balanced
@@ -74,32 +86,35 @@ export function cleanTrailingUrlPunctuation(rawUrl: string): { url: string; trai
   let trailing = '';
 
   const stripPunct = () => {
-    if (url.endsWith('!') && shouldPreserveTrailingExclamation(url)) {
+    if (shouldPreserveTrailingPunctuation(url)) {
       return false;
     }
     const punctMatch = url.match(TRAILING_PUNCTUATION);
-    if (punctMatch) {
-      const matchedText = punctMatch[0];
-      if (
-        matchedText.includes('!') &&
-        shouldPreserveTrailingExclamation(
-          url.slice(0, url.length - matchedText.length + matchedText.indexOf('!') + 1),
-        )
-      ) {
-        const exclIndex = matchedText.indexOf('!');
-        const outerPunct = matchedText.slice(exclIndex + 1);
-        if (outerPunct.length > 0) {
-          trailing = outerPunct + trailing;
-          url = url.slice(0, url.length - outerPunct.length);
-          return true;
-        }
-        return false;
-      }
-      trailing = matchedText + trailing;
-      url = url.slice(0, url.length - matchedText.length);
-      return true;
+    if (!punctMatch) {
+      return false;
     }
-    return false;
+
+    const matchedText = punctMatch[0];
+    const urlBaseLen = url.length - matchedText.length;
+    for (let i = matchedText.length - 1; i >= 0; i--) {
+      const char = matchedText[i];
+      if (char === '!' || char === '?' || char === ',' || char === ';') {
+        const candidateUrl = url.slice(0, urlBaseLen + i + 1);
+        if (shouldPreserveTrailingPunctuation(candidateUrl)) {
+          const outerPunct = matchedText.slice(i + 1);
+          if (outerPunct.length > 0) {
+            trailing = outerPunct + trailing;
+            url = url.slice(0, url.length - outerPunct.length);
+            return true;
+          }
+          return false;
+        }
+      }
+    }
+
+    trailing = matchedText + trailing;
+    url = url.slice(0, url.length - matchedText.length);
+    return true;
   };
 
   // Pre-count bracket occurrences across rawUrl once in linear time.
@@ -206,14 +221,11 @@ export function parsePlainTextLinks(content: string): PlainTextSegment[] {
     // e.g. "https://keepory.app입니다/path" -> URL stops at "https://keepory.app",
     // "https://예시.한국입니다" -> URL stops at "https://예시.한국",
     // preserving source offsets without deleting from the middle of the candidate.
-    const authKoreanMatch = candidate.match(
-      new RegExp(
-        `^(https?:\\/\\/(?:[^\\s/@:]+@)?[^\\s/:?#]+\\.(?:[a-zA-Z]{2,}|${KOREAN_IDN_TLDS})(?::\\d+)?(?:\\/)?)([가-힣].*)$`,
-        'i',
-      ),
-    );
-    if (authKoreanMatch) {
-      candidate = authKoreanMatch[1];
+    if (/[가-힣]/.test(candidate)) {
+      const authKoreanMatch = candidate.match(AUTH_KOREAN_PROSE_REGEX);
+      if (authKoreanMatch) {
+        candidate = authKoreanMatch[1];
+      }
     }
 
     // 3. Clean trailing punctuation, bracket pairs, and Korean prose suffixes in linear time.

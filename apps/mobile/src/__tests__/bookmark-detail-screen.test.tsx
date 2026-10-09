@@ -1,5 +1,5 @@
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
-import { Linking } from 'react-native';
+import { Linking, Platform } from 'react-native';
 import { useState, type ReactNode } from 'react';
 
 jest.mock('react-native-safe-area-context', () => ({
@@ -1696,34 +1696,69 @@ test('details drawer URL row opens link on press', async () => {
   openURL.mockRestore();
 });
 
-test('details drawer URL row copies link on long press', async () => {
-  mockRouteId = SYNCED_ID;
-  mockSetStringAsync.mockReset();
-  mockSetStringAsync.mockResolvedValueOnce(undefined);
-  fakeRepo.__reset([
-    makeStoredBookmark({
-      id: SYNCED_ID,
-      title: 'Site in drawer copy',
-      url: 'https://example.com/drawer-copy',
-      metadata_status: 'complete',
-    }),
-  ]);
+test('details drawer URL row copies link on long press on Android and leaves long press unintercepted on iOS', async () => {
+  const originalPlatform = Platform.OS;
+  Platform.OS = 'android';
+  try {
+    mockRouteId = SYNCED_ID;
+    mockSetStringAsync.mockReset();
+    mockSetStringAsync.mockResolvedValueOnce(undefined);
+    fakeRepo.__reset([
+      makeStoredBookmark({
+        id: SYNCED_ID,
+        title: 'Site in drawer copy',
+        url: 'https://example.com/drawer-copy',
+        metadata_status: 'complete',
+      }),
+    ]);
 
-  const screen = await renderDetail();
-  await waitFor(() => expect(screen.getByText('Site in drawer copy')).toBeTruthy());
+    const screen = await renderDetail();
+    await waitFor(() => expect(screen.getByText('Site in drawer copy')).toBeTruthy());
 
-  // Expand details drawer
-  fireEvent.press(screen.getByLabelText('Toggle details'));
-  await waitFor(() => {
-    expect(screen.getByText('https://example.com/drawer-copy')).toBeTruthy();
-  });
+    // Expand details drawer
+    fireEvent.press(screen.getByLabelText('Toggle details'));
+    await waitFor(() => {
+      expect(screen.getByText('https://example.com/drawer-copy')).toBeTruthy();
+    });
 
-  const urlRow = screen.getByLabelText('URL: https://example.com/drawer-copy');
-  expect(urlRow).toBeTruthy();
+    const urlRow = screen.getByLabelText('URL: https://example.com/drawer-copy');
+    expect(urlRow).toBeTruthy();
 
-  await fireEvent(urlRow, 'longPress');
-  expect(mockSetStringAsync).toHaveBeenCalledWith('https://example.com/drawer-copy');
-  expect(await waitFor(() => screen.getByText('Link copied'))).toBeTruthy();
+    await fireEvent(urlRow, 'longPress');
+    expect(mockSetStringAsync).toHaveBeenCalledWith('https://example.com/drawer-copy');
+    expect(await waitFor(() => screen.getByText('Link copied'))).toBeTruthy();
+  } finally {
+    Platform.OS = originalPlatform;
+  }
+});
+
+test('details drawer URL row does not intercept long press on iOS to preserve native selection', async () => {
+  const originalPlatform = Platform.OS;
+  Platform.OS = 'ios';
+  try {
+    mockRouteId = SYNCED_ID;
+    fakeRepo.__reset([
+      makeStoredBookmark({
+        id: SYNCED_ID,
+        title: 'Site in drawer copy',
+        url: 'https://example.com/drawer-copy',
+        metadata_status: 'complete',
+      }),
+    ]);
+
+    const screen = await renderDetail();
+    await waitFor(() => expect(screen.getByText('Site in drawer copy')).toBeTruthy());
+
+    fireEvent.press(screen.getByLabelText('Toggle details'));
+    await waitFor(() => {
+      expect(screen.getByText('https://example.com/drawer-copy')).toBeTruthy();
+    });
+
+    const urlRow = screen.getByLabelText('URL: https://example.com/drawer-copy');
+    expect(urlRow.props.onLongPress).toBeUndefined();
+  } finally {
+    Platform.OS = originalPlatform;
+  }
 });
 
 test('Detail prioritizes website opening and provides direct 1-tap share, copy, and trash actions', async () => {
