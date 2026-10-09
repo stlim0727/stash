@@ -164,6 +164,16 @@ for (const file of files) {
   unifiedGraph.set(file, [...deps]);
 }
 
+// Explicit allowlist of non-domain module contracts that domain modules are permitted to import:
+// - storage/types.ts: Pure durable storage row and entity types.
+// - observability/log-buffer.ts: Dependency-free in-memory diagnostic log ring buffer.
+// - i18n/messages.ts: Pure message key catalog type for domain-derived UI status.
+const ALLOWED_DOMAIN_EXTERNAL_MODULES = new Set([
+  'storage/types.ts',
+  'observability/log-buffer.ts',
+  'i18n/messages.ts',
+]);
+
 const violations = [];
 for (const [file, deps] of unifiedGraph.entries()) {
   const rel = normalizePath(relative(ROOT, file));
@@ -172,12 +182,12 @@ for (const [file, deps] of unifiedGraph.entries()) {
     const depRel = normalizePath(relative(ROOT, dep));
     const depLayer = depRel.split('/')[0];
 
-    // Domain must remain pure: no UI, routes, features, sync, api, supabase, store, share, or runtime storage
+    // Domain must remain pure: enforce an explicit local-import allowlist.
+    // Domain modules may only import internal domain logic and explicit allowed contracts.
     if (layer === 'domain') {
-      if (['store', 'features', 'app', 'sync', 'api', 'ui', 'supabase', 'share'].includes(depLayer)) {
-        violations.push(`DIP violation: domain module "${rel}" imports from "${depLayer}" ("${depRel}")`);
-      } else if (depLayer === 'storage' && depRel !== 'storage/types.ts') {
-        violations.push(`DIP violation: domain module "${rel}" imports runtime storage module ("${depRel}")`);
+      const isAllowed = depLayer === 'domain' || ALLOWED_DOMAIN_EXTERNAL_MODULES.has(depRel);
+      if (!isAllowed) {
+        violations.push(`DIP violation: domain module "${rel}" imports non-domain module "${depRel}"`);
       }
     }
 

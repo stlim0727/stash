@@ -105,19 +105,25 @@ for (const feature of featureDirs) {
 }
 
 const hooksDir = join(ROOT, 'store/bookmarks');
-const commandHooks = readdirSync(hooksDir).filter((name) => name.startsWith('use-') && /\.(ts|tsx)$/.test(name));
+const commandHookFiles = walk(hooksDir).filter((file) => {
+  const norm = normalizePath(file);
+  const base = norm.split('/').pop();
+  return base.startsWith('use-') && /\.(ts|tsx)$/.test(base) && !/\.test\.(ts|tsx)$/.test(base);
+});
 const unmappedHooks = [];
-for (const hook of commandHooks) {
-  if (!routingTable.includes(hook)) {
-    unmappedHooks.push(hook);
+for (const file of commandHookFiles) {
+  const relToHooks = normalizePath(relative(hooksDir, file));
+  const hookBase = relToHooks.split('/').pop();
+  if (!routingTable.includes(relToHooks) && !routingTable.includes(hookBase)) {
+    unmappedHooks.push(relToHooks);
     failures.push(
-      `Unmapped command hook: "${hook}" is missing from the task routing table in ${TASK_MAP_PATH}. ` +
+      `Unmapped command hook: "${relToHooks}" is missing from the task routing table in ${TASK_MAP_PATH}. ` +
         `Register this hook in the task routing table so agents locate command logic quickly.`,
     );
   }
 }
 
-const totalRoutingTargets = featureDirs.length + commandHooks.length;
+const totalRoutingTargets = featureDirs.length + commandHookFiles.length;
 const unmappedTargets = unmappedFeatures.length + unmappedHooks.length;
 const routingCoveragePercent = (
   totalRoutingTargets > 0 ? ((totalRoutingTargets - unmappedTargets) / totalRoutingTargets) * 100 : 100
@@ -210,7 +216,7 @@ const avgDomainFanout = domainFiles.length > 0 ? (totalDomainFanout / domainFile
 
 console.log('--- Agent Assessment Efficiency Metrics ---');
 console.log(
-  `Task Map Routing Coverage:     ${routingCoveragePercent}% (${featureDirs.length} features, ${commandHooks.length} hooks verified) [${routingStatus}]`,
+  `Task Map Routing Coverage:     ${routingCoveragePercent}% (${featureDirs.length} features, ${commandHookFiles.length} hooks verified) [${routingStatus}]`,
 );
 console.log(
   `Single-Turn Context Window:    ${readabilityPercent}% of files <= ${SINGLE_TURN_LINE_LIMIT} lines (${underLimitCount}/${files.length}) [${contextStatus}]`,
@@ -229,7 +235,7 @@ if (process.env.GITHUB_STEP_SUMMARY) {
     '',
     '| Metric | Measured Value | Threshold / Target | Status |',
     '| :--- | :---: | :---: | :---: |',
-    `| **Task Map Routing Coverage** | ${routingCoveragePercent}% (${featureDirs.length} features, ${commandHooks.length} hooks) | 100% | ${routingStatus} |`,
+    `| **Task Map Routing Coverage** | ${routingCoveragePercent}% (${featureDirs.length} features, ${commandHookFiles.length} hooks) | 100% | ${routingStatus} |`,
     `| **Single-Turn Context Window** | ${readabilityPercent}% (${underLimitCount}/${files.length} files) | $\\le ${SINGLE_TURN_LINE_LIMIT}$ lines | ${contextStatus} |`,
     `| **Tracked Hotspot Budget Caps** | ${Object.keys(HOTSPOT_BUDGETS).length} legacy files locked | Baseline capped | ${hotspotStatus} |`,
     `| **Domain Locality of Behavior** | avg ${avgDomainFanout} (max ${maxDomainFanout}) | $\\le ${MAX_DOMAIN_FANOUT}$ local imports | ${domainLocalityStatus} |`,
