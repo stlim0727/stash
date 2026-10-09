@@ -42,6 +42,7 @@ import {
 } from "react";
 
 interface Dependencies {
+  setAccountTransfer: Dispatch<SetStateAction<{ userId: string; count: number } | null>>;
   tagSyncInFlight: RefObject<boolean>;
   tagWorkPending: RefObject<number>;
   syncInFlight: RefObject<boolean>;
@@ -84,6 +85,7 @@ interface Dependencies {
 }
 
 export function useResetLibrary({
+  setAccountTransfer,
   tagSyncInFlight,
   tagWorkPending,
   syncInFlight,
@@ -214,6 +216,7 @@ export function useResetLibrary({
         logStorageError("library reset local clear", error);
         return { ok: false, reason: "local" };
       }
+      setAccountTransfer(null);
       // In-memory mirrors last, after the durable writes, so a kill in between
       // re-reads the already-cleared repository on the next launch. The apply*
       // helpers also persist their (now empty) meta blobs.
@@ -257,6 +260,7 @@ export function useResetLibrary({
       setIsResettingLibrary(false);
     }
   }, [
+    setAccountTransfer,
     auth,
     applyPendingImportCollections,
     applyPendingEnrichmentRestores,

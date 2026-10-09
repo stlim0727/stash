@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 
 import type { LocalPendingBookmark } from '@/domain/types';
+import { CACHE_OWNER_KEY } from '@/sync/account-transition';
 import { LAST_PULLED_AT_KEY, SYNCED_USER_ID_KEY } from '@/sync/pull-bookmarks';
 
 jest.mock('@/storage/repository', () =>
@@ -222,6 +223,29 @@ test('resetLibrary wipes remote via the RPC then clears local rows, queue, tag d
   expect(tagData.bookmarkTags).toHaveLength(0);
   // Watermark reset so the next pull is a clean full refresh.
   expect(fakeRepo.__meta(LAST_PULLED_AT_KEY)).toBe('');
+});
+
+test('a successful reset dismisses the guest capture transfer notice', async () => {
+  fakeRepo.__setMeta(CACHE_OWNER_KEY, JSON.stringify({ id: 'guest-user', isAnonymous: true }));
+  const { result } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.accountTransferCount).toBe(1));
+  await waitFor(() => expect(result.current.isSyncing).toBe(false));
+  await act(async () => { expect(await result.current.resetLibrary()).toEqual({ ok: true }); });
+  expect(result.current.accountTransferCount).toBe(0);
+});
+
+test('a failed local reset retains the guest transfer notice for recovery', async () => {
+  fakeRepo.__setMeta(CACHE_OWNER_KEY, JSON.stringify({ id: 'guest-user', isAnonymous: true }));
+  const { result } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.accountTransferCount).toBe(1));
+  await waitFor(() => expect(result.current.isSyncing).toBe(false));
+  const clear = jest.spyOn(fakeRepo.repository, 'clearAllData').mockRejectedValueOnce(new Error('disk unavailable'));
+  try {
+    await act(async () => { expect(await result.current.resetLibrary()).toEqual({ ok: false, reason: 'local' }); });
+    expect(result.current.accountTransferCount).toBe(1);
+  } finally {
+    clear.mockRestore();
+  }
 });
 
 test('after a reset, the previously-queued work cannot re-upload to the just-emptied account', async () => {

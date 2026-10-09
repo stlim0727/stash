@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 
 import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
+import { CACHE_OWNER_KEY } from '@/sync/account-transition';
 import { LAST_PULLED_AT_KEY, SYNCED_USER_ID_KEY } from '@/sync/pull-bookmarks';
 
 jest.mock('@/storage/repository', () =>
@@ -128,6 +129,7 @@ beforeEach(() => {
   // A real account with one synced cloud bookmark already in the local cache,
   // plus the synced-user meta + watermark a prior pull would have written.
   fakeRepo.__reset([makeStoredBookmark({ id: REMOTE_ID })]);
+  fakeRepo.__setMeta(CACHE_OWNER_KEY, JSON.stringify({ id: 'real-user', isAnonymous: false }));
   fakeRepo.__setMeta(SYNCED_USER_ID_KEY, 'real-user');
   fakeRepo.__setMeta(LAST_PULLED_AT_KEY, '2026-06-12T10:00:00.000Z');
   apiMock.__setRemote([{ id: REMOTE_ID }]);
@@ -159,6 +161,7 @@ test('logout clears the previous account’s synced local rows and resets sync m
 
   // Synced-user meta + pull watermark were reset so the next session re-syncs
   // cleanly (empty strings read back as falsy at the call sites).
+  expect(fakeRepo.__meta(CACHE_OWNER_KEY)).toBe('');
   expect(fakeRepo.__meta(SYNCED_USER_ID_KEY)).toBe('');
   expect(fakeRepo.__meta(LAST_PULLED_AT_KEY)).toBe('');
 });
@@ -166,6 +169,7 @@ test('logout clears the previous account’s synced local rows and resets sync m
 test('a save after logout lazily mints an anonymous session via the sync path', async () => {
   // No cloud rows to clear — isolate the lazy-mint behavior.
   fakeRepo.__reset([]);
+  fakeRepo.__setMeta(CACHE_OWNER_KEY, JSON.stringify({ id: 'real-user', isAnonymous: false }));
   fakeRepo.__setMeta(SYNCED_USER_ID_KEY, 'real-user');
   apiMock.__setRemote([]);
   const { result, rerender } = await renderHook(() => useBookmarks(), { wrapper });
@@ -204,6 +208,31 @@ test('a save after logout lazily mints an anonymous session via the sync path', 
   );
   // …and the sync path lazily minted an anonymous session.
   await waitFor(() => expect(authMock.__ensureCalls()).toBeGreaterThan(callsBeforeSave));
+});
+
+test('a cloud-confirmed guest capture after logout transfers to a different real account', async () => {
+  const { result, rerender } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+  await waitFor(() => expect(result.current.isSyncing).toBe(false));
+  authMock.__setAuth({ status: 'signed_out', session: null, userId: null });
+  await act(async () => { rerender(undefined); });
+  await waitFor(() => expect(fakeRepo.__meta(LAST_PULLED_AT_KEY)).toBe(''));
+
+  const guestUrl = 'https://example.com/guest';
+  authMock.__setAuth({ status: 'anonymous', session: lazyAnonSession, userId: 'lazy-anon-user' });
+  await act(async () => { rerender(undefined); });
+  await act(async () => { result.current.addBookmark({ url: guestUrl }); });
+  await waitFor(() => expect(fakeRepo.__bookmarks().some((row) => row.url === guestUrl && row.sync_status === 'synced')).toBe(true));
+  await waitFor(() => expect(result.current.isSyncing).toBe(false));
+
+  apiMock.__setCreateBookmarkHangs(true);
+  apiMock.__setRemote([]);
+  const nextSession = { ...realSession, user: { ...realSession.user, id: 'different-real-user' } };
+  authMock.__setAuth({ status: 'authenticated', session: nextSession, userId: nextSession.user.id });
+  await act(async () => { rerender(undefined); });
+  await waitFor(() => expect(result.current.accountTransferCount).toBe(1));
+  expect(fakeRepo.__bookmarks().some((row) => row.url === guestUrl)).toBe(true);
+  expect(fakeRepo.__queue().some((entry) => entry.operation === 'create' && entry.payload.url === guestUrl)).toBe(true);
 });
 
 const REMOTE_EDITED_ID = '2b3c4d5e-0000-4000-8000-00000000ef01';
@@ -256,6 +285,7 @@ test('logout drops a pending EDIT to a synced row AND its update queue entry, pr
       url_hash: 'https://example.com/local-capture',
     }),
   ]);
+  fakeRepo.__setMeta(CACHE_OWNER_KEY, JSON.stringify({ id: 'real-user', isAnonymous: false }));
   fakeRepo.__setMeta(SYNCED_USER_ID_KEY, 'real-user');
   fakeRepo.__setMeta(LAST_PULLED_AT_KEY, '2026-06-12T10:00:00.000Z');
   // The update op (hangs in the api mock so it stays pending) + the local create.
@@ -315,6 +345,7 @@ test('logout rehomes an unconfirmed-but-uploaded image row AND re-keys its pendi
       ever_synced: undefined,
     }),
   ]);
+  fakeRepo.__setMeta(CACHE_OWNER_KEY, JSON.stringify({ id: 'real-user', isAnonymous: false }));
   fakeRepo.__setMeta(SYNCED_USER_ID_KEY, 'real-user');
   fakeRepo.__setMeta(LAST_PULLED_AT_KEY, '2026-06-12T10:00:00.000Z');
   fakeRepo.__setMeta(
@@ -373,6 +404,7 @@ test('the two signed_out effects (cache-clear + lazy-mint) do not fight: cache c
   // the lazy-mint effect both observe `signed_out`. The cache must clear and —
   // since there is no queued user work — NO anonymous user should be minted.
   fakeRepo.__reset([makeStoredBookmark({ id: REMOTE_ID })]);
+  fakeRepo.__setMeta(CACHE_OWNER_KEY, JSON.stringify({ id: 'real-user', isAnonymous: false }));
   fakeRepo.__setMeta(SYNCED_USER_ID_KEY, 'real-user');
   apiMock.__setRemote([{ id: REMOTE_ID }]);
 
@@ -389,6 +421,7 @@ test('the two signed_out effects (cache-clear + lazy-mint) do not fight: cache c
 
   // Cache cleared…
   await waitFor(() => expect(result.current.inbox).toHaveLength(0));
+  expect(fakeRepo.__meta(CACHE_OWNER_KEY)).toBe('');
   expect(fakeRepo.__meta(SYNCED_USER_ID_KEY)).toBe('');
   // …and no mint happened (the queue is empty, so lazy-mint stays dormant). The
   // two effects don't fight: drop runs, mint doesn't.
@@ -397,6 +430,7 @@ test('the two signed_out effects (cache-clear + lazy-mint) do not fight: cache c
 
 test('lazy-mint retries after a failure without hot-looping: one rejection then a later save succeeds', async () => {
   fakeRepo.__reset([]);
+  fakeRepo.__setMeta(CACHE_OWNER_KEY, JSON.stringify({ id: 'real-user', isAnonymous: false }));
   fakeRepo.__setMeta(SYNCED_USER_ID_KEY, 'real-user');
   apiMock.__setRemote([]);
 

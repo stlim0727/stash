@@ -54,6 +54,7 @@ import type { SupabaseAuthSession } from "@/supabase/types";
 import {
   applyAccountTransition,
   readCacheOwner,
+  repairStalledCollectionRlsEntries,
 } from "@/sync/account-transition";
 import { canAutomaticallyRetry, isPullReady } from "@/sync/automatic-retry";
 import {
@@ -309,8 +310,24 @@ export function useSyncCoordinator({
         const priorCredentials = syncCredentialsRef.current;
         const recoverAuth = !!restoredSession && (recoveryRequested ||
           (!!priorCredentials && (priorCredentials.userId !== session.user.id || priorCredentials.accessToken !== session.access_token)));
-        const durableBookmarks = await repository.listBookmarks();
-        const durableQueue = await repository.listQueue();
+        let durableBookmarks = await repository.listBookmarks();
+        let durableQueue = await repository.listQueue();
+        const { repairedEntries, repairedBookmarks } = repairStalledCollectionRlsEntries(
+          durableBookmarks,
+          durableQueue,
+        );
+        if (repairedEntries.length > 0 || repairedBookmarks.length > 0) {
+          const repairedEntryMap = new Map(repairedEntries.map((e) => [e.local_id, e]));
+          const repairedBookmarkMap = new Map(repairedBookmarks.map((b) => [b.id, b]));
+          durableQueue = durableQueue.map((e) => repairedEntryMap.get(e.local_id) ?? e);
+          durableBookmarks = durableBookmarks.map((b) => repairedBookmarkMap.get(b.id) ?? b);
+          for (const b of repairedBookmarks) {
+            await repository.updateBookmark(b);
+          }
+          for (const e of repairedEntries) {
+            await repository.updateQueueEntry(e);
+          }
+        }
         if (restoredSession) {
           syncCredentialsRef.current = { userId: session.user.id, accessToken: session.access_token };
           credentialsWereUsedRef.current = true;

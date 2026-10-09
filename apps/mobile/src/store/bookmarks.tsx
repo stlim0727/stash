@@ -112,6 +112,7 @@ import {
   applyAccountTransition,
   planAccountTransition,
   planLogoutCacheClear,
+  CACHE_OWNER_KEY,
   readCacheOwner,
   writeCacheOwner,
 } from "@/sync/account-transition";
@@ -1477,6 +1478,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     syncPendingRef,
     syncPendingForceRef,
     authRecoveryPendingRef,
+    setAccountTransfer,
   });
   const { syncTagOps } = useTagSync({
     auth,
@@ -2693,6 +2695,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // Reset the synced-user meta + watermark so the next session does a full
         // refresh (planAccountTransition + pullRemoteChanges read these). Empty
         // strings read back as falsy/null in both call sites.
+        await repository.setMeta(CACHE_OWNER_KEY, "");
         await repository.setMeta(SYNCED_USER_ID_KEY, "");
         await repository.setMeta(SYNCED_USER_ANON_KEY, "");
         await repository.setMeta(LAST_PULLED_AT_KEY, "");
