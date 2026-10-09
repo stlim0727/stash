@@ -1,10 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Linking, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { PostHogMaskView } from 'posthog-react-native';
 
+import { isSafeMarkdownLink } from '@/domain/markdown';
+import { parsePlainTextLinks } from '@/domain/plain-text-links';
 import type { TextFormat } from '@/domain/types';
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
+import { useOptionalCaptureToast } from '@/ui/capture-toast';
 import { MarkdownBody } from '@/ui/MarkdownBody';
 
 export interface MemoDraft {
@@ -18,6 +22,7 @@ interface MemoEditorProps extends MemoDraft {
   placeholder: string;
   onChange: (draft: MemoDraft) => void;
   onCommit?: (draft: MemoDraft) => void;
+  onOpenLink?: (url: string) => void;
   alwaysEditing?: boolean;
   autoFocus?: boolean;
   maxLength?: number;
@@ -32,6 +37,7 @@ export function MemoEditor({
   placeholder,
   onChange,
   onCommit,
+  onOpenLink,
   alwaysEditing = false,
   autoFocus = false,
   maxLength = 10_000,
@@ -83,6 +89,36 @@ export function MemoEditor({
     restoreInputFocus();
   }
 
+  const plainSegments = useMemo(
+    () => (format === 'plain' ? parsePlainTextLinks(value) : []),
+    [format, value],
+  );
+  const hasPlainLinks = useMemo(
+    () => plainSegments.some((segment) => segment.type === 'link'),
+    [plainSegments],
+  );
+
+  const toast = useOptionalCaptureToast();
+  const handleCopy = useCallback(() => {
+    if (!value) return;
+    void Clipboard.setStringAsync(value)
+      .then(() => {
+        toast?.show(t('toast.memoCopied'));
+      })
+      .catch(() => {});
+  }, [value, toast, t]);
+
+  const handleCopyLink = useCallback(
+    (linkUrl: string) => {
+      void Clipboard.setStringAsync(linkUrl)
+        .then(() => {
+          toast?.show(t('toast.linkCopied'));
+        })
+        .catch(() => {});
+    },
+    [toast, t],
+  );
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -100,6 +136,18 @@ export function MemoEditor({
               {t(format === 'plain' ? 'memo.plain' : 'memo.markdown')} ▾
             </Text>
           </Pressable>
+          {!alwaysEditing && !editing && value !== '' && Platform.OS === 'android' && hasPlainLinks ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t('memo.copyA11y', { field: label })}
+              onPress={handleCopy}
+              style={styles.button}
+            >
+              <Text style={[styles.actionText, { color: palette.textSecondary }]}>
+                {t('common.copy')}
+              </Text>
+            </Pressable>
+          ) : null}
           {!alwaysEditing && (editing || value !== '') ? (
             <Pressable
               accessibilityRole="button"
@@ -208,13 +256,80 @@ export function MemoEditor({
         </Pressable>
       ) : !showingInput ? (
         <View style={[styles.reading, { backgroundColor: palette.surfaceElevated }]}>
-          {format === 'markdown' ? <MarkdownBody markdown={value} /> : (
+          {format === 'markdown' ? <MarkdownBody markdown={value} onOpenLink={onOpenLink} /> : (
             <View>
               {/* The mask replaces its wrapper's accessibility label. Keep a
                   sibling that announces the literal source, as MarkdownBody does. */}
               <View accessible accessibilityLabel={value} style={styles.srOnly} />
               <PostHogMaskView>
-                <Text selectable style={[styles.body, { color: palette.text }]}>{value}</Text>
+                <Text
+                  testID="memo-reading-body"
+                  accessibilityRole="text"
+                  selectable={Platform.OS === 'android' ? !hasPlainLinks : true}
+                  style={[styles.body, { color: palette.text }]}
+                  accessibilityActions={
+                    Platform.OS === 'android' && hasPlainLinks
+                      ? [{ name: 'copy', label: t('common.copy') }]
+                      : undefined
+                  }
+                  onAccessibilityAction={
+                    Platform.OS === 'android' && hasPlainLinks
+                      ? (event) => {
+                          if (event.nativeEvent.actionName === 'copy') {
+                            handleCopy();
+                          }
+                        }
+                      : undefined
+                  }
+                >
+                  {hasPlainLinks
+                    ? plainSegments.map((segment, index) =>
+                        segment.type === 'link' && segment.url ? (
+                          <Text
+                            key={`link-${index}`}
+                            accessibilityRole="link"
+                            accessibilityLabel={segment.text}
+                            accessibilityHint={t('detail.openWebsite')}
+                            style={[styles.link, { color: palette.accent }]}
+                            onPress={
+                              Platform.OS === 'web'
+                                ? () => {
+                                    onOpenLink?.(segment.url!);
+                                  }
+                                : () => {
+                                    onOpenLink?.(segment.url!);
+                                    if (isSafeMarkdownLink(segment.url!)) {
+                                      void Promise.resolve(Linking.openURL(segment.url!)).catch(() => {});
+                                    }
+                                  }
+                            }
+                            onLongPress={
+                              Platform.OS === 'android' ? () => handleCopyLink(segment.url!) : undefined
+                            }
+                            {...(Platform.OS === 'web'
+                              ? ({
+                                  href: segment.url,
+                                  hrefAttrs: { target: '_blank', rel: 'noreferrer noopener' },
+                                  onKeyDown: (event: { key: string; preventDefault: () => void }) => {
+                                    if (event.key === ' ') {
+                                      event.preventDefault();
+                                      if (isSafeMarkdownLink(segment.url!)) {
+                                        onOpenLink?.(segment.url!);
+                                        void Promise.resolve(Linking.openURL(segment.url!)).catch(() => {});
+                                      }
+                                    }
+                                  },
+                                } as Record<string, unknown>)
+                              : {})}
+                          >
+                            {segment.text}
+                          </Text>
+                        ) : (
+                          segment.text
+                        ),
+                      )
+                    : value}
+                </Text>
               </PostHogMaskView>
             </View>
           )}
@@ -240,6 +355,7 @@ const styles = StyleSheet.create({
   input: { minHeight: 120, maxHeight: 420, borderWidth: StyleSheet.hairlineWidth, borderRadius: 14, padding: 14, fontSize: 15, lineHeight: 22, textAlignVertical: 'top' },
   reading: { borderRadius: 14, padding: 14 },
   body: { fontSize: 16, lineHeight: 24 },
+  link: { textDecorationLine: 'underline' },
   empty: { minHeight: 44, justifyContent: 'center' },
   srOnly: { position: 'absolute', width: 1, height: 1, overflow: 'hidden', opacity: 0 },
 });

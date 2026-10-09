@@ -849,6 +849,7 @@ export const en = {
   'memo.markdownHint': 'Apply headings, lists, and other Markdown formatting.',
   'memo.formatA11y': 'Format for {field}',
   'memo.editA11y': 'Edit {field}',
+  'memo.copyA11y': 'Copy {field}',
   'memo.doneA11y': 'Finish editing {field}',
   'memo.edit': 'Edit',
   'memo.done': 'Done',

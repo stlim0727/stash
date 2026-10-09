@@ -169,6 +169,10 @@ export function useCaptureToast(): CaptureToastContextValue {
   return context;
 }
 
+export function useOptionalCaptureToast(): CaptureToastContextValue | null {
+  return useContext(CaptureToastContext);
+}
+
 const styles = StyleSheet.create({
   toast: {
     // Above the floating report button/nub: that button sits bottom-left at

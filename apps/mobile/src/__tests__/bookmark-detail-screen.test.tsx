@@ -1,5 +1,5 @@
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
-import { Linking } from 'react-native';
+import { Linking, Platform } from 'react-native';
 import { useState, type ReactNode } from 'react';
 
 jest.mock('react-native-safe-area-context', () => ({
@@ -125,11 +125,11 @@ const apiMock = jest.requireMock('@/api/bookmarks') as {
   __spies: { requestEnrichment: jest.Mock };
 };
 
-function renderDetail() {
+function renderDetail(props?: Parameters<typeof BookmarkDetailScreen>[0]) {
   return render(
     <BookmarksProvider>
       <CaptureToastProvider>
-        <BookmarkDetailScreen />
+        <BookmarkDetailScreen {...props} />
       </CaptureToastProvider>
     </BookmarksProvider>,
   );
@@ -1665,6 +1665,102 @@ test('details drawer exposes preview refresh for URL bookmarks', async () => {
   });
 });
 
+test('details drawer URL row opens link on press', async () => {
+  mockRouteId = SYNCED_ID;
+  const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      title: 'Site in drawer',
+      url: 'https://example.com/drawer',
+      metadata_status: 'complete',
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('Site in drawer')).toBeTruthy());
+
+  // Expand details drawer
+  fireEvent.press(screen.getByLabelText('Toggle details'));
+  await waitFor(() => {
+    expect(screen.getByText('https://example.com/drawer')).toBeTruthy();
+  });
+
+  const urlRow = screen.getByLabelText('URL: https://example.com/drawer');
+  expect(urlRow).toBeTruthy();
+
+  // Press opens link
+  fireEvent.press(urlRow);
+  expect(openURL).toHaveBeenCalledWith('https://example.com/drawer');
+
+  openURL.mockRestore();
+});
+
+test('details drawer URL row copies link on long press on Android and leaves long press unintercepted on iOS', async () => {
+  const originalPlatform = Platform.OS;
+  Platform.OS = 'android';
+  try {
+    mockRouteId = SYNCED_ID;
+    mockSetStringAsync.mockReset();
+    mockSetStringAsync.mockResolvedValueOnce(undefined);
+    fakeRepo.__reset([
+      makeStoredBookmark({
+        id: SYNCED_ID,
+        title: 'Site in drawer copy',
+        url: 'https://example.com/drawer-copy',
+        metadata_status: 'complete',
+      }),
+    ]);
+
+    const screen = await renderDetail();
+    await waitFor(() => expect(screen.getByText('Site in drawer copy')).toBeTruthy());
+
+    // Expand details drawer
+    fireEvent.press(screen.getByLabelText('Toggle details'));
+    await waitFor(() => {
+      expect(screen.getByText('https://example.com/drawer-copy')).toBeTruthy();
+    });
+
+    const urlRow = screen.getByLabelText('URL: https://example.com/drawer-copy');
+    expect(urlRow).toBeTruthy();
+
+    await fireEvent(urlRow, 'longPress');
+    expect(mockSetStringAsync).toHaveBeenCalledWith('https://example.com/drawer-copy');
+    expect(await waitFor(() => screen.getByText('Link copied'))).toBeTruthy();
+  } finally {
+    Platform.OS = originalPlatform;
+  }
+});
+
+test('details drawer URL row does not intercept long press on iOS to preserve native selection', async () => {
+  const originalPlatform = Platform.OS;
+  Platform.OS = 'ios';
+  try {
+    mockRouteId = SYNCED_ID;
+    fakeRepo.__reset([
+      makeStoredBookmark({
+        id: SYNCED_ID,
+        title: 'Site in drawer copy',
+        url: 'https://example.com/drawer-copy',
+        metadata_status: 'complete',
+      }),
+    ]);
+
+    const screen = await renderDetail();
+    await waitFor(() => expect(screen.getByText('Site in drawer copy')).toBeTruthy());
+
+    fireEvent.press(screen.getByLabelText('Toggle details'));
+    await waitFor(() => {
+      expect(screen.getByText('https://example.com/drawer-copy')).toBeTruthy();
+    });
+
+    const urlRow = screen.getByLabelText('URL: https://example.com/drawer-copy');
+    expect(urlRow.props.onLongPress).toBeUndefined();
+  } finally {
+    Platform.OS = originalPlatform;
+  }
+});
+
 test('Detail prioritizes website opening and provides direct 1-tap share, copy, and trash actions', async () => {
   mockRouteId = 'hierarchy-url';
   fakeRepo.__reset([makeStoredBookmark({ id: mockRouteId, title: 'Read this first', url: 'https://example.com/read' })]);
@@ -1708,4 +1804,29 @@ test.each(['image', 'url'] as const)('%s content keeps its intended reading orde
   expect(previewIndex).toBeGreaterThanOrEqual(0);
   expect(notesIndex).toBeGreaterThanOrEqual(0);
   expect(previewIndex < notesIndex).toBe(contentType === 'image');
+});
+
+test('clicking a link in a plain text memo records bookmark access', async () => {
+  const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+  mockRouteId = 'memo-link-access';
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: mockRouteId,
+      title: 'Memo with link',
+      url: null,
+      content_type: 'text',
+      description: 'Check out https://keepory.app for details',
+      description_format: 'plain',
+      last_accessed_at: null,
+    }),
+  ]);
+  const screen = await renderDetail({ markAccessOnMount: false });
+  await waitFor(() => expect(screen.getByText('Memo with link')).toBeTruthy());
+  const link = screen.getByRole('link', { name: 'https://keepory.app' });
+  await fireEvent.press(link);
+  await waitFor(() => {
+    expect(fakeRepo.__bookmarks()[0].last_accessed_at).toBeTruthy();
+  });
+  expect(openURL).toHaveBeenCalledWith('https://keepory.app');
+  openURL.mockRestore();
 });

@@ -44,6 +44,7 @@ import { useCaptureToast } from '@/ui/capture-toast';
 import { nextFacetNonce } from '@/domain/facet-nonce';
 import { hostFromUrl } from '@/domain/item-icon';
 import { displayTitle, isTitleDerived } from '@/domain/item-display';
+import { isSafeMarkdownLink } from '@/domain/markdown';
 import {
   isTitleRestatement,
   pendingSuggestedFolder,
@@ -1396,6 +1397,7 @@ export default function BookmarkDetailScreen({
           maxLength={MAX_MEMO_LENGTH}
           onChange={changeDescription}
           onCommit={commitDescription}
+          onOpenLink={() => markBookmarkAccessed(bookmark.id)}
         />
       ) : null}
       <MemoEditor
@@ -1407,6 +1409,7 @@ export default function BookmarkDetailScreen({
         format={currentNotesFormat}
         onChange={changeNotes}
         onCommit={commitNotes}
+        onOpenLink={() => markBookmarkAccessed(bookmark.id)}
       />
 
       {/* Collection — no title; the folder-icon picker speaks for itself.
@@ -1609,31 +1612,60 @@ export default function BookmarkDetailScreen({
         </Pressable>
         {showDetails ? (
           <Card elevated={false} style={styles.field}>
-            {details.map((row, index) => (
-              <View
-                key={row.label}
-                // `accessible` + `accessibilityLabel` combine the label and
-                // value into one announced unit for VoiceOver/TalkBack — the
-                // masked value Text below has no accessible ancestor of its
-                // own otherwise, and could be skipped or announced as the
-                // mask's own sentinel label instead of its real content.
-                accessible
-                accessibilityLabel={`${row.label}: ${row.value}`}
-                style={[
-                  styles.detailRow,
-                  index > 0
-                    ? { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.border }
-                    : null,
-                ]}
-              >
-                <Text style={[styles.detailLabel, { color: palette.textSecondary }]}>{row.label}</Text>
-                <PostHogMaskView>
-                  <Text style={[styles.detailValue, { color: palette.text }]} selectable>
-                    {row.value}
-                  </Text>
-                </PostHogMaskView>
-              </View>
-            ))}
+            {details.map((row, index) => {
+              const isUrlRow = row.label === t('detail.rowUrl') && isSafeMarkdownLink(row.value);
+              const rowStyle = [
+                styles.detailRow,
+                index > 0
+                  ? { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.border }
+                  : null,
+              ];
+
+              if (isUrlRow) {
+                return (
+                  <Pressable
+                    key={row.label}
+                    accessibilityRole="link"
+                    accessibilityLabel={`${row.label}: ${row.value}`}
+                    accessibilityHint={t('detail.openWebsite')}
+                    onPress={handleOpenLink}
+                    onLongPress={Platform.OS === 'android' ? handleCopyLink : undefined}
+                    style={rowStyle}
+                  >
+                    <Text style={[styles.detailLabel, { color: palette.textSecondary }]}>{row.label}</Text>
+                    <PostHogMaskView>
+                      <Text
+                        selectable
+                        style={[styles.detailValue, { color: palette.accent, textDecorationLine: 'underline' }]}
+                      >
+                        {row.value}
+                      </Text>
+                    </PostHogMaskView>
+                  </Pressable>
+                );
+              }
+
+              return (
+                <View
+                  key={row.label}
+                  // `accessible` + `accessibilityLabel` combine the label and
+                  // value into one announced unit for VoiceOver/TalkBack — the
+                  // masked value Text below has no accessible ancestor of its
+                  // own otherwise, and could be skipped or announced as the
+                  // mask's own sentinel label instead of its real content.
+                  accessible
+                  accessibilityLabel={`${row.label}: ${row.value}`}
+                  style={rowStyle}
+                >
+                  <Text style={[styles.detailLabel, { color: palette.textSecondary }]}>{row.label}</Text>
+                  <PostHogMaskView>
+                    <Text style={[styles.detailValue, { color: palette.text }]} selectable>
+                      {row.value}
+                    </Text>
+                  </PostHogMaskView>
+                </View>
+              );
+            })}
             {bookmark.url ? (
               <Button
                 testID="detail-drawer-refresh-preview"

@@ -13,7 +13,13 @@ import {
 } from '@/domain/markdown';
 import { usePalette } from '@/theme';
 
-export function MarkdownBody({ markdown }: { markdown: string }) {
+export function MarkdownBody({
+  markdown,
+  onOpenLink,
+}: {
+  markdown: string;
+  onOpenLink?: (url: string) => void;
+}) {
   const palette = usePalette();
   const markdownStyle = useMemo<MarkdownStyle>(
     () => ({
@@ -94,6 +100,7 @@ export function MarkdownBody({ markdown }: { markdown: string }) {
           selectable
           onLinkPress={({ url }) => {
             if (isSafeMarkdownLink(url)) {
+              onOpenLink?.(url);
               void Linking.openURL(url).catch(() => {});
             }
           }}

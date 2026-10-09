@@ -635,6 +635,7 @@ export const ko: Catalog = {
   'memo.markdownHint': '제목·목록 등 Markdown 문법을 적용해요.',
   'memo.formatA11y': '{field} 서식',
   'memo.editA11y': '{field} 편집',
+  'memo.copyA11y': '{field} 복사',
   'memo.doneA11y': '{field} 편집 완료',
   'memo.edit': '편집',
   'memo.done': '완료',
