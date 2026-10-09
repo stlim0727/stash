@@ -122,24 +122,41 @@ for (const [file, deps] of graph.entries()) {
 }
 
 // 3. Robert C. Martin's Package Coupling & Instability Metrics
+// Ca (Afferent Coupling): Distinct external modules outside the layer that depend on modules in the layer.
+// Ce (Efferent Coupling): Distinct external modules outside the layer that modules in the layer depend on.
 const trackedLayers = ['domain', 'storage', 'sync', 'api', 'supabase', 'store', 'features', 'ui', 'app'];
+const layerFiles = Object.fromEntries(trackedLayers.map((l) => [l, []]));
+for (const file of files) {
+  const layer = relative(ROOT, file).split('/')[0];
+  if (layerFiles[layer]) layerFiles[layer].push(file);
+}
+
 const layerCa = Object.fromEntries(trackedLayers.map((l) => [l, 0]));
 const layerCe = Object.fromEntries(trackedLayers.map((l) => [l, 0]));
 
-for (const [file, deps] of graph.entries()) {
-  const srcLayer = relative(ROOT, file).split('/')[0];
-  if (!trackedLayers.includes(srcLayer)) continue;
-  const targetLayers = new Set();
-  for (const dep of deps) {
-    const tgtLayer = relative(ROOT, dep).split('/')[0];
-    if (trackedLayers.includes(tgtLayer) && tgtLayer !== srcLayer) {
-      targetLayers.add(tgtLayer);
+for (const layer of trackedLayers) {
+  const filesInLayer = new Set(layerFiles[layer]);
+  const externalDependencies = new Set();
+  const externalDependents = new Set();
+
+  for (const f of filesInLayer) {
+    for (const dep of graph.get(f) || []) {
+      if (!filesInLayer.has(dep)) {
+        externalDependencies.add(dep);
+      }
     }
   }
-  layerCe[srcLayer] += targetLayers.size;
-  for (const tgt of targetLayers) {
-    layerCa[tgt] += 1;
+
+  for (const [otherFile, deps] of graph.entries()) {
+    if (!filesInLayer.has(otherFile)) {
+      if (deps.some((d) => filesInLayer.has(d))) {
+        externalDependents.add(otherFile);
+      }
+    }
   }
+
+  layerCa[layer] = externalDependents.size;
+  layerCe[layer] = externalDependencies.size;
 }
 
 console.log('--- SOLID Architectural Metrics ---');
