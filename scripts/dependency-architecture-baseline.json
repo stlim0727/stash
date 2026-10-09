@@ -1,0 +1,38 @@
+[
+  {
+    "type": "cycle",
+    "from": "apps/mobile/src/storage/sqlite-directory-expo.ts",
+    "to": "apps/mobile/src/storage/sqlite-directory.native.ts",
+    "unresolvedTo": "@/storage/sqlite-directory",
+    "dependencyTypes": [
+      "aliased",
+      "aliased-webpack",
+      "local",
+      "import"
+    ],
+    "rule": {
+      "severity": "error",
+      "name": "no-runtime-cycles"
+    },
+    "cycle": [
+      {
+        "name": "apps/mobile/src/storage/sqlite-directory.native.ts",
+        "dependencyTypes": [
+          "aliased",
+          "aliased-webpack",
+          "local",
+          "import"
+        ]
+      },
+      {
+        "name": "apps/mobile/src/storage/sqlite-directory-expo.ts",
+        "dependencyTypes": [
+          "aliased",
+          "aliased-webpack",
+          "local",
+          "import"
+        ]
+      }
+    ]
+  }
+]

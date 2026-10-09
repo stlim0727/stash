@@ -134,6 +134,9 @@ jobs:
       - checkout
       - setup_pnpm
       - run: pnpm lint
+      - store_artifacts:
+          path: .artifacts/architecture
+          destination: dependency-architecture
       - run: pnpm typecheck
       - run: pnpm test
       - run:
