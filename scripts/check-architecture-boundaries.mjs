@@ -172,11 +172,11 @@ for (const [file, deps] of unifiedGraph.entries()) {
     const depRel = normalizePath(relative(ROOT, dep));
     const depLayer = depRel.split('/')[0];
 
-    // Domain must remain pure: no UI, routes, features, sync, api, supabase, store, or runtime storage
+    // Domain must remain pure: no UI, routes, features, sync, api, supabase, store, share, or runtime storage
     if (layer === 'domain') {
-      if (['store', 'features', 'app', 'sync', 'api', 'ui', 'supabase'].includes(depLayer)) {
+      if (['store', 'features', 'app', 'sync', 'api', 'ui', 'supabase', 'share'].includes(depLayer)) {
         violations.push(`DIP violation: domain module "${rel}" imports from "${depLayer}" ("${depRel}")`);
-      } else if (depLayer === 'storage' && !depRel.startsWith('storage/types')) {
+      } else if (depLayer === 'storage' && depRel !== 'storage/types.ts') {
         violations.push(`DIP violation: domain module "${rel}" imports runtime storage module ("${depRel}")`);
       }
     }
@@ -192,7 +192,7 @@ for (const [file, deps] of unifiedGraph.entries()) {
     }
 
     // Storage must not depend on higher-level orchestrators
-    if (layer === 'storage' && ['store', 'features', 'app', 'sync'].includes(depLayer)) {
+    if (layer === 'storage' && ['store', 'features', 'app', 'sync', 'share'].includes(depLayer)) {
       violations.push(`Boundary violation: storage module "${rel}" imports from "${depLayer}" ("${depRel}")`);
     }
 
@@ -206,7 +206,7 @@ for (const [file, deps] of unifiedGraph.entries()) {
 // 3. Robert C. Martin's Package Coupling & Instability Metrics
 // Ca (Afferent Coupling): Distinct external modules outside the layer that depend on modules in the layer.
 // Ce (Efferent Coupling): Distinct external modules outside the layer that modules in the layer depend on.
-const trackedLayers = ['domain', 'storage', 'sync', 'api', 'supabase', 'store', 'features', 'ui', 'app'];
+const trackedLayers = ['domain', 'storage', 'sync', 'api', 'supabase', 'store', 'features', 'ui', 'app', 'share'];
 const layerFiles = Object.fromEntries(trackedLayers.map((l) => [l, []]));
 for (const file of files) {
   const layer = normalizePath(relative(ROOT, file)).split('/')[0];
@@ -261,13 +261,15 @@ const MAX_ALLOWED_INSTABILITY = {
   storage: 0.25,
 };
 
-// Baselined architectural exceptions where destination instability exceeds source:
-const ALLOWED_SDP_EDGE_EXCEPTIONS = new Set([
-  'domain -> storage',     // domain type contracts in storage/types
-  'features -> app',       // InboxItemRenderer desktop inline detail embed
-  'storage -> supabase',   // storage/image-store.native.ts authenticated asset download
-  'sync -> api',           // sync coordinator driving API transport
-  'ui -> store',           // top-level toast and splash observers bound to bookmarks store
+// Baselined architectural module exceptions where destination instability exceeds source:
+const ALLOWED_SDP_MODULE_EXCEPTIONS = new Set([
+  'domain/pending-tags.ts -> storage/types.ts',
+  'domain/tag-data.ts -> storage/types.ts',
+  'features/inbox/InboxItemRenderer.tsx -> app/bookmark/[id].tsx',
+  'storage/image-store.native.ts -> supabase/client.ts',
+  'sync/sync-bookmarks.ts -> api/bookmarks.ts',
+  'ui/AiEnrichmentBurstToast.tsx -> store/bookmarks.tsx',
+  'ui/SplashReadinessObserver.tsx -> store/bookmarks.tsx',
 ]);
 
 const instabilityViolations = [];
@@ -293,9 +295,9 @@ for (const [file, deps] of unifiedGraph.entries()) {
 
     const sourceI = layerInstability[sourceLayer];
     const destI = layerInstability[destLayer];
-    const edgeKey = `${sourceLayer} -> ${destLayer}`;
+    const edgeKey = `${sourceRel} -> ${destRel}`;
 
-    if (destI > sourceI && !ALLOWED_SDP_EDGE_EXCEPTIONS.has(edgeKey)) {
+    if (destI > sourceI && !ALLOWED_SDP_MODULE_EXCEPTIONS.has(edgeKey)) {
       instabilityViolations.push(
         `SDP direction violation: "${sourceRel}" (${sourceLayer}, I=${sourceI.toFixed(2)}) depends on less stable "${destRel}" (${destLayer}, I=${destI.toFixed(2)})`
       );

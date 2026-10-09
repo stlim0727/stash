@@ -8,10 +8,9 @@
 import * as DocumentPicker from 'expo-document-picker';
 import { File } from 'expo-file-system';
 
-export interface ImportPickResult {
-  name: string;
-  text: string;
-}
+import type { ImportPickResult } from '@/share/types';
+
+export type { ImportPickResult } from '@/share/types';
 
 // MIME types per kind. 'text/plain' is included because some providers hand
 // back .json/.html files with a generic text type, and being permissive here is
