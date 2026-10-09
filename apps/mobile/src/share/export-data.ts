@@ -4,12 +4,9 @@
  * the share sheet instead; Metro resolves the right one per platform.
  */
 
-export interface ExportFile {
-  filename: string;
-  /** MIME type, e.g. 'application/json' or 'text/html'. */
-  mimeType: string;
-  contents: string;
-}
+import type { ExportFile } from '@/share/types';
+
+export type { ExportFile } from '@/share/types';
 
 export async function deliverExport(file: ExportFile): Promise<void> {
   if (typeof document === 'undefined' || typeof URL?.createObjectURL !== 'function') {

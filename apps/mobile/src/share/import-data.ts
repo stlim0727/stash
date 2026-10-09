@@ -5,12 +5,9 @@
  * right one per platform. Parsing is done by the caller via src/domain/import.
  */
 
-export interface ImportPickResult {
-  /** The picked file's name, for display in the result message. */
-  name: string;
-  /** The file's full text contents. */
-  text: string;
-}
+import type { ImportPickResult } from '@/share/types';
+
+export type { ImportPickResult } from '@/share/types';
 
 /** File-type hints per import kind, so the picker filters to sensible files. */
 const ACCEPT: Record<'json' | 'html' | 'csv', string> = {

@@ -15,9 +15,9 @@ import { StorageAccessFramework } from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { Share } from 'react-native';
 
-import type { ExportFile } from '@/share/export-data';
+import type { ExportFile } from '@/share/types';
 
-export type { ExportFile } from '@/share/export-data';
+export type { ExportFile } from '@/share/types';
 
 export async function deliverExport(file: ExportFile): Promise<void> {
   // Cache dir: a transient working copy is fine since the share sheet hands the
