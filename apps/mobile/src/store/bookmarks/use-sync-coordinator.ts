@@ -152,7 +152,6 @@ interface Dependencies {
   syncNowRef: RefObject<((options?: { force?: boolean; }) => Promise<boolean>) | null>;
   broadcastSyncNudgeRef: RefObject<(() => void) | null>;
   checkAiRetriesRef: RefObject<(() => void) | null>;
-  queue: LocalPendingBookmark[];
   requestAiEnrichment: (bookmarkId: string, source?: "auto" | "manual" | "preview", overrideMetadata?: EnrichmentMetadataHint) => Promise<string | null>;
   setLoadedAccountUserId?: (userId: string | null) => void;
   setAccountLibraryFailureUserId?: (userId: string | null) => void;
@@ -216,7 +215,6 @@ export function useSyncCoordinator({
   syncNowRef,
   broadcastSyncNudgeRef,
   checkAiRetriesRef,
-  queue,
   requestAiEnrichment,
   setLoadedAccountUserId,
   setAccountLibraryFailureUserId,
@@ -2037,7 +2035,6 @@ export function useSyncCoordinator({
     },
     [
       auth,
-      queue,
       enqueueMutation,
       requestAiEnrichment,
       syncTagOps,

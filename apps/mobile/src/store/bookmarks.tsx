@@ -2033,7 +2033,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     syncNowRef,
     broadcastSyncNudgeRef,
     checkAiRetriesRef,
-    queue,
     requestAiEnrichment,
     setLoadedAccountUserId,
     setAccountLibraryFailureUserId,
