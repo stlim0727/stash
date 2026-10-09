@@ -134,6 +134,12 @@ jobs:
       - checkout
       - setup_pnpm
       - run: pnpm lint
+      - run:
+          name: Verify architectural boundaries (SOLID)
+          command: pnpm lint:architecture
+      - run:
+          name: Verify agent assessment efficiency
+          command: pnpm lint:agent-efficiency
       - run: pnpm typecheck
       - run: pnpm test
       - run:

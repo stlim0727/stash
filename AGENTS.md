@@ -106,8 +106,9 @@ pnpm test:components --runInBand
 ```
 
 - Install dependencies with `pnpm install --frozen-lockfile` if binaries are absent.
-- Root lint checks whitespace, static env access, and overlay elevation. Do not
-  invoke the separate `expo lint` lane inside `apps/mobile`.
+- Root lint checks whitespace, static env access, overlay elevation,
+  workflow pins, architectural boundaries (SOLID), and agent assessment
+  efficiency. Do not invoke the separate `expo lint` lane inside `apps/mobile`.
 - Component tests are `.test.tsx`; pure Node tests are `.test.ts`. Use focused
   commands in the task map; appending a path to `pnpm test` does not narrow it.
 - `EXPO_PUBLIC_*` reads must be statically addressable for release inlining.
