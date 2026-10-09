@@ -224,6 +224,54 @@ test('parsePlainTextLinks stops URL match before attached Korean prose on domain
   ]);
   assert.equal(wikiAppleSegs.map((s) => s.text).join(''), wikiAppleCase);
 
+  const wikiAppleProseCase = '위키: https://ko.wikipedia.org/wiki/사과입니다';
+  const wikiAppleProseSegs = parsePlainTextLinks(wikiAppleProseCase);
+  assert.deepEqual(wikiAppleProseSegs, [
+    { type: 'text', text: '위키: ' },
+    { type: 'link', text: 'https://ko.wikipedia.org/wiki/사과', url: 'https://ko.wikipedia.org/wiki/사과' },
+    { type: 'text', text: '입니다' },
+  ]);
+  assert.equal(wikiAppleProseSegs.map((s) => s.text).join(''), wikiAppleProseCase);
+
+  // Mixed-language URLs like search?q=iPhone케이스 must preserve Hangul words
+  const mixedIphoneCase = '검색: https://example.com/search?q=iPhone케이스';
+  const mixedIphoneSegs = parsePlainTextLinks(mixedIphoneCase);
+  assert.deepEqual(mixedIphoneSegs, [
+    { type: 'text', text: '검색: ' },
+    { type: 'link', text: 'https://example.com/search?q=iPhone케이스', url: 'https://example.com/search?q=iPhone케이스' },
+  ]);
+  assert.equal(mixedIphoneSegs.map((s) => s.text).join(''), mixedIphoneCase);
+
+  // Mixed-language URL followed by attached prose copula
+  const mixedIphoneProseCase = '검색: https://example.com/search?q=iPhone케이스입니다';
+  const mixedIphoneProseSegs = parsePlainTextLinks(mixedIphoneProseCase);
+  assert.deepEqual(mixedIphoneProseSegs, [
+    { type: 'text', text: '검색: ' },
+    { type: 'link', text: 'https://example.com/search?q=iPhone케이스', url: 'https://example.com/search?q=iPhone케이스' },
+    { type: 'text', text: '입니다' },
+  ]);
+  assert.equal(mixedIphoneProseSegs.map((s) => s.text).join(''), mixedIphoneProseCase);
+
+  // Mixed-language URL ending in a syllable that happens to be a particle character (로 in 프로)
+  // preceded by Hangul (프) must not strip the syllable
+  const mixedMacBookCase = '노트북: https://example.com/item/MacBook프로';
+  const mixedMacBookSegs = parsePlainTextLinks(mixedMacBookCase);
+  assert.deepEqual(mixedMacBookSegs, [
+    { type: 'text', text: '노트북: ' },
+    { type: 'link', text: 'https://example.com/item/MacBook프로', url: 'https://example.com/item/MacBook프로' },
+  ]);
+  assert.equal(mixedMacBookSegs.map((s) => s.text).join(''), mixedMacBookCase);
+
+  // ASCII token followed by attached single-syllable particle (e.g. 6로 or xyz과)
+  const asciiParticleCase = '안내: https://maps.app.goo.gl/hBX7aD55YpUUN7Ji6로 가세요';
+  const asciiParticleSegs = parsePlainTextLinks(asciiParticleCase);
+  assert.deepEqual(asciiParticleSegs, [
+    { type: 'text', text: '안내: ' },
+    { type: 'link', text: 'https://maps.app.goo.gl/hBX7aD55YpUUN7Ji6', url: 'https://maps.app.goo.gl/hBX7aD55YpUUN7Ji6' },
+    { type: 'text', text: '로 가세요' },
+  ]);
+  assert.equal(asciiParticleSegs.map((s) => s.text).join(''), asciiParticleCase);
+
   const middleKoreanCase = '경로: https://keepory.app입니다/path';
   const middleSegs = parsePlainTextLinks(middleKoreanCase);
   assert.deepEqual(middleSegs, [

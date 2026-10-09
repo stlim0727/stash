@@ -28,12 +28,30 @@ const PROSE_DELIMITER_CHARS = new Set(
 );
 
 /**
+ * Multi-syllable Korean grammatical copulas, verb endings, and particles that
+ * commonly attach to URLs in informal notes and memos (e.g. "...입니다", "...에서").
+ */
+const KOREAN_MULTI_SYLLABLE_PROSE =
+  /(?:입니다|입니까|이었습니다|였습니다|이었다|였다|이라서|이라는|이다|이고|이나|이란|이라|이며|이면|하세요|바랍니다|가세요|보세요|가요|해요|돼요|되요|에서도|에서는|에게는|에게도|으로는|으로도|까지는|부터는|에서|에게|한테|으로|까지|부터|마저|조차|처럼|보다)$/;
+
+/**
+ * Single-syllable Korean grammatical particles that can attach directly to ASCII tokens
+ * (such as shortlink slugs, IDs, or ports like ".../xyz로" or ".../123을"), but must NOT
+ * be stripped when preceded by Hangul (e.g. ".../wiki/사과", ".../테헤란로", ".../여의도",
+ * ".../search?q=iPhone케이스").
+ */
+const KOREAN_ASCII_ATTACHED_PARTICLES =
+  /(?<=[a-zA-Z0-9])(?:은|는|이|가|을|를|에|로|와|과|의|도|만)$/;
+
+/**
  * Trims trailing punctuation from a matched URL while preserving balanced
  * parentheses, brackets, and braces (e.g. Wikipedia links or URLs wrapped in parens),
  * including smart quotes, ellipses, and CJK punctuation. Repeats pair cleanup after outer
  * closers are removed so nested wrappers (e.g. 『「...」』) are fully stripped.
  * Counts bracket pairs in linear time to avoid quadratic rescans on runs of closers.
- * Also trims attached Korean prose suffixes (e.g. "입니다", "을") when attached to ASCII tokens.
+ * Also trims identified Korean prose suffixes (e.g. "...입니다", "...에서", ".../xyz로")
+ * while strictly preserving legitimate Korean or mixed-language URL components (e.g.
+ * ".../search?q=iPhone케이스", ".../wiki/사과").
  */
 export function cleanTrailingUrlPunctuation(rawUrl: string): { url: string; trailing: string } {
   let url = rawUrl;
@@ -89,13 +107,19 @@ export function cleanTrailingUrlPunctuation(rawUrl: string): { url: string; trai
     }
   }
 
-  // Strip attached Korean prose suffixes (e.g. /xyz입니다 or https://keepory.app입니다)
-  // only when attached immediately to an ASCII letter, digit, or port.
-  // This preserves legitimate Korean URL words/paths such as /wiki/사과 or /wiki/대한민국.
-  const asciiAttachedMatch = url.match(/^(.+[a-zA-Z0-9])([가-힣]+)$/);
-  if (asciiAttachedMatch) {
-    trailing = asciiAttachedMatch[2] + trailing;
-    url = asciiAttachedMatch[1];
+  // Strip identified Korean prose suffixes (copulas, verb endings, and particles)
+  // while strictly preserving legitimate Korean or mixed-language URL components
+  // (e.g. ".../search?q=iPhone케이스", ".../wiki/사과", ".../item/Galaxy울트라").
+  const multiMatch = url.match(KOREAN_MULTI_SYLLABLE_PROSE);
+  if (multiMatch) {
+    trailing = multiMatch[0] + trailing;
+    url = url.slice(0, -multiMatch[0].length);
+  } else {
+    const singleMatch = url.match(KOREAN_ASCII_ATTACHED_PARTICLES);
+    if (singleMatch) {
+      trailing = singleMatch[0] + trailing;
+      url = url.slice(0, -singleMatch[0].length);
+    }
   }
 
   stripPunct();
