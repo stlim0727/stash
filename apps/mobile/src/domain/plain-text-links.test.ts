@@ -224,14 +224,24 @@ test('parsePlainTextLinks stops URL match before attached Korean prose on domain
   ]);
   assert.equal(wikiAppleSegs.map((s) => s.text).join(''), wikiAppleCase);
 
-  const wikiAppleProseCase = '위키: https://ko.wikipedia.org/wiki/사과입니다';
-  const wikiAppleProseSegs = parsePlainTextLinks(wikiAppleProseCase);
-  assert.deepEqual(wikiAppleProseSegs, [
+  // Legitimate URL paths and queries ending in entries from KOREAN_MULTI_SYLLABLE_PROSE
+  // (e.g. /wiki/이다 or ?q=보세요) must be preserved because they are preceded by URL
+  // delimiters (/ or =), not by ASCII tokens.
+  const wikiIsCase = '위키: https://ko.wikipedia.org/wiki/이다';
+  const wikiIsSegs = parsePlainTextLinks(wikiIsCase);
+  assert.deepEqual(wikiIsSegs, [
     { type: 'text', text: '위키: ' },
-    { type: 'link', text: 'https://ko.wikipedia.org/wiki/사과', url: 'https://ko.wikipedia.org/wiki/사과' },
-    { type: 'text', text: '입니다' },
+    { type: 'link', text: 'https://ko.wikipedia.org/wiki/이다', url: 'https://ko.wikipedia.org/wiki/이다' },
   ]);
-  assert.equal(wikiAppleProseSegs.map((s) => s.text).join(''), wikiAppleProseCase);
+  assert.equal(wikiIsSegs.map((s) => s.text).join(''), wikiIsCase);
+
+  const queryLookCase = '검색: https://example.com/?q=보세요';
+  const queryLookSegs = parsePlainTextLinks(queryLookCase);
+  assert.deepEqual(queryLookSegs, [
+    { type: 'text', text: '검색: ' },
+    { type: 'link', text: 'https://example.com/?q=보세요', url: 'https://example.com/?q=보세요' },
+  ]);
+  assert.equal(queryLookSegs.map((s) => s.text).join(''), queryLookCase);
 
   // Mixed-language URLs like search?q=iPhone케이스 must preserve Hangul words
   const mixedIphoneCase = '검색: https://example.com/search?q=iPhone케이스';
@@ -242,12 +252,12 @@ test('parsePlainTextLinks stops URL match before attached Korean prose on domain
   ]);
   assert.equal(mixedIphoneSegs.map((s) => s.text).join(''), mixedIphoneCase);
 
-  // Mixed-language URL followed by attached prose copula
-  const mixedIphoneProseCase = '검색: https://example.com/search?q=iPhone케이스입니다';
+  // ASCII query followed by attached prose copula
+  const mixedIphoneProseCase = '검색: https://example.com/search?q=iPhone입니다';
   const mixedIphoneProseSegs = parsePlainTextLinks(mixedIphoneProseCase);
   assert.deepEqual(mixedIphoneProseSegs, [
     { type: 'text', text: '검색: ' },
-    { type: 'link', text: 'https://example.com/search?q=iPhone케이스', url: 'https://example.com/search?q=iPhone케이스' },
+    { type: 'link', text: 'https://example.com/search?q=iPhone', url: 'https://example.com/search?q=iPhone' },
     { type: 'text', text: '입니다' },
   ]);
   assert.equal(mixedIphoneProseSegs.map((s) => s.text).join(''), mixedIphoneProseCase);

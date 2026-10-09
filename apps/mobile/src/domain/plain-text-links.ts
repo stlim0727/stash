@@ -29,10 +29,12 @@ const PROSE_DELIMITER_CHARS = new Set(
 
 /**
  * Multi-syllable Korean grammatical copulas, verb endings, and particles that
- * commonly attach to URLs in informal notes and memos (e.g. "...입니다", "...에서").
+ * commonly attach to URLs in informal notes and memos (e.g. "...입니다", "...에서"),
+ * requiring preceding ASCII to avoid stripping endings when they form actual path/query
+ * components (e.g. ".../wiki/이다", ".../?q=보세요").
  */
 const KOREAN_MULTI_SYLLABLE_PROSE =
-  /(?:입니다|입니까|이었습니다|였습니다|이었다|였다|이라서|이라는|이다|이고|이나|이란|이라|이며|이면|하세요|바랍니다|가세요|보세요|가요|해요|돼요|되요|에서도|에서는|에게는|에게도|으로는|으로도|까지는|부터는|에서|에게|한테|으로|까지|부터|마저|조차|처럼|보다)$/;
+  /(?<=[a-zA-Z0-9])(?:입니다|입니까|이었습니다|였습니다|이었다|였다|이라서|이라는|이다|이고|이나|이란|이라|이며|이면|하세요|바랍니다|가세요|보세요|가요|해요|돼요|되요|에서도|에서는|에게는|에게도|으로는|으로도|까지는|부터는|에서|에게|한테|으로|까지|부터|마저|조차|처럼|보다)$/;
 
 /**
  * Single-syllable Korean grammatical particles that can attach directly to ASCII tokens

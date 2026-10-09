@@ -1,6 +1,7 @@
 import { fireEvent, render } from '@testing-library/react-native';
 import { useState } from 'react';
 import { Linking, Platform } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 
 import { MemoEditor, type MemoDraft } from '@/ui/MemoEditor';
 
@@ -99,5 +100,29 @@ test('plain text link relies on anchor navigation on web and supports Space acti
   } finally {
     Platform.OS = originalPlatform;
     openUrlSpy.mockRestore();
+  }
+});
+
+test('memo editor provides Copy action in header and copies on link long press on Android', async () => {
+  const originalPlatform = Platform.OS;
+  Platform.OS = 'android';
+  const setStringAsync = jest.spyOn(Clipboard, 'setStringAsync').mockResolvedValue(true);
+  try {
+    const source = 'Notes with https://keepory.app link';
+    const screen = await render(<Editor initial={{ value: source, format: 'plain' }} />);
+
+    // Header copy button copies the entire memo on Android
+    const copyBtn = screen.getByLabelText('Copy Note');
+    expect(copyBtn).toBeTruthy();
+    await fireEvent.press(copyBtn);
+    expect(setStringAsync).toHaveBeenCalledWith(source);
+
+    // Link long-press copies just the link URL
+    const link = screen.getByRole('link', { name: 'https://keepory.app' });
+    await fireEvent(link, 'longPress');
+    expect(setStringAsync).toHaveBeenCalledWith('https://keepory.app');
+  } finally {
+    Platform.OS = originalPlatform;
+    setStringAsync.mockRestore();
   }
 });

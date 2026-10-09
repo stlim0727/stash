@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Linking, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { PostHogMaskView } from 'posthog-react-native';
 
 import { isSafeMarkdownLink } from '@/domain/markdown';
@@ -7,6 +8,7 @@ import { parsePlainTextLinks } from '@/domain/plain-text-links';
 import type { TextFormat } from '@/domain/types';
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
+import { useOptionalCaptureToast } from '@/ui/capture-toast';
 import { MarkdownBody } from '@/ui/MarkdownBody';
 
 export interface MemoDraft {
@@ -94,6 +96,21 @@ export function MemoEditor({
     [plainSegments],
   );
 
+  const toast = useOptionalCaptureToast();
+  const handleCopy = useCallback(() => {
+    if (!value) return;
+    void Clipboard.setStringAsync(value);
+    toast?.show(t('toast.memoCopied'));
+  }, [value, toast, t]);
+
+  const handleCopyLink = useCallback(
+    (linkUrl: string) => {
+      void Clipboard.setStringAsync(linkUrl);
+      toast?.show(t('toast.linkCopied'));
+    },
+    [toast, t],
+  );
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -111,6 +128,18 @@ export function MemoEditor({
               {t(format === 'plain' ? 'memo.plain' : 'memo.markdown')} ▾
             </Text>
           </Pressable>
+          {!alwaysEditing && !editing && value !== '' && Platform.OS === 'android' && hasPlainLinks ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t('memo.copyA11y', { field: label })}
+              onPress={handleCopy}
+              style={styles.button}
+            >
+              <Text style={[styles.actionText, { color: palette.textSecondary }]}>
+                {t('common.copy')}
+              </Text>
+            </Pressable>
+          ) : null}
           {!alwaysEditing && (editing || value !== '') ? (
             <Pressable
               accessibilityRole="button"
@@ -228,6 +257,7 @@ export function MemoEditor({
                 <Text
                   selectable={Platform.OS === 'android' ? !hasPlainLinks : true}
                   style={[styles.body, { color: palette.text }]}
+                  onLongPress={Platform.OS === 'android' && hasPlainLinks ? handleCopy : undefined}
                 >
                   {hasPlainLinks
                     ? plainSegments.map((segment, index) =>
@@ -247,6 +277,7 @@ export function MemoEditor({
                                     }
                                   }
                             }
+                            onLongPress={() => handleCopyLink(segment.url!)}
                             {...(Platform.OS === 'web'
                               ? ({
                                   href: segment.url,
