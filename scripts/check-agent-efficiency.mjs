@@ -69,6 +69,15 @@ function walk(dir) {
 const files = walk(ROOT);
 const failures = [];
 
+function extractRoutingTable(content) {
+  const startMarker = '| Task | Implementation to read first |';
+  const startIndex = content.indexOf(startMarker);
+  if (startIndex === -1) return '';
+  const endIndex = content.indexOf('\n## ', startIndex);
+  if (endIndex === -1) return content.slice(startIndex);
+  return content.slice(startIndex, endIndex);
+}
+
 // --- 1. Agent Task Map Navigability Check ---
 let taskMapContent = '';
 try {
@@ -77,14 +86,19 @@ try {
   failures.push(`Cannot read agent task map at ${TASK_MAP_PATH}: ${err.message}`);
 }
 
+const routingTable = extractRoutingTable(taskMapContent);
+if (!routingTable) {
+  failures.push(`Cannot locate task routing table in ${TASK_MAP_PATH}`);
+}
+
 const featuresDir = join(ROOT, 'features');
 const featureDirs = readdirSync(featuresDir).filter((name) => statSync(join(featuresDir, name)).isDirectory());
 const unmappedFeatures = [];
 for (const feature of featureDirs) {
-  if (!taskMapContent.includes(`features/${feature}`)) {
+  if (!routingTable.includes(`features/${feature}`)) {
     unmappedFeatures.push(feature);
     failures.push(
-      `Unmapped feature: "features/${feature}" is missing from ${TASK_MAP_PATH}. ` +
+      `Unmapped feature: "features/${feature}" is missing from the task routing table in ${TASK_MAP_PATH}. ` +
         `Agents require explicit task routing to prevent expensive search trajectories.`,
     );
   }
@@ -94,11 +108,11 @@ const hooksDir = join(ROOT, 'store/bookmarks');
 const commandHooks = readdirSync(hooksDir).filter((name) => name.startsWith('use-') && /\.(ts|tsx)$/.test(name));
 const unmappedHooks = [];
 for (const hook of commandHooks) {
-  if (!taskMapContent.includes(hook)) {
+  if (!routingTable.includes(hook)) {
     unmappedHooks.push(hook);
     failures.push(
-      `Unmapped command hook: "${hook}" is missing from ${TASK_MAP_PATH}. ` +
-        `Register this hook in the task map so agents locate command logic quickly.`,
+      `Unmapped command hook: "${hook}" is missing from the task routing table in ${TASK_MAP_PATH}. ` +
+        `Register this hook in the task routing table so agents locate command logic quickly.`,
     );
   }
 }
@@ -157,7 +171,7 @@ for (const file of domainFiles) {
   const rel = normalizePath(relative(ROOT, file));
   const content = readFileSync(file, 'utf8');
   const regex =
-    /(?:(?:import|export)\s+(?:type\s+)?(?:[\s\S]*?)\s+from\s*|import\s*|(?:import|require)\s*\(\s*)['"]([.a-zA-Z0-9_\-/@]+)['"]/g;
+    /(?:(?:import|export)\s+(?:type\s+)?(?:[\s\S]*?)\s+from\s*|import\s*|(?:import|require)\s*\(\s*)['"]([^'"]+)['"]/g;
   let match;
   const localImports = new Set();
   while ((match = regex.exec(content)) !== null) {

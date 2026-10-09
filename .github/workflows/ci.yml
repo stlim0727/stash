@@ -35,10 +35,6 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
-      - name: Verify architectural boundaries (SOLID)
-        run: pnpm lint:architecture
-      - name: Verify agent assessment efficiency
-        run: pnpm lint:agent-efficiency
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm test:components

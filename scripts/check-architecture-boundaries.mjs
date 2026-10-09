@@ -29,13 +29,24 @@ function walk(dir) {
   return files;
 }
 
+function isFileForPlatform(filePath, platform) {
+  const norm = normalizePath(filePath);
+  if (platform === 'native') {
+    return !/\.web\.tsx?$/.test(norm);
+  }
+  if (platform === 'web') {
+    return !/\.(native|ios|android)\.tsx?$/.test(norm);
+  }
+  return true;
+}
+
 const files = walk(ROOT);
 
 function extractImports(content) {
   const specifiers = new Set();
-  const fromRegex = /(?:import|export)\s+(?:type\s+)?(?:[^'"]*?)\s+from\s*['"]([.a-zA-Z0-9_\-/@]+)['"]/g;
-  const bareRegex = /import\s+['"]([.a-zA-Z0-9_\-/@]+)['"]/g;
-  const callRegex = /(?:import|require)\s*\(\s*['"]([.a-zA-Z0-9_\-/@]+)['"]\s*\)/g;
+  const fromRegex = /(?:import|export)\s+(?:type\s+)?(?:[^'"]*?)\s+from\s*['"]([^'"]+)['"]/g;
+  const bareRegex = /import\s+['"]([^'"]+)['"]/g;
+  const callRegex = /(?:import|require)\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
 
   let match;
   while ((match = fromRegex.exec(content)) !== null) specifiers.add(match[1]);
@@ -44,7 +55,7 @@ function extractImports(content) {
   return [...specifiers];
 }
 
-function resolveModule(importer, specifier, platform) {
+function resolveModule(importer, specifier, platform, targetFiles = files) {
   let candidatePath = null;
   if (specifier.startsWith('@/')) {
     candidatePath = join(ROOT, specifier.slice(2));
@@ -55,7 +66,7 @@ function resolveModule(importer, specifier, platform) {
   }
 
   // Exact file match
-  if (files.includes(candidatePath) && candidatePath !== importer) {
+  if (targetFiles.includes(candidatePath) && candidatePath !== importer) {
     return candidatePath;
   }
 
@@ -72,7 +83,7 @@ function resolveModule(importer, specifier, platform) {
 
   for (const ext of candidateExtensions) {
     const full = candidatePath + ext;
-    if (full !== importer && files.includes(full)) {
+    if (full !== importer && targetFiles.includes(full)) {
       return full;
     }
   }
@@ -82,13 +93,14 @@ function resolveModule(importer, specifier, platform) {
 // 1. Cycle detection (DIP & SRP guard) across both native and web targets
 const allCycles = [];
 for (const platform of ['native', 'web']) {
+  const platformFiles = files.filter((f) => isFileForPlatform(f, platform));
   const platformGraph = new Map();
-  for (const file of files) {
+  for (const file of platformFiles) {
     const content = readFileSync(file, 'utf8');
     const specifiers = extractImports(content);
     const deps = [];
     for (const spec of specifiers) {
-      const resolved = resolveModule(file, spec, platform);
+      const resolved = resolveModule(file, spec, platform, platformFiles);
       if (resolved && !deps.includes(resolved)) deps.push(resolved);
     }
     platformGraph.set(file, deps);
@@ -113,7 +125,7 @@ for (const platform of ['native', 'web']) {
     visited.set(node, 'visited');
   }
 
-  for (const file of files) {
+  for (const file of platformFiles) {
     if (!visited.has(file)) detectCycles(file, []);
   }
 }
@@ -141,9 +153,9 @@ for (const [file, deps] of unifiedGraph.entries()) {
     const depRel = normalizePath(relative(ROOT, dep));
     const depLayer = depRel.split('/')[0];
 
-    // Domain must remain pure: no UI, routes, features, sync, api, supabase, or runtime storage
+    // Domain must remain pure: no UI, routes, features, sync, api, supabase, store, or runtime storage
     if (layer === 'domain') {
-      if (['features', 'app', 'sync', 'api', 'ui', 'supabase'].includes(depLayer)) {
+      if (['store', 'features', 'app', 'sync', 'api', 'ui', 'supabase'].includes(depLayer)) {
         violations.push(`DIP violation: domain module "${rel}" imports from "${depLayer}" ("${depRel}")`);
       } else if (depLayer === 'storage' && !depRel.startsWith('storage/types')) {
         violations.push(`DIP violation: domain module "${rel}" imports runtime storage module ("${depRel}")`);
@@ -151,12 +163,17 @@ for (const [file, deps] of unifiedGraph.entries()) {
     }
 
     // Features must remain decoupled from Expo Router routes
+    // Documented exception: InboxItemRenderer embeds BookmarkDetailScreen for desktop inline detail view
     if (layer === 'features' && depLayer === 'app') {
-      violations.push(`Boundary violation: feature "${rel}" imports from route "${depRel}"`);
+      const isAllowedException =
+        rel === 'features/inbox/InboxItemRenderer.tsx' && depRel === 'app/bookmark/[id].tsx';
+      if (!isAllowedException) {
+        violations.push(`Boundary violation: feature "${rel}" imports from route "${depRel}"`);
+      }
     }
 
     // Storage must not depend on higher-level orchestrators
-    if (layer === 'storage' && ['features', 'app', 'sync'].includes(depLayer)) {
+    if (layer === 'storage' && ['store', 'features', 'app', 'sync'].includes(depLayer)) {
       violations.push(`Boundary violation: storage module "${rel}" imports from "${depLayer}" ("${depRel}")`);
     }
 
@@ -217,6 +234,25 @@ for (const layer of trackedLayers) {
 }
 console.log('------------------------------------------------------------------------');
 
+// Enforce maximum instability thresholds on foundational layers (SDP)
+const MAX_ALLOWED_INSTABILITY = {
+  domain: 0.10,
+  storage: 0.25,
+};
+
+const instabilityViolations = [];
+for (const [layer, maxInst] of Object.entries(MAX_ALLOWED_INSTABILITY)) {
+  const ca = layerCa[layer];
+  const ce = layerCe[layer];
+  const total = ca + ce;
+  const inst = total === 0 ? 0 : ce / total;
+  if (inst > maxInst) {
+    instabilityViolations.push(
+      `SDP violation: "${layer}" instability is ${inst.toFixed(2)}, exceeding maximum allowed threshold of ${maxInst.toFixed(2)}`
+    );
+  }
+}
+
 let hasError = false;
 
 if (allCycles.length > 0) {
@@ -239,6 +275,16 @@ if (violations.length > 0) {
   console.log('✓ Layer boundaries check passed: All layer dependency constraints satisfied.');
 }
 
+if (instabilityViolations.length > 0) {
+  console.error(`\nFAILED: Found ${instabilityViolations.length} Stable Dependencies Principle (SDP) violation(s):`);
+  for (const violation of instabilityViolations) {
+    console.error(`  ${violation}`);
+  }
+  hasError = true;
+} else {
+  console.log('✓ Stable Dependencies Principle (SDP) check passed: Core foundational layers (domain, storage) meet stability requirements.');
+}
+
 if (process.env.GITHUB_STEP_SUMMARY) {
   const summaryLines = [
     '### 🏛️ SOLID Architectural Metrics',
@@ -259,6 +305,9 @@ if (process.env.GITHUB_STEP_SUMMARY) {
     violations.length > 0
       ? `- ❌ **Layer Boundaries:** ${violations.length} architectural boundary violations found.`
       : '- ✅ **Layer Boundaries:** All layer dependency constraints satisfied.',
+    instabilityViolations.length > 0
+      ? `- ❌ **Stable Dependencies Principle:** ${instabilityViolations.length} instability threshold violations found.`
+      : '- ✅ **Stable Dependencies Principle:** Core foundational layers (`domain`, `storage`) within stability limits.',
     '',
   ];
   try {
