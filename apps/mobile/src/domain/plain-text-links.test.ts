@@ -56,6 +56,11 @@ test('cleanTrailingUrlPunctuation preserves punctuation inside query and fragmen
     url: 'https://example.com/path',
     trailing: ';',
   });
+  // Authored single-segment path ending in Korean suffix is preserved
+  assert.deepEqual(cleanTrailingUrlPunctuation('https://example.com/Windows에서'), {
+    url: 'https://example.com/Windows에서',
+    trailing: '',
+  });
 });
 
 test('cleanTrailingUrlPunctuation strips Unicode quotes and CJK punctuation', () => {
@@ -401,6 +406,17 @@ test('parsePlainTextLinks stops URL match before attached Korean prose on domain
     { type: 'text', text: ' 그리고 다음' },
   ]);
   assert.equal(querySemicolonSegs.map((s) => s.text).join(''), querySemicolonCase);
+
+  // Single-segment authored paths ending in Korean syllables (e.g. https://example.com/Windows에서)
+  // must be preserved as authored path content rather than stripped as prose.
+  const singleSegmentPathCase = '참고: https://example.com/Windows에서 확인하세요';
+  const singleSegmentPathSegs = parsePlainTextLinks(singleSegmentPathCase);
+  assert.deepEqual(singleSegmentPathSegs, [
+    { type: 'text', text: '참고: ' },
+    { type: 'link', text: 'https://example.com/Windows에서', url: 'https://example.com/Windows에서' },
+    { type: 'text', text: ' 확인하세요' },
+  ]);
+  assert.equal(singleSegmentPathSegs.map((s) => s.text).join(''), singleSegmentPathCase);
 });
 
 test('parsePlainTextLinks handles large delimiter runs without quadratic stalling', () => {

@@ -51,6 +51,13 @@ const KOREAN_ASCII_ATTACHED_PARTICLES =
 const KOREAN_IDN_TLDS = '한국|닷컴|닷넷|삼성';
 
 /**
+ * Known URL shorteners and shortlink domains where a single-segment path is
+ * an opaque alphanumeric identifier rather than human-authored content.
+ */
+const SHORTLINK_HOST_REGEX =
+  /^(?:[^\s/@:]+@)?(?:(?:[a-z0-9-]+\.)*(?:goo\.gl|bit\.ly|t\.co|tinyurl\.com|is\.gd|buff\.ly|ow\.ly|naver\.me|kakao\.me|me2\.do))(?::\d+)?$/i;
+
+/**
  * Punctuation characters in query or fragment values (and '!' in Wikipedia paths)
  * that represent valid URL data rather than trailing prose punctuation.
  */
@@ -158,14 +165,19 @@ export function cleanTrailingUrlPunctuation(rawUrl: string): { url: string; trai
   }
 
   // Strip identified Korean prose suffixes (copulas, verb endings, and particles)
-  // ONLY when following authority, trailing slash, or a shortlink slug.
-  // Avoid treating suffixes as prose when they are inside a path, query, or fragment component
-  // (e.g. ".../search?q=Windows에서", ".../wiki/이다", ".../item/MacBook프로").
+  // ONLY when following authority, a bare trailing slash, or an opaque shortlink slug.
+  // Avoid treating suffixes as prose when they are inside an authored path, query,
+  // or fragment component (e.g. ".../Windows에서", ".../search?q=Windows에서",
+  // ".../wiki/이다", ".../item/MacBook프로").
   const hasQueryOrFragment = url.includes('?') || url.includes('#');
-  const pathPart = url.replace(/^https?:\/\/[^/]+/i, '');
-  const isMultiSegmentPath = pathPart.split('/').filter(Boolean).length > 1;
+  const hostMatch = url.match(/^https?:\/\/([^/?#]+)/i);
+  const host = hostMatch ? hostMatch[1] : '';
+  const pathPart = url.replace(/^https?:\/\/[^/?#]+/i, '');
+  const pathSegments = pathPart.split('/').filter(Boolean);
+  const isShortlink = SHORTLINK_HOST_REGEX.test(host);
+  const isAuthoredPath = pathSegments.length > 0 && !isShortlink;
 
-  if (!hasQueryOrFragment && !isMultiSegmentPath) {
+  if (!hasQueryOrFragment && !isAuthoredPath) {
     const multiMatch = url.match(KOREAN_MULTI_SYLLABLE_PROSE);
     if (multiMatch) {
       trailing = multiMatch[0] + trailing;
