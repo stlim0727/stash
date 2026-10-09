@@ -1,333 +1,30 @@
-import { normalizeText, slugify } from '@/domain/tag-normalize';
-import { canonicalizeUrl, normalizeUrl } from '@/domain/urls';
-import { makeUuid } from '@/domain/uuid';
+import * as enrichment from '@/api/bookmark-enrichment';
+import { appendSearchParams, MAX_PAGE_SIZE } from '@/api/bookmark-helpers';
+import * as organization from '@/api/bookmark-organization';
+import * as reads from '@/api/bookmark-reads';
+import { type AddTagsInput, type ApplyAISuggestionsInput, type BookmarkDetail, type BulkAttachItem, type BulkAttachResult, type BulkCreateBookmarkOutput, type CreateBookmarkOutput, type EnrichmentMetadataHint, type ListBookmarksParams, type RemoteBookmark, type RemoveTagsInput, type UpdateAIEnrichmentInput, type UpdateBookmarkInput } from '@/api/bookmark-types';
+import * as writes from '@/api/bookmark-writes';
+import type { AiServerQueueSnapshot } from '@/domain/processing-status';
 import type {
   AIEnrichment,
   Bookmark,
   BookmarkTag,
   Collection,
   CreateBookmarkInput,
-  EnrichmentStatus,
-  MetadataStatus,
-  SuggestedTag,
   Tag,
-  TagSource,
-  TextFormat,
+  TagSource
 } from '@/domain/types';
-import type { AiServerQueueSnapshot } from '@/domain/processing-status';
-import { isContentType } from '@/domain/import';
-import { createSupabaseClient, SupabaseRequestError } from '@/supabase/client';
 import type { StashSupabaseClient } from '@/supabase/client';
+import { createSupabaseClient } from '@/supabase/client';
 import type { SupabaseAuthSession } from '@/supabase/types';
-
-// `local_image_uri` is a device-only field (a captured image's on-disk URI),
-// `local_image_mime_type` is the device-only MIME type recorded alongside it,
-// `last_accessed_at` is a device-only "last opened" timestamp,
-// `title_is_derived` is device-only title provenance, and `video_unavailable`
-// is a device-only, self-healing YouTube-availability check result (STASH-61),
-// so none is ever part of a remote row, alongside the local-only `sync_status`.
-export type RemoteBookmark = Omit<
-  Bookmark,
-  | 'sync_status'
-  | 'local_image_uri'
-  | 'local_image_mime_type'
-  | 'last_accessed_at'
-  | 'title_is_derived'
-  | 'video_unavailable'
->;
-
-// Thrown by `updateBookmark` when the PATCH (scoped to `id` + the current
-// user's `user_id`) matches zero rows — the bookmark was deleted (on this
-// device or another) or never belonged to this user. Exported so sync can
-// recognize this exact, unambiguous case and reconcile instead of retrying
-// an edit that can never land (see `sync/sync-bookmarks.ts`).
-export const BOOKMARK_NOT_FOUND_ERROR_MESSAGE = 'Bookmark not found or not owned by the current user.';
-
-export interface CreateBookmarkOutput {
-  bookmark_id: string;
-  status: 'created' | 'duplicate' | 'queued';
-  metadata_status: MetadataStatus;
-  collection_id?: string | null;
-}
-
-export interface BulkCreateBookmarkOutput extends CreateBookmarkOutput {
-  client_id?: string | null;
-  url_hash?: string | null;
-}
-
-export interface ListBookmarksParams {
-  query?: string;
-  collection_id?: string | null;
-  tag_ids?: string[];
-  is_archived?: boolean;
-  limit?: number;
-  cursor?: string;
-  sort?: 'created_at_desc' | 'created_at_asc' | 'updated_at_desc' | 'updated_at_asc';
-}
-
-export interface BookmarkDetail {
-  bookmark: Bookmark;
-  tags: Tag[];
-  collection: Collection | null;
-  enrichment: AIEnrichment | null;
-}
-
-export interface UpdateBookmarkInput {
-  title?: string | null;
-  description?: string | null;
-  notes?: string | null;
-  description_format?: TextFormat | null;
-  notes_format?: TextFormat | null;
-  collection_id?: string | null;
-  is_archived?: boolean;
-  deleted_at?: string | null;
-  // Generated metadata, pushed by sync once on-device enrichment completes so
-  // other devices see the enriched title/site/favicon rather than the bare
-  // create-time payload.
-  site_name?: string | null;
-  favicon_url?: string | null;
-  preview_image_url?: string | null;
-  metadata_status?: MetadataStatus;
-  dismissed_suggested_tags?: string[] | null;
-  dismissed_suggested_folders?: string[] | null;
-  reviewed_summary_tokens?: string[] | null;
-}
-
-export interface AddTagsInput {
-  bookmark_id: string;
-  tags: string[];
-  source: TagSource;
-}
-
-export interface RemoveTagsInput {
-  bookmark_id: string;
-  tags: string[];
-}
-
-/**
- * One bookmark's worth of work for `bulkAttachTagsAndCollections` (issue
- * #713): the bookmark must already exist server-side (bulk-created
- * separately). `tags` names are raw/unnormalized — the method normalizes and
- * dedupes them via `uniqueNormalizedTags` before sending. `collection_name`
- * mirrors `syncPendingImportCollections`'s single-collection-per-bookmark
- * import model; pass `null` to attach tags only.
- */
-export interface BulkAttachItem {
-  bookmark_id: string;
-  tags: Array<{ name: string; source: TagSource }>;
-  collection_name: string | null;
-}
-
-/**
- * Per-bookmark result of `bulkAttachTagsAndCollections`. `collection` is the
- * resolved-or-created collection row whenever `collection_name` was sent, even
- * if `collection_attached` is false (the bookmark already had a different
- * collection — see the RPC's `collection_id is null` guard) — callers still
- * need it to keep their local collections cache complete. `bookmark_updated_at`
- * is set only when the collection was actually attached (the RPC bumps it then,
- * matching what a normal collection-assigning PATCH does).
- */
-export interface BulkAttachResult {
-  bookmark_id: string;
-  tags: Tag[];
-  collection: Collection | null;
-  collection_attached: boolean;
-  bookmark_updated_at: string | null;
-}
-
-export interface UpdateAIEnrichmentInput {
-  bookmark_id: string;
-  summary?: string | null;
-  topics?: string[];
-  suggested_tags?: SuggestedTag[];
-  suggested_collection_id?: string | null;
-  status: EnrichmentStatus;
-  model?: string | null;
-  confidence?: number | null;
-}
-
-export interface ApplyAISuggestionsInput {
-  bookmark_id: string;
-  tag_names?: string[];
-  collection_id?: string | null;
-}
-
-/**
- * The device's freshest content fields, passed to `requestEnrichment` so the
- * `ai-enrich` function can reason about real metadata even when the cloud row
- * still lags behind on-device OpenGraph enrichment. All optional: only non-empty
- * values are sent, and the server falls back to the stored row for the rest.
- */
-export interface EnrichmentMetadataHint {
-  title?: string | null;
-  description?: string | null;
-  notes?: string | null;
-  site_name?: string | null;
-  content_type?: string | null;
-  collection_id?: string | null;
-}
-
-type PostgrestSort = 'created_at.desc' | 'created_at.asc' | 'updated_at.desc' | 'updated_at.asc';
-
-type RemoteAIEnrichment = Omit<AIEnrichment, 'topics' | 'suggested_tags'> & {
-  topics: unknown;
-  suggested_tags: unknown;
-};
-
-const DEFAULT_PAGE_SIZE = 50;
-const MAX_PAGE_SIZE = 100;
-
-function nowIso(): string {
-  return new Date().toISOString();
-}
-
-function uniqueNormalizedTags(tags: string[]): Array<{ name: string; slug: string }> {
-  const seen = new Set<string>();
-  const normalized: Array<{ name: string; slug: string }> = [];
-
-  for (const tag of tags) {
-    const name = normalizeText(tag);
-    const slug = slugify(name);
-    if (!name || !slug || seen.has(slug)) {
-      continue;
-    }
-
-    seen.add(slug);
-    normalized.push({ name, slug });
-  }
-
-  return normalized;
-}
-
-function requirePayload(input: CreateBookmarkInput): { url: string | null; contentType: Bookmark['content_type'] } {
-  if (input.url) {
-    const normalized = normalizeUrl(input.url);
-    if (!normalized) {
-      throw new Error('createBookmark requires a valid URL when url is provided.');
-    }
-
-    const contentType: Bookmark['content_type'] =
-      input.content_type && isContentType(input.content_type)
-        ? input.content_type === 'image' && !input.preview_image_url?.trim()
-          ? 'url'
-          : input.content_type
-        : 'url';
-    return { url: normalized, contentType };
-  }
-
-  if (input.shared_text?.trim()) {
-    return { url: null, contentType: 'text' };
-  }
-
-  // A restored text memo can legitimately have no body while retaining a
-  // title, notes, tags, or collection. Its explicit type is enough to create
-  // the row; manual Add still validates that newly-authored memos have a body.
-  if (input.content_type === 'text') {
-    return { url: null, contentType: 'text' };
-  }
-
-  // Image-only capture (a screenshot with no link): the client always
-  // uploads the binary to Storage and resolves its public URL BEFORE calling
-  // createBookmark, so this branch only ever sees an already-uploaded row —
-  // requiring preview_image_url here (rather than trusting content_type
-  // alone) is what stops a bookmark from ever being created server-side
-  // before its image binary has genuinely landed (STASH-65 invariant).
-  if (input.content_type === 'image' && input.preview_image_url?.trim()) {
-    return { url: null, contentType: 'image' };
-  }
-
-  throw new Error('createBookmark requires either url, shared_text, or an uploaded image.');
-}
-
-function remoteToBookmark(row: RemoteBookmark): Bookmark {
-  return { ...row, sync_status: 'synced', ever_synced: true };
-}
-
-// Validate emptiness with a trimmed copy, but keep the original value —
-// leading/trailing whitespace can be meaningful Markdown (e.g. an indented
-// code block), so a memo body must not be silently rewritten on upload.
-function descriptionFromInput(input: {
-  description?: string | null;
-  shared_text?: string;
-}): string | null {
-  if (input.description?.trim()) {
-    return input.description;
-  }
-  if (input.shared_text?.trim()) {
-    return input.shared_text;
-  }
-  return null;
-}
-
-function enrichmentFromRemote(row: RemoteAIEnrichment): AIEnrichment {
-  return {
-    ...row,
-    topics: Array.isArray(row.topics) ? (row.topics as string[]) : [],
-    suggested_tags: Array.isArray(row.suggested_tags)
-      ? (row.suggested_tags as SuggestedTag[])
-      : [],
-    // Tolerate pre-M12 rows (and any backend without the columns yet): absent →
-    // not degraded. The column defaults to false server-side, but the mapper
-    // stays defensive so a missing field can never read as `undefined`.
-    degraded: row.degraded === true,
-    degraded_reason: row.degraded ? row.degraded_reason ?? null : null,
-    // Tolerate rows from before the column existed: absent → no new-collection
-    // suggestion. (RemoteAIEnrichment spreads the column through; this just
-    // guarantees null over undefined.)
-    suggested_collection_name: row.suggested_collection_name ?? null,
-  };
-}
-
-function inFilter(values: string[]): string {
-  // Escape backslashes first, then quotes — otherwise a trailing `\` combines
-  // with our injected `\"` and lets the value break out of its own quote.
-  return `(${values
-    .map((value) => `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`)
-    .join(',')})`;
-}
-
-function sortParam(sort: ListBookmarksParams['sort']): PostgrestSort {
-  switch (sort) {
-    case 'created_at_asc':
-      return 'created_at.asc';
-    case 'updated_at_asc':
-      return 'updated_at.asc';
-    case 'updated_at_desc':
-      return 'updated_at.desc';
-    case 'created_at_desc':
-    default:
-      return 'created_at.desc';
-  }
-}
-
-function appendSearchParams(path: string, params: URLSearchParams): string {
-  const query = params.toString();
-  return query ? `${path}?${query}` : path;
-}
-
-function bulkCreateKey(item: { urlHash: string | null; clientId: string | null }): string | null {
-  if (item.urlHash) {
-    return `url:${item.urlHash}`;
-  }
-  if (item.clientId) {
-    return `client:${item.clientId}`;
-  }
-  return null;
-}
-
-/**
- * AI enrichment request timeout: The edge function's Gemini provider has a 15s timeout
- * before falling back to heuristics (supabase/functions/ai-enrich/gemini-provider.ts).
- * 35s ensures the client does not abort prematurely before the edge function can catch
- * the timeout and return its heuristic fallback.
- */
-export const AI_ENRICH_REQUEST_TIMEOUT_MS = 35_000;
+export { AI_ENRICH_REQUEST_TIMEOUT_MS, BOOKMARK_NOT_FOUND_ERROR_MESSAGE } from '@/api/bookmark-helpers';
+export { type AddTagsInput, type ApplyAISuggestionsInput, type BookmarkDetail, type BulkAttachItem, type BulkAttachResult, type BulkCreateBookmarkOutput, type CreateBookmarkOutput, type EnrichmentMetadataHint, type ListBookmarksParams, type RemoteBookmark, type RemoveTagsInput, type UpdateAIEnrichmentInput, type UpdateBookmarkInput } from '@/api/bookmark-types';
 
 export class BookmarkApi {
   constructor(
     private readonly session: SupabaseAuthSession,
     private readonly client: StashSupabaseClient = createSupabaseClient(),
-  ) {}
+  ) { }
 
   /**
    * Wraps `client.request` for PostgREST endpoints that always answer with a
@@ -385,11 +82,7 @@ export class BookmarkApi {
     bookmarkId: string,
     contentType: string,
   ): { uploadUrl: string; publicUrl: string; headers: Record<string, string> } {
-    const path = `${this.session.user.id}/${bookmarkId}`;
-    return this.client.storageUploadTarget('bookmark-images', path, {
-      accessToken: this.session.access_token,
-      contentType,
-    });
+    return writes.imageUploadTarget.call({ session: this.session, client: this.client }, bookmarkId, contentType);
   }
 
   /**
@@ -401,480 +94,19 @@ export class BookmarkApi {
    * is a harmless no-op), but callers don't need to filter for that.
    */
   async deleteImages(bookmarkIds: string[]): Promise<void> {
-    const paths = bookmarkIds.map((id) => `${this.session.user.id}/${id}`);
-    await this.client.removeStorageObjects('bookmark-images', paths, this.session.access_token);
+    return writes.deleteImages.call({ session: this.session, client: this.client }, bookmarkIds);
   }
 
   async createBookmark(input: CreateBookmarkInput): Promise<CreateBookmarkOutput> {
-    const payload = requirePayload(input);
-    const timestamp = nowIso();
-    const title = input.title?.trim() || null;
-    const description = descriptionFromInput(input);
-    const notes = input.notes?.length ? input.notes : null;
-    const sourceApp = input.source_app?.trim() || null;
-    const siteName = input.site_name?.trim() || null;
-    const faviconUrl = input.favicon_url?.trim() || null;
-    const previewImageUrl = input.preview_image_url?.trim() || null;
-    const metadataStatus = input.metadata_status ?? 'pending';
-    const enrichmentPolicy = input.enrichment_policy ?? 'auto';
-
-    // Dedupe on the canonical URL (tracking params / fragment stripped), the
-    // same key the local store uses, so the server's active-URL unique index
-    // and the client agree on what counts as "the same bookmark". Storing the
-    // raw normalized URL here would let `…?utm_source=x` and the bare URL
-    // become two separate cloud rows.
-    const urlHash = payload.url ? canonicalizeUrl(payload.url) : null;
-    const clientId = input.client_id ?? null;
-
-    // Idempotent saves: reuse the existing row rather than inserting a twin. URL
-    // saves dedupe on the canonical url_hash. URL-less rows (text notes) have no
-    // such key, so they dedupe on the device-generated client_id — which a
-    // retried upload resends unchanged, closing the gap that let an interrupted
-    // text-note sync create a duplicate.
-    const existingByUrl = urlHash ? await this.findActiveBookmarkByUrlHash(urlHash) : null;
-    const existing = existingByUrl ?? (clientId ? await this.findBookmarkByClientId(clientId) : null);
-    if (existing) {
-      // A retried create can land here after its FIRST attempt already
-      // succeeded server-side (only the response was lost) — but this
-      // request may carry a freshly-edited body (createUploadPayload
-      // refreshes shared_text/description from the latest local state
-      // before every upload attempt, including a retry). Push it through
-      // instead of silently discarding it along with `last_saved_at`, or an
-      // edit made between the original create and this idempotent retry is
-      // lost — the cloud keeps the stale text forever.
-      //
-      // Only do this when `client_id` proves `existing` is THIS device's
-      // own earlier attempt, not a urlHash match — a urlHash match can be a
-      // genuinely different save (e.g. another device saved the same URL
-      // since the last pull), and patching its description with this
-      // request's payload would corrupt an unrelated row.
-      const isOwnRetry = clientId !== null && existing.client_id === clientId;
-      await this.updateBookmark(existing.id, {
-        ...(isOwnRetry ? {
-          description: description ?? undefined,
-          notes: input.notes === undefined ? undefined : notes,
-          description_format: input.description_format,
-          notes_format: input.notes_format,
-        } : {}),
-        last_saved_at: timestamp,
-      });
-      return {
-        bookmark_id: existing.id,
-        status: 'duplicate',
-        metadata_status: existing.metadata_status,
-        collection_id: existing.collection_id,
-      };
-    }
-
-    const canonicalUrl =
-      payload.url && input.canonical_url ? normalizeUrl(input.canonical_url) : null;
-    const createBody = {
-      // The client's own permanent id for this bookmark (see CreateBookmarkInput.id).
-      // Sent explicitly so Postgres uses it as the primary key instead of
-      // generating a new one — the local row never has to adopt a different id.
-      id: input.id,
-      user_id: this.session.user.id,
-      url: payload.url,
-      canonical_url: canonicalUrl,
-      url_hash: urlHash,
-      client_id: clientId,
-      title,
-      description,
-      description_format: input.description_format,
-      notes_format: input.notes_format,
-      notes,
-      source_app: sourceApp,
-      content_type: payload.contentType,
-      preview_image_url: previewImageUrl,
-      favicon_url: faviconUrl,
-      site_name: siteName,
-      collection_id: input.collection_id ?? null,
-      is_archived: false,
-      created_at: input.created_at || timestamp,
-      updated_at: timestamp,
-      last_saved_at: timestamp,
-      metadata_status: metadataStatus,
-      enrichment_policy: enrichmentPolicy,
-    };
-
-    let rows: RemoteBookmark[];
-    try {
-      rows = await this.requestArray<RemoteBookmark>('/rest/v1/bookmarks', {
-        method: 'POST',
-        accessToken: this.session.access_token,
-        headers: { Prefer: 'return=representation' },
-        body: createBody,
-      });
-    } catch (error) {
-      // If collection_id violated PostgreSQL Row-Level Security (STASH-7M),
-      // retry without collection_id. RLS on public.bookmarks enforces that
-      // collection_id must belong to auth.uid(). If an unowned collection_id
-      // (e.g. from an account re-home or deleted collection) is sent, PostgREST
-      // returns HTTP 403 Forbidden ("new row violates row-level security policy").
-      // Stripping collection_id allows the bookmark to be saved safely under the
-      // user's account.
-      if (
-        error instanceof SupabaseRequestError &&
-        error.status === 403 &&
-        Boolean(createBody.collection_id) &&
-        error.message.toLowerCase().includes('row-level security')
-      ) {
-        return this.createBookmark({
-          ...input,
-          collection_id: null,
-        });
-      }
-
-      // If a concurrent (or retried) insert won the race between our lookup and
-      // our own insert, treat the unique-index conflict as the documented
-      // duplicate save. Try the active-URL key first, then fall back to the
-      // client_id key: a retried URL create whose original was archived in the
-      // meantime conflicts on the all-rows client_id index (not the active-only
-      // url_hash one), so the url_hash lookup alone would miss the archived
-      // original and leave the entry failing forever.
-      if (error instanceof SupabaseRequestError && error.status === 409) {
-        // The primary key is the final idempotency key. Rows created before
-        // `client_id` can miss both ordinary lookups after their URL changes or
-        // they move to Trash; without this lookup their retry remains stuck on
-        // `bookmarks_pkey` forever (STASH-4Z).
-        const duplicateById = input.id ? await this.findBookmarkById(input.id) : null;
-        const duplicateByUrl = urlHash ? await this.findActiveBookmarkByUrlHash(urlHash) : null;
-        const duplicate =
-          duplicateById ?? duplicateByUrl ??
-          (clientId ? await this.findBookmarkByClientId(clientId) : null);
-        if (duplicate) {
-          // Same idempotent-retry case as the pre-insert `existing` branch
-          // above (see its comment) — the insert itself lost the race to
-          // this request's own earlier attempt, so apply the same
-          // permanent-id/client-id-proven refreshed description here too.
-          const isOwnRetry = duplicate.id === input.id ||
-            (clientId !== null && duplicate.client_id === clientId);
-          await this.updateBookmark(duplicate.id, {
-            ...(isOwnRetry ? {
-              description: description ?? undefined,
-              notes: input.notes === undefined ? undefined : notes,
-              description_format: input.description_format,
-              notes_format: input.notes_format,
-            } : {}),
-            last_saved_at: timestamp,
-          });
-          return {
-            bookmark_id: duplicate.id,
-            status: 'duplicate',
-            metadata_status: duplicate.metadata_status,
-            collection_id: duplicate.collection_id,
-          };
-        }
-
-        // When input.id collided with bookmarks_pkey belonging to another user
-        // (e.g. after logout or account transition), RLS prevents findBookmarkById
-        // from seeing the row. Because bookmarks_pkey is a global constraint across
-        // all users in public.bookmarks, this user cannot insert with input.id.
-        // Mint a fresh UUID and retry the insert so the bookmark can be saved (STASH-6T).
-        const isPkeyConflict =
-          error.message.includes('bookmarks_pkey') ||
-          error.message.includes('unique constraint');
-        if (isPkeyConflict && input.id) {
-          const freshId = makeUuid();
-          const retryBody = {
-            ...createBody,
-            id: freshId,
-          };
-          const retryRows = await this.requestArray<RemoteBookmark>('/rest/v1/bookmarks', {
-            method: 'POST',
-            accessToken: this.session.access_token,
-            headers: { Prefer: 'return=representation' },
-            body: retryBody,
-          });
-          const retryCreated = retryRows[0];
-          if (!retryCreated) {
-            throw new Error('Supabase did not return the created bookmark after pkey retry.');
-          }
-          return {
-            bookmark_id: retryCreated.id,
-            status: 'duplicate',
-            metadata_status: retryCreated.metadata_status,
-            collection_id: retryCreated.collection_id,
-          };
-        }
-      }
-      throw error;
-    }
-
-    const created = rows[0];
-    if (!created) {
-      throw new Error('Supabase did not return the created bookmark.');
-    }
-
-    return {
-      bookmark_id: created.id,
-      status: 'created',
-      metadata_status: created.metadata_status,
-      collection_id: created.collection_id,
-    };
+    return writes.createBookmark.call({ findActiveBookmarkByUrlHash: this.findActiveBookmarkByUrlHash.bind(this), findBookmarkByClientId: this.findBookmarkByClientId.bind(this), updateBookmark: this.updateBookmark.bind(this), session: this.session, requestArray: this.requestArray.bind(this), findBookmarkById: this.findBookmarkById.bind(this) }, input);
   }
 
   async createBookmarks(inputs: CreateBookmarkInput[]): Promise<BulkCreateBookmarkOutput[]> {
-    if (inputs.length === 0) {
-      return [];
-    }
-
-    const timestamp = nowIso();
-    const prepared = inputs.map((input) => {
-      const payload = requirePayload(input);
-      const title = input.title?.trim() || null;
-      const description = descriptionFromInput(input);
-      const notes = input.notes?.length ? input.notes : null;
-      const sourceApp = input.source_app?.trim() || null;
-      const siteName = input.site_name?.trim() || null;
-      const faviconUrl = input.favicon_url?.trim() || null;
-      const previewImageUrl = input.preview_image_url?.trim() || null;
-      const metadataStatus = input.metadata_status ?? 'pending';
-      const enrichmentPolicy = input.enrichment_policy ?? 'auto';
-      const urlHash = payload.url ? canonicalizeUrl(payload.url) : null;
-      const clientId = input.client_id ?? null;
-      const canonicalUrl =
-        payload.url && input.canonical_url ? normalizeUrl(input.canonical_url) : null;
-      return {
-        urlHash,
-        clientId,
-        body: {
-          // See createBookmark's createBody: sent explicitly so Postgres uses
-          // it as the primary key instead of generating a new one.
-          id: input.id,
-          user_id: this.session.user.id,
-          url: payload.url,
-          canonical_url: canonicalUrl,
-          url_hash: urlHash,
-          client_id: clientId,
-          title,
-          description,
-          description_format: input.description_format,
-          notes_format: input.notes_format,
-          notes,
-          source_app: sourceApp,
-          content_type: payload.contentType,
-          preview_image_url: previewImageUrl,
-          favicon_url: faviconUrl,
-          site_name: siteName,
-          collection_id: input.collection_id ?? null,
-          is_archived: false,
-          deleted_at: null,
-          created_at: input.created_at || timestamp,
-          updated_at: timestamp,
-          last_saved_at: timestamp,
-          metadata_status: metadataStatus,
-          enrichment_policy: enrichmentPolicy,
-        },
-      };
-    });
-
-    const [existingByUrlHash, existingByClientId] = await Promise.all([
-      this.findActiveBookmarksByUrlHashes(
-        prepared.map((item) => item.urlHash).filter((value): value is string => value !== null),
-      ),
-      this.findBookmarksByClientIds(
-        prepared.map((item) => item.clientId).filter((value): value is string => value !== null),
-      ),
-    ]);
-
-    const outputs: Array<BulkCreateBookmarkOutput | null> = new Array(inputs.length).fill(null);
-    const duplicateIds = new Set<string>();
-    // A retried create in this batch can find its OWN earlier attempt
-    // already landed (response lost) — same idempotent-duplicate case the
-    // single-entry createBookmark handles. Track a refreshed description
-    // per duplicate so it can be pushed individually below instead of
-    // discarded along with the shared last_saved_at-only bump.
-    const duplicateContentUpdates = new Map<string, UpdateBookmarkInput>();
-    const pendingByKey = new Map<string, number>();
-    const duplicateIndexesByInsertIndex = new Map<number, number[]>();
-    const inserts: Array<{ index: number; body: (typeof prepared)[number]['body'] }> = [];
-
-    prepared.forEach((item, index) => {
-      const existingByUrl = item.urlHash ? existingByUrlHash.get(item.urlHash) : null;
-      const existing = existingByUrl ?? (item.clientId ? existingByClientId.get(item.clientId) : null);
-      if (existing) {
-        duplicateIds.add(existing.id);
-        // Only when client_id proves `existing` is THIS device's own
-        // earlier attempt — a urlHash match can be a genuinely different
-        // save (another device saved the same URL since the last pull), and
-        // patching its description with this request's payload would
-        // corrupt an unrelated row.
-        const isOwnRetry = item.clientId !== null && existing.client_id === item.clientId;
-        const hasContent = item.body.description !== null || inputs[index].notes !== undefined;
-        if (isOwnRetry && hasContent) {
-          duplicateContentUpdates.set(existing.id, {
-            description: item.body.description ?? undefined,
-            notes: inputs[index].notes === undefined ? undefined : item.body.notes,
-            description_format: item.body.description !== null ? item.body.description_format : undefined,
-            notes_format: inputs[index].notes !== undefined ? item.body.notes_format : undefined,
-          });
-        }
-        outputs[index] = {
-          bookmark_id: existing.id,
-          status: 'duplicate',
-          metadata_status: existing.metadata_status,
-          client_id: existing.client_id,
-          url_hash: existing.url_hash,
-        };
-        return;
-      }
-      const key = bulkCreateKey(item);
-      if (key) {
-        const firstIndex = pendingByKey.get(key);
-        if (firstIndex !== undefined) {
-          const duplicates = duplicateIndexesByInsertIndex.get(firstIndex) ?? [];
-          duplicates.push(index);
-          duplicateIndexesByInsertIndex.set(firstIndex, duplicates);
-          return;
-        }
-        pendingByKey.set(key, index);
-      }
-      inserts.push({ index, body: item.body });
-    });
-
-    if (duplicateIds.size > 0) {
-      // updateLastSavedAt applies ONE shared body to every id in one PATCH,
-      // so it can't carry a per-row refreshed description — push those
-      // individually, and batch the rest (the common case: a plain
-      // duplicate with nothing new to say) through the cheap shared bump.
-      const idsNeedingOnlyTimestamp = [...duplicateIds].filter(
-        (id) => !duplicateContentUpdates.has(id),
-      );
-      await Promise.all([
-        ...[...duplicateContentUpdates].map(([id, content]) =>
-          this.updateBookmark(id, { ...content, last_saved_at: timestamp }),
-        ),
-        idsNeedingOnlyTimestamp.length > 0
-          ? this.updateLastSavedAt(idsNeedingOnlyTimestamp, timestamp)
-          : Promise.resolve(),
-      ]);
-    }
-
-    if (inserts.length > 0) {
-      let rows: RemoteBookmark[];
-      try {
-        rows = await this.requestArray<RemoteBookmark>('/rest/v1/bookmarks', {
-          method: 'POST',
-          accessToken: this.session.access_token,
-          headers: { Prefer: 'return=representation' },
-          body: inserts.map((item) => item.body),
-        });
-      } catch (error) {
-        if (
-          !(error instanceof SupabaseRequestError) ||
-          (error.status !== 409 &&
-            !(error.status === 403 && error.message.toLowerCase().includes('row-level security')))
-        ) {
-          throw error;
-        }
-
-        // A single legacy row whose original create landed without a response
-        // can make the whole atomic bulk INSERT fail on `bookmarks_pkey`. Retry
-        // this exceptional path item-by-item: createBookmark's 409 recovery can
-        // identify that owner-scoped row by its permanent id, while unrelated
-        // rows in the chunk still upload normally. The common bulk path keeps
-        // its one-request behavior.
-        // Similarly, an unowned collection_id from an account re-home or deleted
-        // collection causes a 403 row-level security error on the bulk insert;
-        // retrying item-by-item allows createBookmark to self-heal by stripping
-        // the unowned collection_id.
-        const settled = await Promise.allSettled(
-          inserts.map(async (item) => ({
-            item,
-            result: await this.createBookmark(inputs[item.index]!),
-          })),
-        );
-        // Promise.all would reject as soon as the first retry fails, leaving
-        // sibling requests detached while syncInFlight unwinds. Keep the busy
-        // guard active until every already-launched write has settled, then
-        // propagate the first failure without publishing partial results.
-        const recovered = settled.map((result) => {
-          if (result.status === 'rejected') throw result.reason;
-          return result.value;
-        });
-        for (const { item, result } of recovered) {
-          const preparedItem = prepared[item.index]!;
-          outputs[item.index] = {
-            ...result,
-            client_id: preparedItem.clientId,
-            url_hash: preparedItem.urlHash,
-          };
-          const duplicateIndexes = duplicateIndexesByInsertIndex.get(item.index) ?? [];
-          for (const duplicateIndex of duplicateIndexes) {
-            outputs[duplicateIndex] = {
-              ...result,
-              status: 'duplicate',
-              client_id: preparedItem.clientId,
-              url_hash: preparedItem.urlHash,
-            };
-          }
-        }
-        rows = [];
-      }
-      const rowsByClientId = new Map(
-        rows
-          .filter((row) => row.client_id)
-          .map((row) => [row.client_id as string, row] as const),
-      );
-      const rowsByUrlHash = new Map(
-        rows
-          .filter((row) => row.url_hash)
-          .map((row) => [row.url_hash as string, row] as const),
-      );
-      for (const item of inserts) {
-        if (outputs[item.index]) {
-          continue;
-        }
-        const preparedItem = prepared[item.index]!;
-        const created =
-          (preparedItem.clientId ? rowsByClientId.get(preparedItem.clientId) : undefined) ??
-          (preparedItem.urlHash ? rowsByUrlHash.get(preparedItem.urlHash) : undefined);
-        if (!created) {
-          throw new Error('Supabase did not return every bulk-created bookmark.');
-        }
-        outputs[item.index] = {
-          bookmark_id: created.id,
-          status: 'created',
-          metadata_status: created.metadata_status,
-          collection_id: created.collection_id,
-          client_id: created.client_id,
-          url_hash: created.url_hash,
-        };
-        const duplicateIndexes = duplicateIndexesByInsertIndex.get(item.index) ?? [];
-        for (const duplicateIndex of duplicateIndexes) {
-          outputs[duplicateIndex] = {
-            bookmark_id: created.id,
-            status: 'duplicate',
-            metadata_status: created.metadata_status,
-            collection_id: created.collection_id,
-            client_id: created.client_id,
-            url_hash: created.url_hash,
-          };
-        }
-      }
-    }
-
-    return outputs.map((output) => {
-      if (!output) {
-        throw new Error('Bulk create did not resolve every bookmark.');
-      }
-      return output;
-    });
+    return writes.createBookmarks.call({ session: this.session, findActiveBookmarksByUrlHashes: this.findActiveBookmarksByUrlHashes.bind(this), findBookmarksByClientIds: this.findBookmarksByClientIds.bind(this), updateBookmark: this.updateBookmark.bind(this), updateLastSavedAt: this.updateLastSavedAt.bind(this), requestArray: this.requestArray.bind(this), createBookmark: this.createBookmark.bind(this) }, inputs);
   }
 
   async listBookmarks(params: ListBookmarksParams = {}): Promise<Bookmark[]> {
-    if (params.tag_ids && params.tag_ids.length > 0) {
-      return this.listBookmarksByTags(params);
-    }
-
-    const query = this.baseBookmarkListParams(params);
-    const rows = await this.requestArray<RemoteBookmark>(
-      appendSearchParams('/rest/v1/bookmarks', query),
-      { accessToken: this.session.access_token },
-    );
-
-    return rows.map(remoteToBookmark);
+    return reads.listBookmarks.call({ listBookmarksByTags: this.listBookmarksByTags.bind(this), baseBookmarkListParams: this.baseBookmarkListParams.bind(this), requestArray: this.requestArray.bind(this), session: this.session }, params);
   }
 
   /** All bookmarks changed after `since` (all of them when null), oldest first. */
@@ -882,22 +114,12 @@ export class BookmarkApi {
     since: string | null,
     beforePage?: () => void,
   ): Promise<Bookmark[]> {
-    const rows = await this.fetchAllPages<RemoteBookmark>('/rest/v1/bookmarks', (query) => {
-      query.set('order', 'updated_at.asc,id.asc');
-      if (since) {
-        query.set('updated_at', `gt.${since}`);
-      }
-    }, beforePage);
-    return rows.map(remoteToBookmark);
+    return reads.listBookmarksUpdatedSince.call({ fetchAllPages: this.fetchAllPages.bind(this) }, since, beforePage);
   }
 
   /** Every bookmark ID the user owns — used to detect remote deletions. */
   async listBookmarkIds(beforePage?: () => void): Promise<string[]> {
-    const rows = await this.fetchAllPages<{ id: string }>('/rest/v1/bookmarks', (query) => {
-      query.set('select', 'id');
-      query.set('order', 'id.asc');
-    }, beforePage);
-    return rows.map((row) => row.id);
+    return reads.listBookmarkIds.call({ fetchAllPages: this.fetchAllPages.bind(this) }, beforePage);
   }
 
   /** AI enrichments changed after `since` (all of them when null), oldest first. */
@@ -905,135 +127,54 @@ export class BookmarkApi {
     since: string | null,
     beforePage?: () => void,
   ): Promise<AIEnrichment[]> {
-    const rows = await this.fetchAllPages<RemoteAIEnrichment>('/rest/v1/ai_enrichments', (query) => {
-      query.set('order', 'updated_at.asc,id.asc');
-      if (since) {
-        query.set('updated_at', `gt.${since}`);
-      }
-    }, beforePage);
-    return rows.map(enrichmentFromRemote);
+    return enrichment.listEnrichmentsUpdatedSince.call({ fetchAllPages: this.fetchAllPages.bind(this) }, since, beforePage);
   }
 
   /** All of the user's tags. */
   async listTags(beforePage?: () => void): Promise<Tag[]> {
-    return this.fetchAllPages<Tag>('/rest/v1/tags', (query) => {
-      query.set('order', 'name.asc,id.asc');
-    }, beforePage);
+    return organization.listTags.call({ fetchAllPages: this.fetchAllPages.bind(this) }, beforePage);
   }
 
   /** All tag links for the user's bookmarks (RLS scopes them to the owner). */
   async listBookmarkTags(beforePage?: () => void): Promise<BookmarkTag[]> {
-    return this.fetchAllPages<BookmarkTag>('/rest/v1/bookmark_tags', (query) => {
-      // bookmark_tags has no user_id column; RLS scopes rows to the owner.
-      query.delete('user_id');
-      query.set('order', 'bookmark_id.asc,tag_id.asc');
-    }, beforePage);
+    return organization.listBookmarkTags.call({ fetchAllPages: this.fetchAllPages.bind(this) }, beforePage);
   }
 
   /** All of the user's collections. */
   async listCollections(beforePage?: () => void): Promise<Collection[]> {
-    return this.fetchAllPages<Collection>('/rest/v1/collections', (query) => {
-      query.set('order', 'name.asc,id.asc');
-    }, beforePage);
+    return organization.listCollections.call({ fetchAllPages: this.fetchAllPages.bind(this) }, beforePage);
   }
 
   async createCollection(name: string, description?: string): Promise<Collection> {
-    const timestamp = nowIso();
-    const rows = await this.requestArray<Collection>('/rest/v1/collections', {
-      method: 'POST',
-      accessToken: this.session.access_token,
-      headers: { Prefer: 'return=representation' },
-      body: {
-        user_id: this.session.user.id,
-        name: normalizeText(name),
-        description: description?.trim() || null,
-        created_at: timestamp,
-        updated_at: timestamp,
-      },
-    });
-    const created = rows[0];
-    if (!created) {
-      throw new Error('Supabase did not return the created collection.');
-    }
-    return created;
+    return organization.createCollection.call({ requestArray: this.requestArray.bind(this), session: this.session }, name, description);
   }
 
   async updateCollection(
     collectionId: string,
     updates: { name?: string; description?: string | null },
   ): Promise<Collection> {
-    const timestamp = nowIso();
-    const body: Record<string, unknown> = {
-      updated_at: timestamp,
-    };
-    if (updates.name !== undefined) {
-      body.name = normalizeText(updates.name);
-    }
-    if (updates.description !== undefined) {
-      body.description = updates.description?.trim() || null;
-    }
-    const rows = await this.requestArray<Collection>(
-      appendSearchParams(
-        '/rest/v1/collections',
-        new URLSearchParams({
-          id: `eq.${collectionId}`,
-          user_id: `eq.${this.session.user.id}`,
-        }),
-      ),
-      {
-        method: 'PATCH',
-        accessToken: this.session.access_token,
-        headers: { Prefer: 'return=representation' },
-        body,
-      },
-    );
-    const updated = rows[0];
-    if (!updated) {
-      throw new Error('Supabase did not return the updated collection.');
-    }
-    return updated;
+    return organization.updateCollection.call({ requestArray: this.requestArray.bind(this), session: this.session }, collectionId, updates);
   }
 
   async deleteCollection(
     collectionId: string,
     action: 'uncategorize' | 'trash' = 'uncategorize',
   ): Promise<void> {
-    return this.deleteCollections([collectionId], action);
+    return organization.deleteCollection.call({ deleteCollections: this.deleteCollections.bind(this) }, collectionId, action);
   }
 
   async deleteCollections(
     collectionIds: string[],
     action: 'uncategorize' | 'trash' = 'uncategorize',
   ): Promise<void> {
-    if (collectionIds.length === 0) {
-      return;
-    }
-    await this.client.request('/rest/v1/rpc/delete_user_collections', {
-      method: 'POST',
-      accessToken: this.session.access_token,
-      body: {
-        collection_ids: collectionIds,
-        delete_action: action,
-      },
-    });
+    return organization.deleteCollections.call({ client: this.client, session: this.session }, collectionIds, action);
   }
 
   async mergeCollections(
     sourceCollectionIds: string[],
     targetCollectionId: string,
   ): Promise<void> {
-    const sources = sourceCollectionIds.filter((id) => id !== targetCollectionId);
-    if (sources.length === 0) {
-      return;
-    }
-    await this.client.request('/rest/v1/rpc/merge_user_collections', {
-      method: 'POST',
-      accessToken: this.session.access_token,
-      body: {
-        source_collection_ids: sources,
-        target_collection_id: targetCollectionId,
-      },
-    });
+    return organization.mergeCollections.call({ client: this.client, session: this.session }, sourceCollectionIds, targetCollectionId);
   }
 
   private async fetchAllPages<T>(
@@ -1062,133 +203,22 @@ export class BookmarkApi {
   }
 
   async getBookmark(bookmarkId: string): Promise<BookmarkDetail | null> {
-    const bookmarkRows = await this.requestArray<RemoteBookmark>(
-      appendSearchParams(
-        '/rest/v1/bookmarks',
-        new URLSearchParams({
-          select: '*',
-          id: `eq.${bookmarkId}`,
-          user_id: `eq.${this.session.user.id}`,
-          limit: '1',
-        }),
-      ),
-      { accessToken: this.session.access_token },
-    );
-    const remoteBookmark = bookmarkRows[0];
-    if (!remoteBookmark) {
-      return null;
-    }
-
-    const [tags, collection, enrichment] = await Promise.all([
-      this.listTagsForBookmark(bookmarkId),
-      remoteBookmark.collection_id ? this.getCollection(remoteBookmark.collection_id) : null,
-      this.getLatestEnrichment(bookmarkId),
-    ]);
-
-    return {
-      bookmark: remoteToBookmark(remoteBookmark),
-      tags,
-      collection,
-      enrichment,
-    };
+    return reads.getBookmark.call({ requestArray: this.requestArray.bind(this), session: this.session, listTagsForBookmark: this.listTagsForBookmark.bind(this), getCollection: this.getCollection.bind(this), getLatestEnrichment: this.getLatestEnrichment.bind(this) }, bookmarkId);
   }
 
   async updateBookmark(
     bookmarkId: string,
     input: UpdateBookmarkInput & { last_saved_at?: string },
   ): Promise<Bookmark> {
-    try {
-      const rows = await this.requestArray<RemoteBookmark>(
-        appendSearchParams(
-          '/rest/v1/bookmarks',
-          new URLSearchParams({
-            id: `eq.${bookmarkId}`,
-            user_id: `eq.${this.session.user.id}`,
-          }),
-        ),
-        {
-          method: 'PATCH',
-          accessToken: this.session.access_token,
-          headers: { Prefer: 'return=representation' },
-          body: {
-            ...input,
-            updated_at: nowIso(),
-          },
-        },
-      );
-
-      const updated = rows[0];
-      if (!updated) {
-        throw new Error(BOOKMARK_NOT_FOUND_ERROR_MESSAGE);
-      }
-
-      return remoteToBookmark(updated);
-    } catch (error) {
-      // If collection_id violated PostgreSQL Row-Level Security, retry
-      // without collection_id. RLS on public.bookmarks enforces that
-      // collection_id must belong to auth.uid(). If an unowned collection_id
-      // is sent, PostgREST returns HTTP 403 Forbidden ("new row violates
-      // row-level security policy"). Stripping collection_id allows the bookmark
-      // update to land safely.
-      if (
-        error instanceof SupabaseRequestError &&
-        error.status === 403 &&
-        Boolean(input.collection_id) &&
-        error.message.toLowerCase().includes('row-level security')
-      ) {
-        return this.updateBookmark(bookmarkId, {
-          ...input,
-          collection_id: null,
-        });
-      }
-      throw error;
-    }
+    return writes.updateBookmark.call({ requestArray: this.requestArray.bind(this), session: this.session }, bookmarkId, input);
   }
 
   async deleteBookmark(bookmarkId: string, permanent = false): Promise<void> {
-    if (!permanent) {
-      await this.updateBookmark(bookmarkId, { is_archived: true });
-      return;
-    }
-
-    await this.client.request(
-      appendSearchParams(
-        '/rest/v1/bookmarks',
-        new URLSearchParams({
-          id: `eq.${bookmarkId}`,
-          user_id: `eq.${this.session.user.id}`,
-        }),
-      ),
-      {
-        method: 'DELETE',
-        accessToken: this.session.access_token,
-      },
-    );
+    return writes.deleteBookmark.call({ updateBookmark: this.updateBookmark.bind(this), client: this.client, session: this.session }, bookmarkId, permanent);
   }
 
   async addTags(input: AddTagsInput): Promise<Tag[]> {
-    const tags = uniqueNormalizedTags(input.tags);
-    const ensuredTags = await Promise.all(
-      tags.map((tag) => this.ensureTag(tag.name, tag.slug, input.source)),
-    );
-    const timestamp = nowIso();
-
-    if (ensuredTags.length > 0) {
-      await this.client.request('/rest/v1/bookmark_tags', {
-        method: 'POST',
-        accessToken: this.session.access_token,
-        headers: { Prefer: 'resolution=merge-duplicates' },
-        body: ensuredTags.map((tag) => ({
-          bookmark_id: input.bookmark_id,
-          tag_id: tag.id,
-          source: input.source,
-          confidence: null,
-          created_at: timestamp,
-        })),
-      });
-    }
-
-    return ensuredTags;
+    return organization.addTags.call({ ensureTag: this.ensureTag.bind(this), client: this.client, session: this.session }, input);
   }
 
   /**
@@ -1201,115 +231,15 @@ export class BookmarkApi {
    * `createBookmarks`.
    */
   async bulkAttachTagsAndCollections(items: BulkAttachItem[]): Promise<BulkAttachResult[]> {
-    if (items.length === 0) {
-      return [];
-    }
-
-    const payload = items.map((item) => {
-      const normalizedTags = uniqueNormalizedTags(item.tags.map((tag) => tag.name));
-      // uniqueNormalizedTags dedupes/normalizes name+slug but drops the
-      // per-tag `source`; resolve it back by slug (ops are already deduped
-      // per (bookmark, tag slug) by enqueueTagOp, so this is 1:1 in practice).
-      const sourceBySlug = new Map(
-        item.tags.map((tag) => [slugify(normalizeText(tag.name)), tag.source] as const),
-      );
-      return {
-        bookmark_id: item.bookmark_id,
-        tags: normalizedTags.map((tag) => ({
-          name: tag.name,
-          slug: tag.slug,
-          source: sourceBySlug.get(tag.slug) ?? ('user' as TagSource),
-        })),
-        collection_name: item.collection_name,
-      };
-    });
-
-    return this.requestArray<BulkAttachResult>(
-      '/rest/v1/rpc/bulk_attach_bookmark_tags_and_collections',
-      {
-        method: 'POST',
-        accessToken: this.session.access_token,
-        body: { items: payload },
-      },
-    );
+    return organization.bulkAttachTagsAndCollections.call({ requestArray: this.requestArray.bind(this), session: this.session }, items);
   }
 
   async removeTags(input: RemoveTagsInput): Promise<void> {
-    const tags = uniqueNormalizedTags(input.tags);
-    if (tags.length === 0) {
-      return;
-    }
-
-    const existingTags = await this.findTagsBySlugs(tags.map((tag) => tag.slug));
-    const tagIds = existingTags.map((tag) => tag.id);
-    if (tagIds.length === 0) {
-      return;
-    }
-
-    await this.client.request(
-      appendSearchParams(
-        '/rest/v1/bookmark_tags',
-        new URLSearchParams({
-          bookmark_id: `eq.${input.bookmark_id}`,
-          tag_id: `in.${inFilter(tagIds)}`,
-        }),
-      ),
-      { method: 'DELETE', accessToken: this.session.access_token },
-    );
+    return organization.removeTags.call({ findTagsBySlugs: this.findTagsBySlugs.bind(this), client: this.client, session: this.session }, input);
   }
 
   async updateAIEnrichment(input: UpdateAIEnrichmentInput): Promise<AIEnrichment> {
-    const existing = await this.getLatestEnrichment(input.bookmark_id);
-    const timestamp = nowIso();
-    const body = {
-      user_id: this.session.user.id,
-      bookmark_id: input.bookmark_id,
-      summary: input.summary ?? null,
-      topics: input.topics ?? [],
-      suggested_tags: input.suggested_tags ?? [],
-      suggested_collection_id: input.suggested_collection_id ?? null,
-      status: input.status,
-      model: input.model ?? null,
-      confidence: input.confidence ?? null,
-      updated_at: timestamp,
-    };
-
-    if (!existing) {
-      const rows = await this.requestArray<RemoteAIEnrichment>('/rest/v1/ai_enrichments', {
-        method: 'POST',
-        accessToken: this.session.access_token,
-        headers: { Prefer: 'return=representation' },
-        body: { ...body, created_at: timestamp },
-      });
-      const created = rows[0];
-      if (!created) {
-        throw new Error('Supabase did not return the created AI enrichment.');
-      }
-
-      return enrichmentFromRemote(created);
-    }
-
-    const rows = await this.requestArray<RemoteAIEnrichment>(
-      appendSearchParams(
-        '/rest/v1/ai_enrichments',
-        new URLSearchParams({
-          id: `eq.${existing.id}`,
-          user_id: `eq.${this.session.user.id}`,
-        }),
-      ),
-      {
-        method: 'PATCH',
-        accessToken: this.session.access_token,
-        headers: { Prefer: 'return=representation' },
-        body,
-      },
-    );
-    const updated = rows[0];
-    if (!updated) {
-      throw new Error('AI enrichment not found or not owned by the current user.');
-    }
-
-    return enrichmentFromRemote(updated);
+    return enrichment.updateAIEnrichment.call({ getLatestEnrichment: this.getLatestEnrichment.bind(this), session: this.session, requestArray: this.requestArray.bind(this) }, input);
   }
 
   /**
@@ -1333,30 +263,7 @@ export class BookmarkApi {
    * either way, so it's safe to drop from the outbox on either outcome.
    */
   async restoreAIEnrichment(input: UpdateAIEnrichmentInput): Promise<AIEnrichment | null> {
-    const timestamp = nowIso();
-    const rows = await this.requestArray<RemoteAIEnrichment>(
-      '/rest/v1/ai_enrichments?on_conflict=bookmark_id',
-      {
-        method: 'POST',
-        accessToken: this.session.access_token,
-        headers: { Prefer: 'resolution=ignore-duplicates, return=representation' },
-        body: {
-          user_id: this.session.user.id,
-          bookmark_id: input.bookmark_id,
-          summary: input.summary ?? null,
-          topics: input.topics ?? [],
-          suggested_tags: input.suggested_tags ?? [],
-          suggested_collection_id: input.suggested_collection_id ?? null,
-          status: input.status,
-          model: input.model ?? null,
-          confidence: input.confidence ?? null,
-          created_at: timestamp,
-          updated_at: timestamp,
-        },
-      },
-    );
-    const created = rows[0];
-    return created ? enrichmentFromRemote(created) : null;
+    return enrichment.restoreAIEnrichment.call({ requestArray: this.requestArray.bind(this), session: this.session }, input);
   }
 
   /**
@@ -1377,32 +284,7 @@ export class BookmarkApi {
    * responsibility, same as `createBookmarks`/`bulkAttachTagsAndCollections`.
    */
   async bulkRestoreAIEnrichment(inputs: UpdateAIEnrichmentInput[]): Promise<AIEnrichment[]> {
-    if (inputs.length === 0) {
-      return [];
-    }
-    const timestamp = nowIso();
-    const rows = await this.requestArray<RemoteAIEnrichment>(
-      '/rest/v1/ai_enrichments?on_conflict=bookmark_id',
-      {
-        method: 'POST',
-        accessToken: this.session.access_token,
-        headers: { Prefer: 'resolution=ignore-duplicates, return=representation' },
-        body: inputs.map((input) => ({
-          user_id: this.session.user.id,
-          bookmark_id: input.bookmark_id,
-          summary: input.summary ?? null,
-          topics: input.topics ?? [],
-          suggested_tags: input.suggested_tags ?? [],
-          suggested_collection_id: input.suggested_collection_id ?? null,
-          status: input.status,
-          model: input.model ?? null,
-          confidence: input.confidence ?? null,
-          created_at: timestamp,
-          updated_at: timestamp,
-        })),
-      },
-    );
-    return rows.map(enrichmentFromRemote);
+    return enrichment.bulkRestoreAIEnrichment.call({ requestArray: this.requestArray.bind(this), session: this.session }, inputs);
   }
 
   /**
@@ -1424,17 +306,7 @@ export class BookmarkApi {
     metadata?: EnrichmentMetadataHint,
     locale?: string,
   ): Promise<AIEnrichment> {
-    const row = await this.client.request<RemoteAIEnrichment>('/functions/v1/ai-enrich', {
-      method: 'POST',
-      accessToken: this.session.access_token,
-      timeoutMs: AI_ENRICH_REQUEST_TIMEOUT_MS,
-      body: {
-        bookmark_id: bookmarkId,
-        ...(metadata ? { metadata } : {}),
-        ...(locale ? { locale } : {}),
-      },
-    });
-    return enrichmentFromRemote(row);
+    return enrichment.requestEnrichment.call({ client: this.client, session: this.session }, bookmarkId, metadata, locale);
   }
 
   /**
@@ -1471,16 +343,7 @@ export class BookmarkApi {
    * call never reads.
    */
   async enqueuePendingEnrichment(bookmarkId: string, locale?: string): Promise<void> {
-    await this.client.request('/rest/v1/pending_ai_enrichment?on_conflict=bookmark_id', {
-      method: 'POST',
-      accessToken: this.session.access_token,
-      headers: { Prefer: 'resolution=ignore-duplicates, return=minimal' },
-      body: {
-        bookmark_id: bookmarkId,
-        user_id: this.session.user.id,
-        ...(locale ? { locale } : {}),
-      },
-    });
+    return enrichment.enqueuePendingEnrichment.call({ client: this.client, session: this.session }, bookmarkId, locale);
   }
 
   /**
@@ -1501,19 +364,7 @@ export class BookmarkApi {
   async fetchPendingEnrichmentStatuses(
     bookmarkIds: string[],
   ): Promise<Array<{ bookmark_id: string; status: string }>> {
-    if (bookmarkIds.length === 0) {
-      return [];
-    }
-    return this.requestArray<{ bookmark_id: string; status: string }>(
-      appendSearchParams(
-        '/rest/v1/pending_ai_enrichment',
-        new URLSearchParams({
-          select: 'bookmark_id,status',
-          bookmark_id: `in.${inFilter(bookmarkIds)}`,
-        }),
-      ),
-      { accessToken: this.session.access_token },
-    );
+    return enrichment.fetchPendingEnrichmentStatuses.call({ requestArray: this.requestArray.bind(this), session: this.session }, bookmarkIds);
   }
 
   /**
@@ -1525,76 +376,21 @@ export class BookmarkApi {
    * rows are terminal history and intentionally omitted.
    */
   async fetchAiQueueSnapshot(): Promise<AiServerQueueSnapshot[]> {
-    return this.fetchAllPages<AiServerQueueSnapshot>(
-      '/rest/v1/pending_ai_enrichment',
-      (query) => {
-        query.set('select', 'bookmark_id,status,attempts,created_at,updated_at');
-        query.set('status', 'in.(pending,processing,failed)');
-        query.set('order', 'created_at.asc,bookmark_id.asc');
-      },
-    );
+    return enrichment.fetchAiQueueSnapshot.call({ fetchAllPages: this.fetchAllPages.bind(this) });
   }
 
   async applyAISuggestions(input: ApplyAISuggestionsInput): Promise<BookmarkDetail | null> {
-    if (input.tag_names && input.tag_names.length > 0) {
-      await this.addTags({
-        bookmark_id: input.bookmark_id,
-        tags: input.tag_names,
-        source: 'user',
-      });
-    }
-
-    if (input.collection_id !== undefined) {
-      await this.updateBookmark(input.bookmark_id, { collection_id: input.collection_id });
-    }
-
-    return this.getBookmark(input.bookmark_id);
+    return enrichment.applyAISuggestions.call({ addTags: this.addTags.bind(this), updateBookmark: this.updateBookmark.bind(this), getBookmark: this.getBookmark.bind(this) }, input);
   }
 
   private async findActiveBookmarkByUrlHash(urlHash: string): Promise<RemoteBookmark | null> {
-    const rows = await this.requestArray<RemoteBookmark>(
-      appendSearchParams(
-        '/rest/v1/bookmarks',
-        new URLSearchParams({
-          select: '*',
-          user_id: `eq.${this.session.user.id}`,
-          url_hash: `eq.${urlHash}`,
-          // "Active" must match the app's own inbox filter (deleted_at null AND
-          // not archived). Without the deleted_at guard a trashed row still
-          // matched here, so re-saving a trashed URL folded into the trashed row
-          // as a "duplicate" and never came back — it stayed invisible in Trash.
-          is_archived: 'eq.false',
-          deleted_at: 'is.null',
-          limit: '1',
-        }),
-      ),
-      { accessToken: this.session.access_token },
-    );
-
-    return rows[0] ?? null;
+    return writes.findActiveBookmarkByUrlHash.call({ requestArray: this.requestArray.bind(this), session: this.session }, urlHash);
   }
 
   private async findActiveBookmarksByUrlHashes(
     urlHashes: string[],
   ): Promise<Map<string, RemoteBookmark>> {
-    const unique = [...new Set(urlHashes)];
-    if (unique.length === 0) {
-      return new Map();
-    }
-    const rows = await this.requestArray<RemoteBookmark>(
-      appendSearchParams(
-        '/rest/v1/bookmarks',
-        new URLSearchParams({
-          select: '*',
-          user_id: `eq.${this.session.user.id}`,
-          url_hash: `in.${inFilter(unique)}`,
-          is_archived: 'eq.false',
-          deleted_at: 'is.null',
-        }),
-      ),
-      { accessToken: this.session.access_token },
-    );
-    return new Map(rows.filter((row) => row.url_hash).map((row) => [row.url_hash as string, row]));
+    return writes.findActiveBookmarksByUrlHashes.call({ requestArray: this.requestArray.bind(this), session: this.session }, urlHashes);
   }
 
   /**
@@ -1604,20 +400,7 @@ export class BookmarkApi {
    * in between — re-inserting would violate the unique index anyway.
    */
   private async findBookmarkByClientId(clientId: string): Promise<RemoteBookmark | null> {
-    const rows = await this.requestArray<RemoteBookmark>(
-      appendSearchParams(
-        '/rest/v1/bookmarks',
-        new URLSearchParams({
-          select: '*',
-          user_id: `eq.${this.session.user.id}`,
-          client_id: `eq.${clientId}`,
-          limit: '1',
-        }),
-      ),
-      { accessToken: this.session.access_token },
-    );
-
-    return rows[0] ?? null;
+    return writes.findBookmarkByClientId.call({ requestArray: this.requestArray.bind(this), session: this.session }, clientId);
   }
 
   /**
@@ -1626,168 +409,31 @@ export class BookmarkApi {
    * introduced, or whose URL no longer matches the current local payload.
    */
   private async findBookmarkById(id: string): Promise<RemoteBookmark | null> {
-    const rows = await this.requestArray<RemoteBookmark>(
-      appendSearchParams(
-        '/rest/v1/bookmarks',
-        new URLSearchParams({
-          select: '*',
-          user_id: `eq.${this.session.user.id}`,
-          id: `eq.${id}`,
-          limit: '1',
-        }),
-      ),
-      { accessToken: this.session.access_token },
-    );
-    return rows[0] ?? null;
+    return writes.findBookmarkById.call({ requestArray: this.requestArray.bind(this), session: this.session }, id);
   }
 
   private async findBookmarksByClientIds(clientIds: string[]): Promise<Map<string, RemoteBookmark>> {
-    const unique = [...new Set(clientIds)];
-    if (unique.length === 0) {
-      return new Map();
-    }
-    const rows = await this.requestArray<RemoteBookmark>(
-      appendSearchParams(
-        '/rest/v1/bookmarks',
-        new URLSearchParams({
-          select: '*',
-          user_id: `eq.${this.session.user.id}`,
-          client_id: `in.${inFilter(unique)}`,
-        }),
-      ),
-      { accessToken: this.session.access_token },
-    );
-    return new Map(
-      rows.filter((row) => row.client_id).map((row) => [row.client_id as string, row]),
-    );
+    return writes.findBookmarksByClientIds.call({ requestArray: this.requestArray.bind(this), session: this.session }, clientIds);
   }
 
   private async updateLastSavedAt(bookmarkIds: string[], timestamp: string): Promise<void> {
-    if (bookmarkIds.length === 0) {
-      return;
-    }
-    await this.client.request(
-      appendSearchParams(
-        '/rest/v1/bookmarks',
-        new URLSearchParams({
-          id: `in.${inFilter(bookmarkIds)}`,
-          user_id: `eq.${this.session.user.id}`,
-        }),
-      ),
-      {
-        method: 'PATCH',
-        accessToken: this.session.access_token,
-        headers: { Prefer: 'return=minimal' },
-        body: {
-          last_saved_at: timestamp,
-          updated_at: timestamp,
-        },
-      },
-    );
+    return writes.updateLastSavedAt.call({ client: this.client, session: this.session }, bookmarkIds, timestamp);
   }
 
   private baseBookmarkListParams(params: ListBookmarksParams): URLSearchParams {
-    const limit = Math.min(params.limit ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
-    const query = new URLSearchParams({
-      select: '*',
-      user_id: `eq.${this.session.user.id}`,
-      order: sortParam(params.sort),
-      limit: String(limit),
-    });
-
-    if (params.is_archived !== undefined) {
-      query.set('is_archived', `eq.${params.is_archived ? 'true' : 'false'}`);
-    }
-    if (params.collection_id !== undefined) {
-      query.set('collection_id', params.collection_id === null ? 'is.null' : `eq.${params.collection_id}`);
-    }
-    if (params.cursor) {
-      const cursorOperator = sortParam(params.sort).endsWith('.asc') ? 'gt' : 'lt';
-      const cursorColumn = sortParam(params.sort).startsWith('updated_at') ? 'updated_at' : 'created_at';
-      query.set(cursorColumn, `${cursorOperator}.${params.cursor}`);
-    }
-    if (params.query?.trim()) {
-      // Strip characters with meaning inside a PostgREST or=() expression so
-      // user input cannot corrupt the filter.
-      const term = params.query.trim().replace(/[%*,()]/g, '');
-      query.set('or', `(title.ilike.*${term}*,description.ilike.*${term}*,notes.ilike.*${term}*,url.ilike.*${term}*)`);
-    }
-
-    return query;
+    return reads.baseBookmarkListParams.call({ session: this.session }, params);
   }
 
   private async listBookmarksByTags(params: ListBookmarksParams): Promise<Bookmark[]> {
-    const tagIds = params.tag_ids ?? [];
-    const bookmarkTagRows = await this.requestArray<Pick<BookmarkTag, 'bookmark_id'>>(
-      appendSearchParams(
-        '/rest/v1/bookmark_tags',
-        new URLSearchParams({
-          select: 'bookmark_id',
-          tag_id: `in.${inFilter(tagIds)}`,
-        }),
-      ),
-      { accessToken: this.session.access_token },
-    );
-    const bookmarkIds = [...new Set(bookmarkTagRows.map((row) => row.bookmark_id))];
-    if (bookmarkIds.length === 0) {
-      return [];
-    }
-
-    const query = this.baseBookmarkListParams(params);
-    query.set('id', `in.${inFilter(bookmarkIds)}`);
-    const rows = await this.requestArray<RemoteBookmark>(
-      appendSearchParams('/rest/v1/bookmarks', query),
-      { accessToken: this.session.access_token },
-    );
-
-    return rows.map(remoteToBookmark);
+    return reads.listBookmarksByTags.call({ requestArray: this.requestArray.bind(this), session: this.session, baseBookmarkListParams: this.baseBookmarkListParams.bind(this) }, params);
   }
 
   private async getCollection(collectionId: string): Promise<Collection | null> {
-    const rows = await this.requestArray<Collection>(
-      appendSearchParams(
-        '/rest/v1/collections',
-        new URLSearchParams({
-          select: '*',
-          id: `eq.${collectionId}`,
-          user_id: `eq.${this.session.user.id}`,
-          limit: '1',
-        }),
-      ),
-      { accessToken: this.session.access_token },
-    );
-
-    return rows[0] ?? null;
+    return organization.getCollection.call({ requestArray: this.requestArray.bind(this), session: this.session }, collectionId);
   }
 
   private async listTagsForBookmark(bookmarkId: string): Promise<Tag[]> {
-    const links = await this.requestArray<Pick<BookmarkTag, 'tag_id'>>(
-      appendSearchParams(
-        '/rest/v1/bookmark_tags',
-        new URLSearchParams({
-          select: 'tag_id',
-          bookmark_id: `eq.${bookmarkId}`,
-        }),
-      ),
-      { accessToken: this.session.access_token },
-    );
-    const tagIds = links.map((link) => link.tag_id);
-    if (tagIds.length === 0) {
-      return [];
-    }
-
-    return this.requestArray<Tag>(
-      appendSearchParams(
-        '/rest/v1/tags',
-        new URLSearchParams({
-          select: '*',
-          id: `in.${inFilter(tagIds)}`,
-          user_id: `eq.${this.session.user.id}`,
-          order: 'name.asc',
-        }),
-      ),
-      { accessToken: this.session.access_token },
-    );
+    return organization.listTagsForBookmark.call({ requestArray: this.requestArray.bind(this), session: this.session }, bookmarkId);
   }
 
   /**
@@ -1798,84 +444,19 @@ export class BookmarkApi {
    * local state afterwards — this only touches the cloud.
    */
   async resetLibrary(): Promise<Record<string, number>> {
-    return this.client.request<Record<string, number>>('/rest/v1/rpc/reset_user_library', {
-      method: 'POST',
-      accessToken: this.session.access_token,
-      body: {},
-    });
+    return writes.resetLibrary.call({ client: this.client, session: this.session });
   }
 
   private async getLatestEnrichment(bookmarkId: string): Promise<AIEnrichment | null> {
-    const rows = await this.requestArray<RemoteAIEnrichment>(
-      appendSearchParams(
-        '/rest/v1/ai_enrichments',
-        new URLSearchParams({
-          select: '*',
-          bookmark_id: `eq.${bookmarkId}`,
-          user_id: `eq.${this.session.user.id}`,
-          order: 'created_at.desc',
-          limit: '1',
-        }),
-      ),
-      { accessToken: this.session.access_token },
-    );
-
-    return rows[0] ? enrichmentFromRemote(rows[0]) : null;
+    return enrichment.getLatestEnrichment.call({ requestArray: this.requestArray.bind(this), session: this.session }, bookmarkId);
   }
 
   private async ensureTag(name: string, slug: string, source: TagSource): Promise<Tag> {
-    const existing = await this.findTagsBySlugs([slug]);
-    if (existing[0]) {
-      return existing[0];
-    }
-
-    let rows: Tag[];
-    try {
-      rows = await this.requestArray<Tag>('/rest/v1/tags', {
-        method: 'POST',
-        accessToken: this.session.access_token,
-        headers: { Prefer: 'return=representation' },
-        body: {
-          user_id: this.session.user.id,
-          name,
-          slug,
-          source,
-          created_at: nowIso(),
-        },
-      });
-    } catch (error) {
-      if (error instanceof SupabaseRequestError && error.status === 409) {
-        const raced = await this.findTagsBySlugs([slug]);
-        if (raced[0]) {
-          return raced[0];
-        }
-      }
-      throw error;
-    }
-    const created = rows[0];
-    if (!created) {
-      throw new Error('Supabase did not return the created tag.');
-    }
-
-    return created;
+    return organization.ensureTag.call({ findTagsBySlugs: this.findTagsBySlugs.bind(this), requestArray: this.requestArray.bind(this), session: this.session }, name, slug, source);
   }
 
   private async findTagsBySlugs(slugs: string[]): Promise<Tag[]> {
-    if (slugs.length === 0) {
-      return [];
-    }
-
-    return this.requestArray<Tag>(
-      appendSearchParams(
-        '/rest/v1/tags',
-        new URLSearchParams({
-          select: '*',
-          user_id: `eq.${this.session.user.id}`,
-          slug: `in.${inFilter(slugs)}`,
-        }),
-      ),
-      { accessToken: this.session.access_token },
-    );
+    return organization.findTagsBySlugs.call({ requestArray: this.requestArray.bind(this), session: this.session }, slugs);
   }
 }
 
