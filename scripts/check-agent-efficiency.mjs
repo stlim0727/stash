@@ -130,9 +130,19 @@ const overLimitFiles = [];
 const unbudgetedFiles = [];
 const hotspotRegressions = [];
 
+function countLines(content) {
+  if (!content) return 0;
+  const lines = content.split('\n');
+  if (lines.length > 0 && lines[lines.length - 1] === '') {
+    lines.pop();
+  }
+  return lines.length;
+}
+
 for (const file of files) {
   const rel = normalizePath(relative(ROOT, file));
-  const lines = readFileSync(file, 'utf8').split('\n').length;
+  const content = readFileSync(file, 'utf8');
+  const lines = countLines(content);
 
   if (lines <= SINGLE_TURN_LINE_LIMIT) {
     underLimitCount++;

@@ -19,6 +19,7 @@ function normalizePath(p) {
 function walk(dir) {
   let files = [];
   for (const entry of readdirSync(dir)) {
+    if (entry === '__tests__' || entry === '__mocks__') continue;
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) {
       files.push(...walk(full));
@@ -31,8 +32,11 @@ function walk(dir) {
 
 function isFileForPlatform(filePath, platform) {
   const norm = normalizePath(filePath);
-  if (platform === 'native') {
-    return !/\.web\.tsx?$/.test(norm);
+  if (platform === 'ios') {
+    return !/\.(web|android)\.tsx?$/.test(norm);
+  }
+  if (platform === 'android') {
+    return !/\.(web|ios)\.tsx?$/.test(norm);
   }
   if (platform === 'web') {
     return !/\.(native|ios|android)\.tsx?$/.test(norm);
@@ -70,16 +74,31 @@ function resolveModule(importer, specifier, platform, targetFiles = files) {
     return candidatePath;
   }
 
-  const candidateExtensions = [
-    `.${platform}.ts`,
-    `.${platform}.tsx`,
-    '.ts',
-    '.tsx',
-    `/index.${platform}.ts`,
-    `/index.${platform}.tsx`,
-    '/index.ts',
-    '/index.tsx',
-  ];
+  const candidateExtensions = platform === 'web'
+    ? [
+        '.web.ts',
+        '.web.tsx',
+        '.ts',
+        '.tsx',
+        '/index.web.ts',
+        '/index.web.tsx',
+        '/index.ts',
+        '/index.tsx',
+      ]
+    : [
+        `.${platform}.ts`,
+        `.${platform}.tsx`,
+        '.native.ts',
+        '.native.tsx',
+        '.ts',
+        '.tsx',
+        `/index.${platform}.ts`,
+        `/index.${platform}.tsx`,
+        '/index.native.ts',
+        '/index.native.tsx',
+        '/index.ts',
+        '/index.tsx',
+      ];
 
   for (const ext of candidateExtensions) {
     const full = candidatePath + ext;
@@ -90,9 +109,9 @@ function resolveModule(importer, specifier, platform, targetFiles = files) {
   return null;
 }
 
-// 1. Cycle detection (DIP & SRP guard) across both native and web targets
+// 1. Cycle detection (DIP & SRP guard) across iOS, Android, and web targets
 const allCycles = [];
-for (const platform of ['native', 'web']) {
+for (const platform of ['ios', 'android', 'web']) {
   const platformFiles = files.filter((f) => isFileForPlatform(f, platform));
   const platformGraph = new Map();
   for (const file of platformFiles) {
@@ -136,7 +155,7 @@ for (const file of files) {
   const content = readFileSync(file, 'utf8');
   const specifiers = extractImports(content);
   const deps = new Set();
-  for (const platform of ['native', 'web']) {
+  for (const platform of ['ios', 'android', 'web']) {
     for (const spec of specifiers) {
       const resolved = resolveModule(file, spec, platform);
       if (resolved) deps.add(resolved);
@@ -262,7 +281,7 @@ if (allCycles.length > 0) {
   }
   hasError = true;
 } else {
-  console.log('✓ Dependency cycles check passed: 0 circular dependencies detected across native and web.');
+  console.log('✓ Dependency cycles check passed: 0 circular dependencies detected across iOS, Android, and web.');
 }
 
 if (violations.length > 0) {
@@ -301,7 +320,7 @@ if (process.env.GITHUB_STEP_SUMMARY) {
     '',
     allCycles.length > 0
       ? `- ❌ **Dependency Cycles:** ${allCycles.length} circular dependencies detected.`
-      : '- ✅ **Dependency Cycles:** 0 circular dependencies detected across native and web.',
+      : '- ✅ **Dependency Cycles:** 0 circular dependencies detected across iOS, Android, and web.',
     violations.length > 0
       ? `- ❌ **Layer Boundaries:** ${violations.length} architectural boundary violations found.`
       : '- ✅ **Layer Boundaries:** All layer dependency constraints satisfied.',
