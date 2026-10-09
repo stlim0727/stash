@@ -216,14 +216,13 @@ test('parsePlainTextLinks stops URL match before attached Korean prose on domain
   ]);
   assert.equal(mapsSegs.map((s) => s.text).join(''), mapsCase);
 
-  const wikiParticleCase = '참고: https://ko.wikipedia.org/wiki/대한민국을 보세요';
-  const wikiSegs = parsePlainTextLinks(wikiParticleCase);
-  assert.deepEqual(wikiSegs, [
-    { type: 'text', text: '참고: ' },
-    { type: 'link', text: 'https://ko.wikipedia.org/wiki/대한민국', url: 'https://ko.wikipedia.org/wiki/대한민국' },
-    { type: 'text', text: '을 보세요' },
+  const wikiAppleCase = '위키: https://ko.wikipedia.org/wiki/사과';
+  const wikiAppleSegs = parsePlainTextLinks(wikiAppleCase);
+  assert.deepEqual(wikiAppleSegs, [
+    { type: 'text', text: '위키: ' },
+    { type: 'link', text: 'https://ko.wikipedia.org/wiki/사과', url: 'https://ko.wikipedia.org/wiki/사과' },
   ]);
-  assert.equal(wikiSegs.map((s) => s.text).join(''), wikiParticleCase);
+  assert.equal(wikiAppleSegs.map((s) => s.text).join(''), wikiAppleCase);
 
   const middleKoreanCase = '경로: https://keepory.app입니다/path';
   const middleSegs = parsePlainTextLinks(middleKoreanCase);

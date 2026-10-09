@@ -27,16 +27,13 @@ const PROSE_DELIMITER_CHARS = new Set(
   '.,;:!?"\'<>|\\^()[]{}…。，、；：！？“”‘’«»‹›（）【】「」『』《》〈〉'.split(''),
 );
 
-const KOREAN_PARTICLES =
-  /(?:입니다|입니까|이었다|였다|이라서|이라는|이다|이고|이나|이란|이라|이며|이면|에서|에게|한테|으로|은|는|이|가|을|를|에|로|와|과|의|도|만|까지|부터|마저|조차|처럼|보다)$/;
-
 /**
  * Trims trailing punctuation from a matched URL while preserving balanced
  * parentheses, brackets, and braces (e.g. Wikipedia links or URLs wrapped in parens),
  * including smart quotes, ellipses, and CJK punctuation. Repeats pair cleanup after outer
  * closers are removed so nested wrappers (e.g. 『「...」』) are fully stripped.
  * Counts bracket pairs in linear time to avoid quadratic rescans on runs of closers.
- * Also trims attached Korean prose suffixes (e.g. "입니다", "을", "에서") after complete URL components.
+ * Also trims attached Korean prose suffixes (e.g. "입니다", "을") when attached to ASCII tokens.
  */
 export function cleanTrailingUrlPunctuation(rawUrl: string): { url: string; trailing: string } {
   let url = rawUrl;
@@ -92,19 +89,13 @@ export function cleanTrailingUrlPunctuation(rawUrl: string): { url: string; trai
     }
   }
 
-  // Strip attached Korean prose suffixes after complete URL components.
-  // 1. Any Hangul attached to an ASCII letter, digit, dot, or port (e.g. /xyz입니다).
+  // Strip attached Korean prose suffixes (e.g. /xyz입니다 or https://keepory.app입니다)
+  // only when attached immediately to an ASCII letter, digit, or port.
+  // This preserves legitimate Korean URL words/paths such as /wiki/사과 or /wiki/대한민국.
   const asciiAttachedMatch = url.match(/^(.+[a-zA-Z0-9])([가-힣]+)$/);
   if (asciiAttachedMatch) {
     trailing = asciiAttachedMatch[2] + trailing;
     url = asciiAttachedMatch[1];
-  } else {
-    // 2. Known Korean grammatical particles attached after slash, query, hash, etc.
-    const particleMatch = url.match(KOREAN_PARTICLES);
-    if (particleMatch) {
-      trailing = particleMatch[0] + trailing;
-      url = url.slice(0, -particleMatch[0].length);
-    }
   }
 
   stripPunct();

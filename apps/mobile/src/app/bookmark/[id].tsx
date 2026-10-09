@@ -1627,11 +1627,13 @@ export default function BookmarkDetailScreen({
                     accessibilityLabel={`${row.label}: ${row.value}`}
                     accessibilityHint={t('detail.openWebsite')}
                     onPress={handleOpenLink}
+                    onLongPress={handleCopyLink}
                     style={rowStyle}
                   >
                     <Text style={[styles.detailLabel, { color: palette.textSecondary }]}>{row.label}</Text>
                     <PostHogMaskView>
                       <Text
+                        selectable
                         style={[styles.detailValue, { color: palette.accent, textDecorationLine: 'underline' }]}
                       >
                         {row.value}

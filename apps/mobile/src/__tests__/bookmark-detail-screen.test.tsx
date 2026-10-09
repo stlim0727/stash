@@ -1665,6 +1665,67 @@ test('details drawer exposes preview refresh for URL bookmarks', async () => {
   });
 });
 
+test('details drawer URL row opens link on press', async () => {
+  mockRouteId = SYNCED_ID;
+  const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      title: 'Site in drawer',
+      url: 'https://example.com/drawer',
+      metadata_status: 'complete',
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('Site in drawer')).toBeTruthy());
+
+  // Expand details drawer
+  fireEvent.press(screen.getByLabelText('Toggle details'));
+  await waitFor(() => {
+    expect(screen.getByText('https://example.com/drawer')).toBeTruthy();
+  });
+
+  const urlRow = screen.getByLabelText('URL: https://example.com/drawer');
+  expect(urlRow).toBeTruthy();
+
+  // Press opens link
+  fireEvent.press(urlRow);
+  expect(openURL).toHaveBeenCalledWith('https://example.com/drawer');
+
+  openURL.mockRestore();
+});
+
+test('details drawer URL row copies link on long press', async () => {
+  mockRouteId = SYNCED_ID;
+  mockSetStringAsync.mockReset();
+  mockSetStringAsync.mockResolvedValueOnce(undefined);
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      title: 'Site in drawer copy',
+      url: 'https://example.com/drawer-copy',
+      metadata_status: 'complete',
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('Site in drawer copy')).toBeTruthy());
+
+  // Expand details drawer
+  fireEvent.press(screen.getByLabelText('Toggle details'));
+  await waitFor(() => {
+    expect(screen.getByText('https://example.com/drawer-copy')).toBeTruthy();
+  });
+
+  const urlRow = screen.getByLabelText('URL: https://example.com/drawer-copy');
+  expect(urlRow).toBeTruthy();
+
+  await fireEvent(urlRow, 'longPress');
+  expect(mockSetStringAsync).toHaveBeenCalledWith('https://example.com/drawer-copy');
+  expect(await waitFor(() => screen.getByText('Link copied'))).toBeTruthy();
+});
+
 test('Detail prioritizes website opening and provides direct 1-tap share, copy, and trash actions', async () => {
   mockRouteId = 'hierarchy-url';
   fakeRepo.__reset([makeStoredBookmark({ id: mockRouteId, title: 'Read this first', url: 'https://example.com/read' })]);
